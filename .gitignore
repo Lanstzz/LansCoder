@@ -19,3 +19,4 @@ build/
 *.egg-info/
 .codex_tmp/
 .firstcoder/
+benchmark/runs/
