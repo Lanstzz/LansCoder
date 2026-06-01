@@ -20,3 +20,8 @@ build/
 .codex_tmp/
 .firstcoder/
 benchmark/runs/
+docs/
+*.doc
+*.docx
+*.docm
+~$*.docx
