@@ -16,6 +16,7 @@ from firstcoder.context.identity import new_event_id, new_message_id, new_part_i
 from firstcoder.context.llm_compact import LlmCompactEvent
 from firstcoder.context.models import MessagePart
 from firstcoder.context.store import JsonlSessionStore
+from firstcoder.context.task_boundary import TaskBoundaryObservation, TaskBoundaryService
 from firstcoder.providers.types import ChatResponse, ToolCall
 from firstcoder.tools.types import ToolResult
 
@@ -151,6 +152,10 @@ class SessionEventWriter:
                 },
             )
         )
+
+    def append_task_boundary_observation(self, observation: TaskBoundaryObservation) -> None:
+        event = TaskBoundaryService().to_event(session_id=self.session_id, observation=observation)
+        self.store.append_event(event)
 
     def _append_message_event(
         self,

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 
 from firstcoder.agent.loop import AgentLoop
 from firstcoder.agent.session import AgentSession
+from firstcoder.context.runtime_replay import replay_runtime_state
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.providers.base import ChatProvider
 from firstcoder.providers.types import ChatRequest, ChatResponse, ToolCall, ToolDefinition
@@ -28,6 +30,41 @@ class FakeProvider(ChatProvider):
         return self.responses.pop(0)
 
 
+@dataclass
+class BoundaryProvider(ChatProvider):
+    requests: list[ChatRequest] = field(default_factory=list)
+    boundary_calls: int = 0
+
+    @property
+    def name(self) -> str:
+        return "fake"
+
+    @property
+    def model(self) -> str:
+        return "fake-model"
+
+    def complete(self, request: ChatRequest) -> ChatResponse:
+        self.requests.append(request)
+        if self.boundary_calls >= 2:
+            return ChatResponse(provider="fake", model="fake-model", content="ok")
+
+        basis_message_id = _extract_basis_message_id(request)
+        self.boundary_calls += 1
+        return ChatResponse(
+            provider="fake",
+            model="fake-model",
+            content="",
+            tool_calls=[
+                ToolCall(
+                    id=f"call_boundary_{self.boundary_calls}",
+                    name="task_boundary",
+                    arguments={"decision": "new", "basis_message_id": basis_message_id},
+                )
+            ],
+            finish_reason="tool_calls",
+        )
+
+
 def _echo_tool() -> Tool:
     def execute(text: str) -> ToolResult:
         return ToolResult(name="echo", ok=True, content=f"echo:{text}")
@@ -44,6 +81,14 @@ def _echo_tool() -> Tool:
         ),
         executor=execute,
     )
+
+
+def _extract_basis_message_id(request: ChatRequest) -> str:
+    for message in reversed(request.messages):
+        match = re.search(r"basis_message_id=([A-Za-z0-9_]+)", message.content)
+        if match:
+            return match.group(1)
+    raise AssertionError("request did not expose basis_message_id")
 
 
 def test_agent_loop_appends_user_and_assistant_messages(tmp_path) -> None:
@@ -71,11 +116,25 @@ def test_agent_loop_builds_context_with_system_prefix_without_storing_it(tmp_pat
     assert request.messages[0].role == "system"
     assert "AGENTS 规则" in request.messages[0].content
     assert request.messages[1].role == "user"
-    assert request.messages[1].content == "问题"
+    assert "问题" in request.messages[1].content
 
     view = store.rebuild_session_view("sess_test")
     assert all(message.role != "system" for message in view.messages)
     assert session.runtime_state.system_prompt_fingerprint is not None
+
+
+def test_agent_loop_exposes_user_message_id_for_task_boundary(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
+    provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
+
+    AgentLoop(session=session, provider=provider).run_user_turn("新需求")
+
+    user_message_id = store.rebuild_session_view("sess_test").messages[0].id
+    request_user_message = provider.requests[0].messages[-1]
+    assert request_user_message.role == "user"
+    assert f"basis_message_id={user_message_id}" in request_user_message.content
+    assert "新需求" in request_user_message.content
 
 
 def test_agent_loop_executes_tool_call_and_appends_tool_result(tmp_path) -> None:
@@ -118,13 +177,63 @@ def test_agent_loop_injects_stateful_task_boundary_tool(tmp_path) -> None:
     AgentLoop(session=session, provider=provider).run_user_turn("新问题")
 
     tools = provider.requests[0].tools
+    user_message_id = store.rebuild_session_view("sess_test").messages[0].id
     assert "task_boundary" in [tool.name for tool in tools]
     result = session.tool_registry.execute(
         "task_boundary",
-        {"decision": "new", "basis_message_id": "msg_test"},
+        {"decision": "new", "basis_message_id": user_message_id},
     )
     assert result.ok
     assert result.data["candidate_hash"].startswith("task_")
+
+
+def test_agent_loop_persists_task_boundary_observation_for_replay(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
+    provider = BoundaryProvider()
+
+    AgentLoop(session=session, provider=provider).run_user_turn("换一个任务")
+
+    event_types = [event.type for event in store.list_events("sess_test")]
+    replayed = replay_runtime_state(store, "sess_test")
+    assert "task_boundary_observed" in event_types
+    assert session.runtime_state.active_task_hash is not None
+    assert replayed.active_task_hash == session.runtime_state.active_task_hash
+
+
+def test_agent_loop_rejects_task_boundary_unknown_basis_message_id(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_boundary",
+                        name="task_boundary",
+                        arguments={"decision": "new", "basis_message_id": "msg_not_in_context"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="ok"),
+        ]
+    )
+
+    AgentLoop(session=session, provider=provider).run_user_turn("新任务")
+
+    view = store.rebuild_session_view("sess_test")
+    tool_result = next(message for message in view.messages if message.role == "tool").parts[0]
+    event_types = [event.type for event in store.list_events("sess_test")]
+    replayed = replay_runtime_state(store, "sess_test")
+    assert tool_result.metadata["ok"] is False
+    assert "basis_message_id 不属于当前 session" in tool_result.content
+    assert "task_boundary_observed" not in event_types
+    assert session.runtime_state.active_task_hash is None
+    assert replayed.active_task_hash is None
 
 
 def test_agent_loop_does_not_persist_unexecuted_tool_calls_after_round_limit(tmp_path) -> None:

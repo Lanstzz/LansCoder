@@ -68,7 +68,7 @@ class ContextBuilder:
 
         if message.role == "user":
             content = _join_visible_text(message.parts)
-            return [ChatMessage(role="user", content=content)] if content else []
+            return [ChatMessage(role="user", content=_with_basis_message_id(message.id, content))] if content else []
 
         return []
 
@@ -109,3 +109,7 @@ def _validate_tail_boundary(messages: list[AgentMessage]) -> None:
 
 def _join_visible_text(parts: list[MessagePart]) -> str:
     return "\n".join(part.content for part in parts if part.kind in {"text", "archive_placeholder"} and part.content)
+
+
+def _with_basis_message_id(message_id: str, content: str) -> str:
+    return f"[context: basis_message_id={message_id}]\n{content}"

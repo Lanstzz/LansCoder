@@ -61,6 +61,54 @@ def test_replay_restores_candidate_hash_window(tmp_path) -> None:
     assert state.task_hash_stable_count == 1
 
 
+def test_task_boundary_event_replays_active_hash_and_stable_window(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    service = TaskBoundaryService()
+    candidate = service.candidate_hash(session_id="sess_test", basis_message_id="msg_new")
+    store.append_event(
+        SessionEvent(
+            id="evt_pending",
+            session_id="sess_test",
+            type="task_boundary_observed",
+            payload={
+                "decision": "new",
+                "basis_message_id": "msg_new",
+                "candidate_hash": candidate,
+                "active_task_hash": None,
+                "confirmed_change": False,
+                "should_trigger_compaction": False,
+                "triggered_compaction": False,
+                "stable_count": 1,
+                "confirmation_reason": "stable_window_pending",
+            },
+        )
+    )
+    store.append_event(
+        SessionEvent(
+            id="evt_confirmed",
+            session_id="sess_test",
+            type="task_boundary_observed",
+            payload={
+                "decision": "new",
+                "basis_message_id": "msg_new",
+                "candidate_hash": candidate,
+                "active_task_hash": candidate,
+                "confirmed_change": True,
+                "should_trigger_compaction": True,
+                "triggered_compaction": True,
+                "stable_count": 0,
+                "confirmation_reason": "stable_window",
+            },
+        )
+    )
+
+    state = replay_runtime_state(store, "sess_test")
+
+    assert state.active_task_hash == candidate
+    assert state.candidate_task_hash is None
+    assert state.task_hash_stable_count == 0
+
+
 def test_replay_restores_latest_checkpoint_id(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     store.append_event(

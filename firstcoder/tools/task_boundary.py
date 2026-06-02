@@ -46,7 +46,14 @@ def create_task_boundary_tool(
                 decision=decision,
                 basis_message_id=basis_message_id,
             )
-        except ValueError:
+        except ValueError as exc:
+            message = str(exc)
+            if "basis_message_id" in message:
+                return make_error_result(
+                    "task_boundary",
+                    message,
+                    basis_message_id=basis_message_id,
+                )
             return make_error_result(
                 "task_boundary",
                 "decision 必须是 same、new 或 uncertain",
@@ -60,8 +67,12 @@ def create_task_boundary_tool(
             decision=observation.decision.value,
             basis_message_id=observation.basis_message_id,
             candidate_hash=observation.candidate_hash,
+            active_task_hash=observation.active_task_hash,
             confirmed_change=observation.confirmed_change,
             should_trigger_compaction=observation.should_trigger_compaction,
+            triggered_compaction=observation.triggered_compaction,
+            stable_count=observation.stable_count,
+            confirmation_reason=observation.confirmation_reason,
         )
 
     return Tool(

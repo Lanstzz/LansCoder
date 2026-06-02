@@ -1,4 +1,6 @@
+from firstcoder.context.runtime_state import SessionRuntimeState
 from firstcoder.context.store import JsonlSessionStore
+from firstcoder.context.task_boundary import TaskBoundaryDecision, TaskBoundaryService
 from firstcoder.context.writer import SessionEventWriter
 from firstcoder.providers.types import ChatResponse, ToolCall
 from firstcoder.tools.types import ToolResult
@@ -45,3 +47,18 @@ def test_writer_appends_session_created_once_when_requested(tmp_path) -> None:
     view = store.rebuild_session_view("sess_test")
     assert view.metadata["session_id"] == "sess_test"
     assert view.metadata["title"] == "demo"
+
+
+def test_writer_appends_task_boundary_observation_event(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    writer = SessionEventWriter(store=store, session_id="sess_test")
+    state = SessionRuntimeState(session_id="sess_test")
+    service = TaskBoundaryService(required_stable_count=1)
+    observation = service.observe(state, decision=TaskBoundaryDecision.NEW, basis_message_id="msg_new")
+
+    writer.append_task_boundary_observation(observation)
+
+    event = store.list_events("sess_test")[0]
+    assert event.type == "task_boundary_observed"
+    assert event.payload["active_task_hash"] == observation.candidate_hash
+    assert event.payload["triggered_compaction"] is True

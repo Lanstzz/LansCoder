@@ -1,5 +1,8 @@
+import pytest
+
 from firstcoder.context.runtime_state import SessionRuntimeState
 from firstcoder.context.task_boundary import (
+    TaskBoundaryPolicy,
     TaskBoundaryDecision,
     TaskBoundaryObservation,
     TaskBoundaryService,
@@ -15,13 +18,12 @@ def test_same_keeps_active_task_hash() -> None:
         basis_message_id="msg_1",
     )
 
-    assert observation == TaskBoundaryObservation(
-        decision=TaskBoundaryDecision.SAME,
-        basis_message_id="msg_1",
-        candidate_hash=None,
-        confirmed_change=False,
-        should_trigger_compaction=False,
-    )
+    assert observation.decision == TaskBoundaryDecision.SAME
+    assert observation.basis_message_id == "msg_1"
+    assert observation.candidate_hash is None
+    assert observation.confirmed_change is False
+    assert observation.should_trigger_compaction is False
+    assert observation.active_task_hash == "task_active"
     assert state.active_task_hash == "task_active"
     assert state.candidate_task_hash is None
 
@@ -141,14 +143,12 @@ def test_task_hash_event_records_candidate_and_confirmation() -> None:
     event = service.to_event(session_id="sess_test", observation=observation)
 
     assert event.type == "task_boundary_observed"
-    assert event.payload == {
-        "decision": "new",
-        "basis_message_id": "msg_new",
-        "candidate_hash": observation.candidate_hash,
-        "confirmed_change": True,
-        "should_trigger_compaction": True,
-        "stable_count": 0,
-    }
+    assert event.payload["decision"] == "new"
+    assert event.payload["basis_message_id"] == "msg_new"
+    assert event.payload["candidate_hash"] == observation.candidate_hash
+    assert event.payload["confirmed_change"] is True
+    assert event.payload["should_trigger_compaction"] is True
+    assert event.payload["stable_count"] == 0
 
 
 def test_task_hash_event_records_pending_stable_count() -> None:
@@ -164,3 +164,42 @@ def test_task_hash_event_records_pending_stable_count() -> None:
 
     assert observation.confirmed_change is False
     assert event.payload["stable_count"] == 1
+
+
+def test_task_boundary_rejects_unknown_basis_message_id() -> None:
+    state = SessionRuntimeState(session_id="sess_test")
+    service = TaskBoundaryService(known_message_ids={"msg_known"})
+
+    with pytest.raises(ValueError, match="basis_message_id 不属于当前 session"):
+        service.observe(state, decision=TaskBoundaryDecision.NEW, basis_message_id="msg_missing")
+
+
+def test_explicit_topic_change_can_use_single_observation_policy() -> None:
+    state = SessionRuntimeState(session_id="sess_test", active_task_hash="task_active")
+    service = TaskBoundaryService(
+        required_stable_count=3,
+        policy=TaskBoundaryPolicy(single_observation_basis_message_ids={"msg_explicit"}),
+    )
+
+    observation = service.observe(
+        state,
+        decision=TaskBoundaryDecision.NEW,
+        basis_message_id="msg_explicit",
+    )
+
+    assert observation.confirmed_change is True
+    assert observation.should_trigger_compaction is True
+    assert observation.stable_count == 0
+    assert state.active_task_hash == observation.candidate_hash
+
+
+def test_task_hash_event_records_active_hash_and_trigger_reason() -> None:
+    state = SessionRuntimeState(session_id="sess_test", active_task_hash="task_active")
+    service = TaskBoundaryService(required_stable_count=1)
+
+    observation = service.observe(state, decision=TaskBoundaryDecision.NEW, basis_message_id="msg_new")
+    event = service.to_event(session_id="sess_test", observation=observation)
+
+    assert event.payload["active_task_hash"] == observation.candidate_hash
+    assert event.payload["triggered_compaction"] is True
+    assert event.payload["confirmation_reason"] == "stable_window"

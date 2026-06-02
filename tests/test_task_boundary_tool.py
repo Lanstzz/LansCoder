@@ -1,4 +1,5 @@
 from firstcoder.context.runtime_state import SessionRuntimeState
+from firstcoder.tools.session_registry import create_session_tool_registry
 from firstcoder.tools.task_boundary import create_task_boundary_tool
 
 
@@ -70,3 +71,26 @@ def test_task_boundary_tool_rejects_invalid_decision() -> None:
 
     assert result.ok is False
     assert "decision 必须是 same、new 或 uncertain" in result.content
+
+
+def test_task_boundary_tool_rejects_unknown_basis_message_id() -> None:
+    registry = create_session_tool_registry(session_id="sess_test", known_message_ids={"msg_known"})
+
+    result = registry.execute("task_boundary", {"decision": "new", "basis_message_id": "msg_missing"})
+
+    assert result.ok is False
+    assert "basis_message_id 不属于当前 session" in result.content
+
+
+def test_task_boundary_tool_supports_single_observation_policy_without_schema_change() -> None:
+    registry = create_session_tool_registry(
+        session_id="sess_test",
+        single_observation_basis_message_ids={"msg_explicit"},
+    )
+
+    result = registry.execute("task_boundary", {"decision": "new", "basis_message_id": "msg_explicit"})
+
+    assert result.ok is True
+    assert result.data["confirmed_change"] is True
+    assert result.data["should_trigger_compaction"] is True
+    assert result.data["stable_count"] == 0

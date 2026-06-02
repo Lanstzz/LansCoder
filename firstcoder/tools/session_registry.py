@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Collection
+
 from firstcoder.context.runtime_state import SessionRuntimeState
+from firstcoder.context.task_boundary import TaskBoundaryPolicy, TaskBoundaryService
 from firstcoder.tools.registry import ToolRegistry
 from firstcoder.tools.task_boundary import create_task_boundary_tool
 from firstcoder.tools.types import Tool
@@ -13,6 +16,8 @@ def create_session_tool_registry(
     session_id: str,
     runtime_state: SessionRuntimeState | None = None,
     tools: list[Tool] | None = None,
+    known_message_ids: Collection[str] | None = None,
+    single_observation_basis_message_ids: Collection[str] = (),
 ) -> ToolRegistry:
     """创建单个会话专用的工具注册表。
 
@@ -21,8 +26,11 @@ def create_session_tool_registry(
     """
 
     state = runtime_state or SessionRuntimeState(session_id=session_id)
+    boundary_service = TaskBoundaryService(
+        known_message_ids=known_message_ids,
+        policy=TaskBoundaryPolicy(single_observation_basis_message_ids=single_observation_basis_message_ids),
+    )
     registry = ToolRegistry(tools or [])
     if "task_boundary" not in registry.names():
-        registry.register(create_task_boundary_tool(state))
+        registry.register(create_task_boundary_tool(state, service=boundary_service))
     return registry
-

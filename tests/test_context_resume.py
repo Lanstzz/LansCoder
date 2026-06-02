@@ -44,7 +44,8 @@ def test_context_projection_uses_checkpoint_summary_and_tail() -> None:
 
     assert [message.role for message in messages] == ["user", "user"]
     assert messages[0].content == "[Checkpoint summary]\n旧历史摘要"
-    assert messages[1].content == "最近消息 3"
+    assert "basis_message_id=msg_3" in messages[1].content
+    assert "最近消息 3" in messages[1].content
 
 
 def test_context_builder_uses_latest_checkpoint_from_rebuilt_view(tmp_path) -> None:
@@ -91,10 +92,9 @@ def test_context_builder_uses_latest_checkpoint_from_rebuilt_view(tmp_path) -> N
     view = store.rebuild_session_view(session_id)
     messages = ContextBuilder().build_provider_messages(view)
 
-    assert [message.content for message in messages] == [
-        "[Checkpoint summary]\n消息 1 和消息 2 的摘要",
-        "消息 3",
-    ]
+    assert messages[0].content == "[Checkpoint summary]\n消息 1 和消息 2 的摘要"
+    assert "basis_message_id=msg_3" in messages[1].content
+    assert "消息 3" in messages[1].content
 
 
 def test_rebuilt_view_uses_checkpoint_append_order_when_created_at_ties(tmp_path) -> None:
@@ -156,10 +156,9 @@ def test_rebuilt_view_uses_checkpoint_append_order_when_created_at_ties(tmp_path
 
     messages = ContextBuilder().build_provider_messages(store.rebuild_session_view(session_id))
 
-    assert [message.content for message in messages] == [
-        "[Checkpoint summary]\n新 checkpoint",
-        "消息 3",
-    ]
+    assert messages[0].content == "[Checkpoint summary]\n新 checkpoint"
+    assert "basis_message_id=msg_3" in messages[1].content
+    assert "消息 3" in messages[1].content
 
 
 def test_messages_before_tail_are_not_projected_twice() -> None:
@@ -187,7 +186,11 @@ def test_messages_before_tail_are_not_projected_twice() -> None:
     ]
 
     assert "已经被 checkpoint 覆盖" not in contents
-    assert contents == ["[Checkpoint summary]\n覆盖 msg_1", "tail 起点", "tail 后续"]
+    assert contents[0] == "[Checkpoint summary]\n覆盖 msg_1"
+    assert "basis_message_id=msg_2" in contents[1]
+    assert "tail 起点" in contents[1]
+    assert "basis_message_id=msg_3" in contents[2]
+    assert "tail 后续" in contents[2]
 
 
 def test_resume_does_not_expand_archived_tool_result() -> None:

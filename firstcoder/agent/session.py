@@ -14,6 +14,7 @@ from firstcoder.context.identity import new_message_id
 from firstcoder.context.runtime_state import SessionRuntimeState
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.context.system_prompt import PromptPrefixCache, SystemPromptBuilder, SystemPromptInputs
+from firstcoder.context.task_boundary import observation_from_tool_result_data
 from firstcoder.context.writer import SessionEventWriter
 from firstcoder.providers.types import ChatResponse, ToolCall, ToolDefinition
 from firstcoder.tools.registry import ToolRegistry
@@ -47,6 +48,7 @@ class AgentSession:
     permission_policy: dict[str, object] = field(
         default_factory=lambda: {"read": "allow", "write": "confirm", "shell": "confirm"},
     )
+    known_message_ids: set[str] = field(default_factory=set)
     mode: str = "default"
 
     @classmethod
@@ -59,7 +61,13 @@ class AgentSession:
         tools: list[Tool] | None = None,
     ) -> "AgentSession":
         runtime_state = SessionRuntimeState(session_id=session_id)
-        registry = create_session_tool_registry(session_id=session_id, runtime_state=runtime_state, tools=tools)
+        known_message_ids: set[str] = set()
+        registry = create_session_tool_registry(
+            session_id=session_id,
+            runtime_state=runtime_state,
+            tools=tools,
+            known_message_ids=known_message_ids,
+        )
         session = cls(
             session_id=session_id,
             store=store,
@@ -67,6 +75,7 @@ class AgentSession:
             tool_registry=registry,
             writer=SessionEventWriter(store=store, session_id=session_id),
             agents_md=agents_md,
+            known_message_ids=known_message_ids,
         )
         session.append_session_created()
         return session
@@ -102,11 +111,13 @@ class AgentSession:
         return entry.messages
 
     def append_user_message(self, content: str) -> str:
-        return self.writer.append_user_message(content)
+        message_id = self.writer.append_user_message(content)
+        self.known_message_ids.add(message_id)
+        return message_id
 
     def append_assistant_response(self, response: ChatResponse) -> str:
         message_id = new_message_id()
-        return self.writer.append_assistant_parts(
+        assistant_message_id = self.writer.append_assistant_parts(
             assistant_response_to_parts(message_id=message_id, response=response),
             message_id=message_id,
             metadata={
@@ -115,16 +126,28 @@ class AgentSession:
                 "finish_reason": response.finish_reason,
             },
         )
+        self.known_message_ids.add(assistant_message_id)
+        return assistant_message_id
 
     def execute_tool_call(self, tool_call: ToolCall) -> ToolResult:
         return self.tool_registry.execute(tool_call.name, tool_call.arguments)
 
     def append_tool_result(self, *, tool_call: ToolCall, result: ToolResult) -> str:
         message_id = new_message_id()
-        return self.writer.append_tool_result_part(
+        tool_message_id = self.writer.append_tool_result_part(
             tool_result_to_part(message_id=message_id, tool_call=tool_call, result=result),
             message_id=message_id,
         )
+        self.known_message_ids.add(tool_message_id)
+        self._append_task_boundary_observation_if_present(tool_call=tool_call, result=result)
+        return tool_message_id
 
     def rebuild_view(self):
         return self.store.rebuild_session_view(self.session_id)
+
+    def _append_task_boundary_observation_if_present(self, *, tool_call: ToolCall, result: ToolResult) -> None:
+        if tool_call.name != "task_boundary" or not result.ok:
+            return
+        observation = observation_from_tool_result_data(result.data)
+        if observation is not None:
+            self.writer.append_task_boundary_observation(observation)

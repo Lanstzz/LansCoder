@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Collection
 
 from firstcoder.context.events import SessionEvent
 from firstcoder.context.identity import new_event_id, stable_json_hash
@@ -35,13 +36,35 @@ class TaskBoundaryObservation:
     confirmed_change: bool
     should_trigger_compaction: bool
     stable_count: int = 0
+    active_task_hash: str | None = None
+    triggered_compaction: bool = False
+    confirmation_reason: str = "not_confirmed"
+
+
+@dataclass(frozen=True, slots=True)
+class TaskBoundaryPolicy:
+    """程序侧任务边界策略。
+
+    模型仍只提交 `decision` 和 `basis_message_id`。是否允许单次确认、哪些消息 ID
+    合法，都由 agent/session 侧传入 policy 控制，避免把激进程度交给模型自由决定。
+    """
+
+    single_observation_basis_message_ids: Collection[str] = ()
 
 
 class TaskBoundaryService:
     """把模型边界判断转成稳定 task hash 和压缩触发信号。"""
 
-    def __init__(self, *, required_stable_count: int = 2) -> None:
+    def __init__(
+        self,
+        *,
+        required_stable_count: int = 2,
+        known_message_ids: Collection[str] | None = None,
+        policy: TaskBoundaryPolicy | None = None,
+    ) -> None:
         self.required_stable_count = required_stable_count
+        self.known_message_ids = known_message_ids
+        self.policy = policy or TaskBoundaryPolicy()
 
     def candidate_hash(self, *, session_id: str, basis_message_id: str) -> str:
         digest = stable_json_hash(
@@ -61,6 +84,7 @@ class TaskBoundaryService:
         decision: TaskBoundaryDecision | str,
         basis_message_id: str,
     ) -> TaskBoundaryObservation:
+        self._validate_basis_message_id(basis_message_id)
         normalized_decision = TaskBoundaryDecision(decision)
         if normalized_decision in {TaskBoundaryDecision.SAME, TaskBoundaryDecision.UNCERTAIN}:
             state.candidate_task_hash = None
@@ -72,15 +96,20 @@ class TaskBoundaryService:
                 confirmed_change=False,
                 should_trigger_compaction=False,
                 stable_count=0,
+                active_task_hash=state.active_task_hash,
+                triggered_compaction=False,
+                confirmation_reason="reset_candidate",
             )
 
         candidate_hash = self.candidate_hash(
             session_id=state.session_id,
             basis_message_id=basis_message_id,
         )
+        required_stable_count = self._required_stable_count_for(basis_message_id)
+        single_observation_policy = self._uses_single_observation_policy(basis_message_id)
         confirmed_change = state.observe_task_hash_candidate(
             candidate_hash,
-            required_stable_count=self.required_stable_count,
+            required_stable_count=required_stable_count,
         )
         return TaskBoundaryObservation(
             decision=normalized_decision,
@@ -89,6 +118,12 @@ class TaskBoundaryService:
             confirmed_change=confirmed_change,
             should_trigger_compaction=confirmed_change,
             stable_count=state.task_hash_stable_count,
+            active_task_hash=state.active_task_hash,
+            triggered_compaction=confirmed_change,
+            confirmation_reason=_confirmation_reason(
+                confirmed_change,
+                single_observation_policy=single_observation_policy,
+            ),
         )
 
     def to_event(self, *, session_id: str, observation: TaskBoundaryObservation) -> SessionEvent:
@@ -100,8 +135,65 @@ class TaskBoundaryService:
                 "decision": observation.decision.value,
                 "basis_message_id": observation.basis_message_id,
                 "candidate_hash": observation.candidate_hash,
+                "active_task_hash": observation.active_task_hash,
                 "confirmed_change": observation.confirmed_change,
                 "should_trigger_compaction": observation.should_trigger_compaction,
+                "triggered_compaction": observation.triggered_compaction,
                 "stable_count": observation.stable_count,
+                "confirmation_reason": observation.confirmation_reason,
             },
         )
+
+    def _validate_basis_message_id(self, basis_message_id: str) -> None:
+        if self.known_message_ids is None:
+            return
+        if basis_message_id not in self.known_message_ids:
+            raise ValueError("basis_message_id 不属于当前 session")
+
+    def _required_stable_count_for(self, basis_message_id: str) -> int:
+        if self._uses_single_observation_policy(basis_message_id):
+            return 1
+        return self.required_stable_count
+
+    def _uses_single_observation_policy(self, basis_message_id: str) -> bool:
+        return basis_message_id in set(self.policy.single_observation_basis_message_ids)
+
+
+def _confirmation_reason(confirmed_change: bool, *, single_observation_policy: bool) -> str:
+    if confirmed_change and single_observation_policy:
+        return "single_observation_policy"
+    if confirmed_change:
+        return "stable_window"
+    return "stable_window_pending"
+
+
+def observation_from_tool_result_data(data: dict[str, object]) -> TaskBoundaryObservation | None:
+    """从 task_boundary 工具结果 data 还原可持久化 observation。"""
+
+    decision = data.get("decision")
+    basis_message_id = data.get("basis_message_id")
+    if not decision or not basis_message_id:
+        return None
+
+    try:
+        normalized_decision = TaskBoundaryDecision(str(decision))
+    except ValueError:
+        return None
+
+    return TaskBoundaryObservation(
+        decision=normalized_decision,
+        basis_message_id=str(basis_message_id),
+        candidate_hash=_optional_str(data.get("candidate_hash")),
+        active_task_hash=_optional_str(data.get("active_task_hash")),
+        confirmed_change=bool(data.get("confirmed_change")),
+        should_trigger_compaction=bool(data.get("should_trigger_compaction")),
+        triggered_compaction=bool(data.get("triggered_compaction")),
+        stable_count=int(data.get("stable_count") or 0),
+        confirmation_reason=str(data.get("confirmation_reason") or "not_confirmed"),
+    )
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    return str(value)

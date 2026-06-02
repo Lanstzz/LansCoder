@@ -70,7 +70,8 @@ def test_context_builder_projects_internal_messages_to_provider_messages() -> No
         "assistant",
         "tool",
     ]
-    assert messages[1].content == "读一下 README"
+    assert "basis_message_id=msg_user" in messages[1].content
+    assert "读一下 README" in messages[1].content
     assert messages[2].tool_calls[0].name == "read_file"
     assert messages[3].tool_call_id == "call_1"
     assert messages[3].content == "README 内容预览"
@@ -177,4 +178,5 @@ def test_context_builder_accepts_stable_system_prefix_from_builder() -> None:
 
     assert [message.role for message in messages] == ["system", "user"]
     assert "你是 FirstCoder。" in messages[0].content
-    assert messages[1].content == "继续实现上下文。"
+    assert "basis_message_id=msg_user" in messages[1].content
+    assert "继续实现上下文。" in messages[1].content
