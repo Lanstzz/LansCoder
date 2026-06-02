@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 TModel = TypeVar("TModel", bound=BaseModel)
 HASH_PATTERN = re.compile(r"^ctx-[0-9a-f]{8,12}$")
+BENCHMARK_DIR = Path(__file__).resolve().parent
 
 
 class ToolCallModel(BaseModel):
@@ -1070,8 +1071,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rounds", type=int, default=int(env_or_default("TOPIC_BENCH_ROUNDS", "20")))
     parser.add_argument("--initial-task", default="正在和助手协作完成一个任务")
     parser.add_argument("--initial-hash", default="")
-    parser.add_argument("--out", type=Path, default=Path("benchmark/runs/topic_selfplay.jsonl"))
-    parser.add_argument("--transcript-out", type=Path, default=Path("benchmark/runs/topic_selfplay.md"))
+    parser.add_argument("--out", type=Path, default=BENCHMARK_DIR / "runs" / "topic_selfplay.jsonl")
+    parser.add_argument("--transcript-out", type=Path, default=BENCHMARK_DIR / "runs" / "topic_selfplay.md")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--sleep-seconds", type=float, default=0.0)
     parser.add_argument("--max-retries", type=int, default=int(env_or_default("TOPIC_BENCH_MAX_RETRIES", "3")))
@@ -1081,7 +1082,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "tool", "schema", "json"],
         default=env_or_default("TOPIC_BENCH_STRUCTURED_MODE", "auto"),
     )
-    parser.add_argument("--sandbox-root", type=Path, default=Path("benchmark/sandbox"))
+    parser.add_argument("--sandbox-root", type=Path, default=BENCHMARK_DIR / "sandbox")
     parser.add_argument("--reset-sandbox", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-tool-rounds", type=int, default=2)
     parser.add_argument("--max-user-tool-rounds", type=int, default=1)

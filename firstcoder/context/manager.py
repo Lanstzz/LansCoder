@@ -16,7 +16,7 @@ from firstcoder.context.llm_compact import LlmCompactRequest, LlmCompactService,
 from firstcoder.context.models import SessionView
 from firstcoder.context.runtime_state import SessionRuntimeState, auto_compact_circuit_is_open
 from firstcoder.context.store import JsonlSessionStore
-from firstcoder.context.token_budget import estimate_text_tokens
+from firstcoder.context.triggers import ContextCompactionConfig, evaluate_context_triggers
 from firstcoder.context.writer import SessionEventWriter
 
 
@@ -73,22 +73,38 @@ class ContextWindowManager:
     store: JsonlSessionStore
     pipeline: ProgrammaticCompactor | None = None
     l4_service: L4Compactor | None = None
+    config: ContextCompactionConfig | None = None
     auto_compact_threshold: int = 32_000
     target_tokens: int = 24_000
 
     def __post_init__(self) -> None:
+        if self.config is None:
+            self.config = ContextCompactionConfig(
+                auto_compact_threshold=self.auto_compact_threshold,
+                target_tokens=self.target_tokens,
+            )
+        else:
+            self.auto_compact_threshold = self.config.auto_compact_threshold
+            self.target_tokens = self.config.target_tokens
+
         if self.pipeline is None:
-            self.pipeline = CompactionPipeline(root=self.store.root)
+            self.pipeline = CompactionPipeline(
+                root=self.store.root,
+                large_tool_result_tokens=self.config.large_tool_result_tokens,
+                cold_turn_distance=self.config.cold_turn_distance,
+                cold_preview_chars=self.config.cold_preview_chars,
+            )
 
     def compact_if_needed(self, request: ContextCompactRequest) -> ContextCompactResult:
         trigger = ContextWindowTrigger(request.trigger)
         mode = ContextCompactMode(request.mode)
-        before_tokens = _estimate_view_tokens(request.view)
+        trigger_decision = evaluate_context_triggers(request.view, self.config)
+        before_tokens = trigger_decision.estimated_tokens
 
-        if not self._should_compact(trigger=trigger, before_tokens=before_tokens):
+        if not self._should_compact(trigger=trigger, decision=trigger_decision):
             return ContextCompactResult(
                 status="skipped",
-                reason="under_threshold",
+                reason=trigger_decision.reason,
                 view=request.view,
                 before_tokens=before_tokens,
                 after_tokens=before_tokens,
@@ -103,7 +119,7 @@ class ContextWindowManager:
                 after_tokens=before_tokens,
             )
 
-        target_tokens = request.target_tokens or self.target_tokens
+        target_tokens = request.target_tokens or self.config.target_for_trigger(trigger.value)
         programmatic = self.pipeline.compact(
             CompactionRequest(
                 view=request.view,
@@ -118,14 +134,16 @@ class ContextWindowManager:
             target_tokens=target_tokens,
             event=programmatic.event,
         )
+        after_programmatic = evaluate_context_triggers(programmatic.view, self.config)
+        after_tokens = after_programmatic.estimated_tokens
 
-        if programmatic.event.after_tokens <= target_tokens:
+        if after_tokens <= target_tokens:
             return ContextCompactResult(
                 status="success",
-                reason=trigger.value,
+                reason=_result_reason(trigger=trigger, auto_reason=trigger_decision.reason),
                 view=programmatic.view,
                 before_tokens=before_tokens,
-                after_tokens=programmatic.event.after_tokens,
+                after_tokens=after_tokens,
                 programmatic_event=programmatic.event,
             )
 
@@ -135,7 +153,7 @@ class ContextWindowManager:
                 reason="l4_service_missing",
                 view=programmatic.view,
                 before_tokens=before_tokens,
-                after_tokens=programmatic.event.after_tokens,
+                after_tokens=after_tokens,
                 programmatic_event=programmatic.event,
             )
 
@@ -153,25 +171,26 @@ class ContextWindowManager:
             event=l4_result.event,
         )
         rebuilt_view = self.store.rebuild_session_view(request.view.session_id)
+        after_l4 = evaluate_context_triggers(rebuilt_view, self.config)
 
         return ContextCompactResult(
             status="success" if l4_result.event.status == "success" else l4_result.event.status,
-            reason=trigger.value,
+            reason=_result_reason(trigger=trigger, auto_reason=trigger_decision.reason),
             view=rebuilt_view,
             before_tokens=before_tokens,
-            after_tokens=programmatic.event.after_tokens,
+            after_tokens=after_l4.estimated_tokens,
             programmatic_event=programmatic.event,
             l4_event=l4_result.event,
         )
 
-    def _should_compact(self, *, trigger: ContextWindowTrigger, before_tokens: int) -> bool:
+    def _should_compact(self, *, trigger: ContextWindowTrigger, decision) -> bool:
         if trigger in {
             ContextWindowTrigger.MANUAL,
             ContextWindowTrigger.TASK_HASH_CHANGED,
             ContextWindowTrigger.PROMPT_TOO_LONG,
         }:
             return True
-        return before_tokens >= self.auto_compact_threshold
+        return decision.should_compact
 
     def _record_programmatic_event(
         self,
@@ -200,7 +219,7 @@ class ContextWindowManager:
             target_tokens=target_tokens,
             event=event,
         )
-
-
-def _estimate_view_tokens(view: SessionView) -> int:
-    return sum(estimate_text_tokens(part.content) for message in view.messages for part in message.parts)
+def _result_reason(*, trigger: ContextWindowTrigger, auto_reason: str) -> str:
+    if trigger == ContextWindowTrigger.AUTO:
+        return auto_reason
+    return trigger.value

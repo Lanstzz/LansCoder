@@ -15,6 +15,7 @@ from firstcoder.context.manager import (
 from firstcoder.context.models import AgentMessage, MessagePart, SessionView
 from firstcoder.context.runtime_state import SessionRuntimeState
 from firstcoder.context.store import JsonlSessionStore
+from firstcoder.context.triggers import ContextCompactionConfig, evaluate_context_triggers
 
 
 class FakePipeline:
@@ -38,16 +39,26 @@ class FakeL4:
 
 
 class WritingFakeL4:
-    def __init__(self, store: JsonlSessionStore) -> None:
+    def __init__(
+        self,
+        store: JsonlSessionStore,
+        *,
+        summary: str = "L4 摘要",
+        tail_start_message_id: str = "msg_1",
+        covered_until_message_id: str = "msg_1",
+    ) -> None:
         self.store = store
+        self.summary = summary
+        self.tail_start_message_id = tail_start_message_id
+        self.covered_until_message_id = covered_until_message_id
 
     def compact(self, request):
         checkpoint = Checkpoint(
             id="ckpt_test",
             session_id=request.view.session_id,
-            summary="L4 摘要",
-            tail_start_message_id="msg_1",
-            covered_until_message_id="msg_1",
+            summary=self.summary,
+            tail_start_message_id=self.tail_start_message_id,
+            covered_until_message_id=self.covered_until_message_id,
             source_fingerprint="fp_l4",
         )
         self.store.append_event(
@@ -145,7 +156,7 @@ def test_manager_skips_compact_when_under_threshold(tmp_path: Path) -> None:
 def test_manager_runs_pipeline_when_task_hash_changed(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
-    pipeline_result = _programmatic_result(view, before_tokens=1000, after_tokens=100)
+    pipeline_result = _programmatic_result(_view(_message("msg_1", "short")), before_tokens=1000, after_tokens=100)
     pipeline = FakePipeline(pipeline_result)
     manager = ContextWindowManager(
         store=store,
@@ -210,6 +221,65 @@ def test_manager_runs_l4_only_after_l1_l3_fail_target(tmp_path: Path) -> None:
     ]
 
 
+def test_manager_uses_effective_tokens_after_programmatic_compaction(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    view = SessionView(
+        session_id="sess_test",
+        messages=[
+            _message("msg_old", "old raw history" * 800),
+            AgentMessage(
+                id="msg_tail_tool",
+                session_id="sess_test",
+                role="tool",
+                parts=[
+                    MessagePart(
+                        id="part_tail_tool",
+                        message_id="msg_tail_tool",
+                        kind="tool_result",
+                        content="large tail tool output\n" * 100,
+                        metadata={"tool_call_id": "call_1", "tool_name": "shell"},
+                    )
+                ],
+            ),
+        ],
+        checkpoints=[
+            Checkpoint(
+                id="ckpt_1",
+                session_id="sess_test",
+                summary="old summary",
+                tail_start_message_id="msg_tail_tool",
+                covered_until_message_id="msg_old",
+                source_fingerprint="fp_1",
+                sequence=1,
+            )
+        ],
+    )
+    l4 = FakeL4(_l4_result())
+    manager = ContextWindowManager(
+        store=store,
+        l4_service=l4,
+        config=ContextCompactionConfig(
+            auto_compact_threshold=10_000,
+            target_tokens=1_000,
+            large_tool_result_tokens=20,
+        ),
+    )
+
+    result = manager.compact_if_needed(
+        ContextCompactRequest(
+            view=view,
+            runtime_state=SessionRuntimeState(session_id="sess_test"),
+            trigger=ContextWindowTrigger.AUTO,
+        )
+    )
+
+    assert result.status == "success"
+    assert result.reason == "large_tool_result"
+    assert result.l4_event is None
+    assert l4.calls == []
+    assert result.after_tokens <= 1_000
+
+
 def test_manager_returns_rebuilt_view_after_l4_writes_checkpoint(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
@@ -242,6 +312,51 @@ def test_manager_returns_rebuilt_view_after_l4_writes_checkpoint(tmp_path: Path)
 
     assert result.status == "success"
     assert [checkpoint.id for checkpoint in result.view.checkpoints] == ["ckpt_test"]
+
+
+def test_manager_reports_effective_tokens_after_l4_rebuild(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    view = _view(
+        _message("msg_old", "old context " * 4_000),
+        _message("msg_tail", "short tail"),
+    )
+    for message in view.messages:
+        store.append_event(
+            SessionEvent(
+                id=f"evt_{message.id}",
+                session_id="sess_test",
+                type="user_message",
+                payload={
+                    "message_id": message.id,
+                    "parts": [message.parts[0].to_dict()],
+                },
+            )
+        )
+    config = ContextCompactionConfig(auto_compact_threshold=10, target_tokens=200)
+    manager = ContextWindowManager(
+        store=store,
+        pipeline=FakePipeline(_programmatic_result(view, after_tokens=5_001, stopped_at="not_reached")),
+        l4_service=WritingFakeL4(
+            store,
+            summary="short checkpoint",
+            tail_start_message_id="msg_tail",
+            covered_until_message_id="msg_old",
+        ),
+        config=config,
+    )
+
+    result = manager.compact_if_needed(
+        ContextCompactRequest(
+            view=view,
+            runtime_state=SessionRuntimeState(session_id="sess_test"),
+            trigger=ContextWindowTrigger.AUTO,
+        )
+    )
+
+    rebuilt_tokens = evaluate_context_triggers(result.view, config).estimated_tokens
+    assert result.status == "success"
+    assert result.after_tokens == rebuilt_tokens
+    assert result.after_tokens < 5_001
 
 
 def test_manual_compact_ignores_auto_circuit_breaker(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ build/
 .codex_tmp/
 .firstcoder/
 benchmark/runs/
+benchmark/topic_selfplay/runs/
 docs/
 *.doc
 *.docx

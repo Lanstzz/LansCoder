@@ -1,9 +1,12 @@
 from pathlib import Path
 
+from firstcoder.context.checkpoint import Checkpoint
 from firstcoder.context.llm_compact import (
+    InvalidLlmCheckpointBoundaryError,
     LlmCompactRequest,
     LlmCompactService,
     LlmCompactSummary,
+    LlmSourceFingerprintMismatchError,
     NoSummaryError,
 )
 from firstcoder.context.models import AgentMessage, MessagePart, SessionView
@@ -113,6 +116,247 @@ def test_l4_summary_prompt_scope_excludes_system_prompt_and_tool_schema(tmp_path
     )
 
     assert summarizer.calls == [["msg_1", "msg_2"]]
+
+
+def test_l4_input_uses_latest_checkpoint_summary_plus_tail(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    view = SessionView(
+        session_id="sess_test",
+        messages=[
+            _message("msg_1", "已由 checkpoint 覆盖"),
+            _message("msg_2", "旧 tail"),
+            _message("msg_3", "新 tail"),
+        ],
+        checkpoints=[
+            Checkpoint(
+                id="ckpt_1",
+                session_id="sess_test",
+                summary="旧摘要",
+                tail_start_message_id="msg_2",
+                covered_until_message_id="msg_1",
+                source_fingerprint="fp_old",
+                sequence=1,
+            )
+        ],
+    )
+    summarizer = FakeSummarizer(
+        [
+            LlmCompactSummary(
+                summary="更新摘要",
+                tail_start_message_id="msg_3",
+                covered_until_message_id="msg_2",
+            )
+        ]
+    )
+
+    result = LlmCompactService(store=store, summarizer=summarizer).compact(
+        LlmCompactRequest(view=view, runtime_state=SessionRuntimeState(session_id="sess_test"))
+    )
+
+    assert summarizer.calls == [["ckpt_1_summary", "msg_2", "msg_3"]]
+    assert result.checkpoint is not None
+    assert result.checkpoint.metadata["source_message_ids"] == ["ckpt_1_summary", "msg_2", "msg_3"]
+    assert result.checkpoint.metadata["base_checkpoint_id"] == "ckpt_1"
+
+
+def test_same_source_fingerprint_is_not_summarized_twice(tmp_path: Path) -> None:
+    state = SessionRuntimeState(session_id="sess_test")
+    view = SessionView(
+        session_id="sess_test",
+        messages=[_message("msg_1", "历史"), _message("msg_2", "tail")],
+    )
+    first_summarizer = FakeSummarizer(
+        [
+            LlmCompactSummary(
+                summary="摘要",
+                tail_start_message_id="msg_2",
+                covered_until_message_id="msg_1",
+            )
+        ]
+    )
+    first = LlmCompactService(store=JsonlSessionStore(tmp_path), summarizer=first_summarizer).compact(
+        LlmCompactRequest(view=view, runtime_state=state)
+    )
+
+    second_summarizer = FakeSummarizer([])
+    service = LlmCompactService(store=JsonlSessionStore(tmp_path), summarizer=second_summarizer)
+
+    result = service.compact(
+        LlmCompactRequest(
+            view=view,
+            runtime_state=state,
+        )
+    )
+
+    assert state.last_compaction_input_fingerprint == first.event.source_fingerprint
+    assert result.checkpoint is None
+    assert result.event.status == "skipped"
+    assert result.event.failure_reason == "duplicate_source"
+    assert second_summarizer.calls == []
+
+
+def test_l4_source_fingerprint_includes_latest_checkpoint_boundary(tmp_path: Path) -> None:
+    base_messages = [
+        _message("msg_1", "已覆盖"),
+        _message("msg_2", "tail"),
+        _message("msg_3", "new tail"),
+    ]
+    first_view = SessionView(
+        session_id="sess_test",
+        messages=base_messages,
+        checkpoints=[
+            Checkpoint(
+                id="ckpt_a",
+                session_id="sess_test",
+                summary="摘要 A",
+                tail_start_message_id="msg_2",
+                covered_until_message_id="msg_1",
+                source_fingerprint="fp_a",
+                sequence=1,
+            )
+        ],
+    )
+    second_view = SessionView(
+        session_id="sess_test",
+        messages=base_messages,
+        checkpoints=[
+            Checkpoint(
+                id="ckpt_b",
+                session_id="sess_test",
+                summary="摘要 B",
+                tail_start_message_id="msg_2",
+                covered_until_message_id="msg_1",
+                source_fingerprint="fp_b",
+                sequence=1,
+            )
+        ],
+    )
+    first = LlmCompactService(
+        store=JsonlSessionStore(tmp_path / "first"),
+        summarizer=FakeSummarizer(
+            [
+                LlmCompactSummary(
+                    summary="更新 A",
+                    tail_start_message_id="msg_3",
+                    covered_until_message_id="msg_2",
+                )
+            ]
+        ),
+    ).compact(LlmCompactRequest(view=first_view, runtime_state=SessionRuntimeState(session_id="sess_test")))
+    second = LlmCompactService(
+        store=JsonlSessionStore(tmp_path / "second"),
+        summarizer=FakeSummarizer(
+            [
+                LlmCompactSummary(
+                    summary="更新 B",
+                    tail_start_message_id="msg_3",
+                    covered_until_message_id="msg_2",
+                )
+            ]
+        ),
+    ).compact(LlmCompactRequest(view=second_view, runtime_state=SessionRuntimeState(session_id="sess_test")))
+
+    assert first.event.source_fingerprint != second.event.source_fingerprint
+
+
+def test_new_checkpoint_tail_must_move_forward(tmp_path: Path) -> None:
+    view = SessionView(
+        session_id="sess_test",
+        messages=[
+            _message("msg_1", "已覆盖"),
+            _message("msg_2", "当前 tail"),
+            _message("msg_3", "后续"),
+        ],
+        checkpoints=[
+            Checkpoint(
+                id="ckpt_1",
+                session_id="sess_test",
+                summary="旧摘要",
+                tail_start_message_id="msg_2",
+                covered_until_message_id="msg_1",
+                source_fingerprint="fp_old",
+                sequence=1,
+            )
+        ],
+    )
+    summarizer = FakeSummarizer(
+        [
+            LlmCompactSummary(
+                summary="错误摘要",
+                tail_start_message_id="msg_1",
+                covered_until_message_id="msg_1",
+            )
+        ]
+    )
+
+    try:
+        LlmCompactService(store=JsonlSessionStore(tmp_path), summarizer=summarizer).compact(
+            LlmCompactRequest(view=view, runtime_state=SessionRuntimeState(session_id="sess_test"))
+        )
+    except InvalidLlmCheckpointBoundaryError as exc:
+        assert "tail_start_message_id must stay within current L4 input tail" in str(exc)
+    else:
+        raise AssertionError("expected invalid checkpoint tail boundary")
+
+
+def test_new_checkpoint_covered_until_must_be_before_tail_start(tmp_path: Path) -> None:
+    view = SessionView(
+        session_id="sess_test",
+        messages=[
+            _message("msg_1", "旧消息"),
+            _message("msg_2", "tail 起点"),
+            _message("msg_3", "tail 后续"),
+        ],
+    )
+    summarizer = FakeSummarizer(
+        [
+            LlmCompactSummary(
+                summary="错误摘要",
+                tail_start_message_id="msg_2",
+                covered_until_message_id="msg_3",
+            )
+        ]
+    )
+
+    try:
+        LlmCompactService(store=JsonlSessionStore(tmp_path), summarizer=summarizer).compact(
+            LlmCompactRequest(view=view, runtime_state=SessionRuntimeState(session_id="sess_test"))
+        )
+    except InvalidLlmCheckpointBoundaryError as exc:
+        assert "covered_until_message_id must be before tail_start_message_id" in str(exc)
+    else:
+        raise AssertionError("expected invalid checkpoint covered/tail order")
+
+
+def test_expected_source_fingerprint_mismatch_is_rejected(tmp_path: Path) -> None:
+    state = SessionRuntimeState(session_id="sess_test", last_compaction_input_fingerprint="fp_old")
+    view = SessionView(
+        session_id="sess_test",
+        messages=[_message("msg_1", "changed history"), _message("msg_2", "tail")],
+    )
+    summarizer = FakeSummarizer(
+        [
+            LlmCompactSummary(
+                summary="新摘要",
+                tail_start_message_id="msg_2",
+                covered_until_message_id="msg_1",
+            )
+        ]
+    )
+
+    try:
+        LlmCompactService(store=JsonlSessionStore(tmp_path), summarizer=summarizer).compact(
+            LlmCompactRequest(
+                view=view,
+                runtime_state=state,
+                expected_source_fingerprint="fp_old",
+            )
+        )
+    except LlmSourceFingerprintMismatchError as exc:
+        assert "expected_source_fingerprint does not match current L4 source" in str(exc)
+    else:
+        raise AssertionError("expected stale source fingerprint to be rejected")
+    assert summarizer.calls == []
 
 
 def test_l4_retries_no_summary_once_then_succeeds(tmp_path: Path) -> None:
