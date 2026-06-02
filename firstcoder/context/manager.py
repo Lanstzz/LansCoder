@@ -7,18 +7,17 @@ L4，以及把压缩事件写回 append-only session 日志。
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol, Literal
 
 from firstcoder.context.compaction import CompactionPipeline, CompactionRequest, CompactionEvent
-from firstcoder.context.events import SessionEvent
-from firstcoder.context.identity import new_event_id
 from firstcoder.context.llm_compact import LlmCompactRequest, LlmCompactService, LlmCompactEvent
 from firstcoder.context.models import SessionView
 from firstcoder.context.runtime_state import SessionRuntimeState, auto_compact_circuit_is_open
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.context.token_budget import estimate_text_tokens
+from firstcoder.context.writer import SessionEventWriter
 
 
 class ContextWindowTrigger(StrEnum):
@@ -182,17 +181,10 @@ class ContextWindowManager:
         target_tokens: int,
         event: CompactionEvent,
     ) -> None:
-        self.store.append_event(
-            SessionEvent(
-                id=new_event_id(),
-                session_id=session_id,
-                type="compaction_completed",
-                payload={
-                    "trigger": trigger.value,
-                    "target_tokens": target_tokens,
-                    "event": asdict(event),
-                },
-            )
+        SessionEventWriter(store=self.store, session_id=session_id).append_compaction_completed(
+            trigger=trigger.value,
+            target_tokens=target_tokens,
+            event=event,
         )
 
     def _record_l4_event(
@@ -203,17 +195,10 @@ class ContextWindowManager:
         target_tokens: int,
         event: LlmCompactEvent,
     ) -> None:
-        self.store.append_event(
-            SessionEvent(
-                id=new_event_id(),
-                session_id=session_id,
-                type="llm_compaction_completed",
-                payload={
-                    "trigger": trigger.value,
-                    "target_tokens": target_tokens,
-                    "event": asdict(event),
-                },
-            )
+        SessionEventWriter(store=self.store, session_id=session_id).append_llm_compaction_completed(
+            trigger=trigger.value,
+            target_tokens=target_tokens,
+            event=event,
         )
 
 

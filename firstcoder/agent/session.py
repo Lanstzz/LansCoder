@@ -9,12 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from firstcoder.context.events import SessionEvent
-from firstcoder.context.identity import new_event_id, new_message_id, new_part_id
-from firstcoder.context.models import MessagePart
 from firstcoder.context.runtime_state import SessionRuntimeState
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.context.system_prompt import PromptPrefixCache, SystemPromptBuilder, SystemPromptInputs
+from firstcoder.context.writer import SessionEventWriter
 from firstcoder.providers.types import ChatResponse, ToolCall, ToolDefinition
 from firstcoder.tools.registry import ToolRegistry
 from firstcoder.tools.task_boundary import create_task_boundary_tool
@@ -36,6 +34,7 @@ class AgentSession:
     store: JsonlSessionStore
     runtime_state: SessionRuntimeState
     tool_registry: ToolRegistry
+    writer: SessionEventWriter
     agents_md: str = ""
     base_rules: str = DEFAULT_BASE_RULES
     prompt_cache: PromptPrefixCache = field(default_factory=PromptPrefixCache)
@@ -64,6 +63,7 @@ class AgentSession:
             store=store,
             runtime_state=runtime_state,
             tool_registry=registry,
+            writer=SessionEventWriter(store=store, session_id=session_id),
             agents_md=agents_md,
         )
         session.append_session_created()
@@ -83,14 +83,7 @@ class AgentSession:
         return cls.create(store=store, session_id=session_id, agents_md=agents_md, tools=tools)
 
     def append_session_created(self) -> None:
-        self.store.append_event(
-            SessionEvent(
-                id=new_event_id(),
-                session_id=self.session_id,
-                type="session_created",
-                payload={"session_id": self.session_id},
-            )
-        )
+        self.writer.append_session_created()
 
     def build_system_prefix(self, *, provider_name: str, tools: list[ToolDefinition]) -> list:
         inputs = SystemPromptInputs(
@@ -107,71 +100,16 @@ class AgentSession:
         return entry.messages
 
     def append_user_message(self, content: str) -> str:
-        message_id = new_message_id()
-        part = MessagePart(id=new_part_id(), message_id=message_id, kind="text", content=content)
-        self._append_message_event("user_message", message_id=message_id, parts=[part])
-        return message_id
+        return self.writer.append_user_message(content)
 
     def append_assistant_response(self, response: ChatResponse) -> str:
-        message_id = new_message_id()
-        parts: list[MessagePart] = []
-        if response.content:
-            parts.append(MessagePart(id=new_part_id(), message_id=message_id, kind="text", content=response.content))
-        for tool_call in response.tool_calls:
-            parts.append(_tool_call_part(message_id=message_id, tool_call=tool_call))
-        self._append_message_event(
-            "assistant_message",
-            message_id=message_id,
-            parts=parts,
-            metadata={
-                "provider": response.provider,
-                "model": response.model,
-                "finish_reason": response.finish_reason,
-            },
-        )
-        return message_id
+        return self.writer.append_assistant_response(response)
 
     def append_tool_result(self, *, tool_call: ToolCall, result: ToolResult) -> str:
-        message_id = new_message_id()
-        part = MessagePart(
-            id=new_part_id(),
-            message_id=message_id,
-            kind="tool_result",
-            content=result.content,
-            metadata={
-                "tool_call_id": tool_call.id,
-                "tool_name": tool_call.name,
-                "ok": result.ok,
-                "data": result.data,
-                "error": result.error,
-            },
-        )
-        self._append_message_event("tool_result", message_id=message_id, parts=[part])
-        return message_id
+        return self.writer.append_tool_result(tool_call=tool_call, result=result)
 
     def rebuild_view(self):
         return self.store.rebuild_session_view(self.session_id)
-
-    def _append_message_event(
-        self,
-        event_type: str,
-        *,
-        message_id: str,
-        parts: list[MessagePart],
-        metadata: dict[str, object] | None = None,
-    ) -> None:
-        self.store.append_event(
-            SessionEvent(
-                id=new_event_id(),
-                session_id=self.session_id,
-                type=event_type,
-                payload={
-                    "message_id": message_id,
-                    "parts": [part.to_dict() for part in parts],
-                    "metadata": metadata or {},
-                },
-            )
-        )
 
 
 def _build_session_tool_registry(runtime_state: SessionRuntimeState, *, tools: list[Tool] | None) -> ToolRegistry:
@@ -180,16 +118,3 @@ def _build_session_tool_registry(runtime_state: SessionRuntimeState, *, tools: l
         registry.register(create_task_boundary_tool(runtime_state))
     return registry
 
-
-def _tool_call_part(*, message_id: str, tool_call: ToolCall) -> MessagePart:
-    return MessagePart(
-        id=new_part_id(),
-        message_id=message_id,
-        kind="tool_call",
-        content="",
-        metadata={
-            "tool_call_id": tool_call.id,
-            "tool_name": tool_call.name,
-            "arguments": tool_call.arguments,
-        },
-    )

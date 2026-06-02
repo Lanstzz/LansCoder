@@ -34,6 +34,7 @@ class TaskBoundaryObservation:
     candidate_hash: str | None
     confirmed_change: bool
     should_trigger_compaction: bool
+    stable_count: int = 0
 
 
 class TaskBoundaryService:
@@ -70,6 +71,7 @@ class TaskBoundaryService:
                 candidate_hash=None,
                 confirmed_change=False,
                 should_trigger_compaction=False,
+                stable_count=0,
             )
 
         candidate_hash = self.candidate_hash(
@@ -86,6 +88,7 @@ class TaskBoundaryService:
             candidate_hash=candidate_hash,
             confirmed_change=confirmed_change,
             should_trigger_compaction=confirmed_change,
+            stable_count=state.task_hash_stable_count,
         )
 
     def to_event(self, *, session_id: str, observation: TaskBoundaryObservation) -> SessionEvent:
@@ -99,5 +102,6 @@ class TaskBoundaryService:
                 "candidate_hash": observation.candidate_hash,
                 "confirmed_change": observation.confirmed_change,
                 "should_trigger_compaction": observation.should_trigger_compaction,
+                "stable_count": observation.stable_count,
             },
         )

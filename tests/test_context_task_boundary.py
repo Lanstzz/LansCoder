@@ -147,4 +147,20 @@ def test_task_hash_event_records_candidate_and_confirmation() -> None:
         "candidate_hash": observation.candidate_hash,
         "confirmed_change": True,
         "should_trigger_compaction": True,
+        "stable_count": 0,
     }
+
+
+def test_task_hash_event_records_pending_stable_count() -> None:
+    state = SessionRuntimeState(session_id="sess_test", active_task_hash="task_active")
+    service = TaskBoundaryService(required_stable_count=3)
+
+    observation = service.observe(
+        state,
+        decision=TaskBoundaryDecision.NEW,
+        basis_message_id="msg_new",
+    )
+    event = service.to_event(session_id="sess_test", observation=observation)
+
+    assert observation.confirmed_change is False
+    assert event.payload["stable_count"] == 1
