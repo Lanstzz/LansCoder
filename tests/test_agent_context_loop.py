@@ -143,6 +143,19 @@ def test_agent_loop_builds_context_with_system_prefix_without_storing_it(tmp_pat
     assert session.runtime_state.system_prompt_fingerprint is not None
 
 
+def test_agent_loop_system_prefix_uses_provider_model_and_default_permission_policy(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_test", agents_md="AGENTS 规则")
+    provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
+
+    AgentLoop(session=session, provider=provider).run_user_turn("问题")
+
+    system_prompt = provider.requests[0].messages[0].content
+    assert '"model": "fake-model"' in system_prompt
+    assert '"path_access": "project_root_only"' in system_prompt
+    assert '"env_secrets": "redact"' in system_prompt
+
+
 def test_agent_loop_exposes_user_message_id_for_task_boundary(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test", agents_md="")

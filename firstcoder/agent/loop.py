@@ -74,7 +74,11 @@ class AgentLoop:
 
     def _complete_once(self) -> ChatResponse:
         definitions = self.session.tool_registry.definitions()
-        system_prefix = self.session.build_system_prefix(provider_name=self.provider.name, tools=definitions)
+        system_prefix = self.session.build_system_prefix(
+            provider_name=self.provider.name,
+            provider_model=self.provider.model,
+            tools=definitions,
+        )
         messages = self.context_builder.build_provider_messages(
             self.session.rebuild_view(),
             system_prefix=system_prefix,

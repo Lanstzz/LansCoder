@@ -9,12 +9,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from firstcoder.agent.prompt_inputs import (
+    DEFAULT_PERMISSION_POLICY,
+    build_system_prompt_inputs,
+    read_agents_md,
+)
 from firstcoder.agent.tool_flow import assistant_response_to_parts, tool_result_to_part
 from firstcoder.context.identity import new_message_id
 from firstcoder.context.runtime_replay import replay_runtime_state
 from firstcoder.context.runtime_state import SessionRuntimeState
 from firstcoder.context.store import JsonlSessionStore
-from firstcoder.context.system_prompt import PromptPrefixCache, SystemPromptBuilder, SystemPromptInputs
+from firstcoder.context.system_prompt import PromptPrefixCache, SystemPromptBuilder
 from firstcoder.context.task_boundary import observation_from_tool_result_data
 from firstcoder.context.writer import SessionEventWriter
 from firstcoder.providers.types import ChatResponse, ToolCall, ToolDefinition
@@ -43,12 +48,8 @@ class AgentSession:
     base_rules: str = DEFAULT_BASE_RULES
     prompt_cache: PromptPrefixCache = field(default_factory=PromptPrefixCache)
     prompt_builder: SystemPromptBuilder = field(default_factory=SystemPromptBuilder)
-    provider_capabilities: dict[str, object] = field(
-        default_factory=lambda: {"tool_calling": True, "parallel_tool_calls": False},
-    )
-    permission_policy: dict[str, object] = field(
-        default_factory=lambda: {"read": "allow", "write": "confirm", "shell": "confirm"},
-    )
+    provider_capability_overrides: dict[str, object] = field(default_factory=dict)
+    permission_policy: dict[str, object] = field(default_factory=lambda: dict(DEFAULT_PERMISSION_POLICY))
     known_message_ids: set[str] = field(default_factory=set)
     mode: str = "default"
 
@@ -90,8 +91,7 @@ class AgentSession:
         project_root: str | Path,
         tools: list[Tool] | None = None,
     ) -> "AgentSession":
-        agents_path = Path(project_root) / "AGENTS.md"
-        agents_md = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
+        agents_md = read_agents_md(project_root)
         return cls.create(store=store, session_id=session_id, agents_md=agents_md, tools=tools)
 
     @classmethod
@@ -132,13 +132,20 @@ class AgentSession:
     def append_session_created(self) -> None:
         self.writer.append_session_created()
 
-    def build_system_prefix(self, *, provider_name: str, tools: list[ToolDefinition]) -> list:
-        inputs = SystemPromptInputs(
+    def build_system_prefix(
+        self,
+        *,
+        provider_name: str,
+        provider_model: str = "",
+        tools: list[ToolDefinition],
+    ) -> list:
+        inputs = build_system_prompt_inputs(
             base_rules=self.base_rules,
             agents_md=self.agents_md,
             tools=tools,
             provider_name=provider_name,
-            provider_capabilities=self.provider_capabilities,
+            provider_model=provider_model,
+            provider_capability_overrides=self.provider_capability_overrides,
             permission_policy=self.permission_policy,
             mode=self.mode,
         )

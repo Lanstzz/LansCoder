@@ -1,0 +1,99 @@
+"""Agent system prompt 输入装配。
+
+这一层把项目规则、provider 静态能力、权限占位策略和工具 schema 合并成
+`SystemPromptInputs`。它不生成 prompt 文本，也不读取会话历史；这些职责分别属于
+`SystemPromptBuilder` 和 `ContextBuilder`。
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from firstcoder.context.system_prompt import SystemPromptInputs
+from firstcoder.providers.types import ToolDefinition
+
+
+DEFAULT_PERMISSION_POLICY: dict[str, Any] = {
+    "path_access": "project_root_only",
+    "read": "allow",
+    "write": "confirm",
+    "delete": "confirm",
+    "shell": "confirm",
+    "network": "confirm",
+    "env_secrets": "redact",
+}
+
+
+def read_agents_md(project_root: str | Path) -> str:
+    """读取项目根目录的 AGENTS.md。
+
+    第一版只读取项目根目录这一份规则，避免在 context 装配阶段引入目录继承、覆盖和
+    多文件合并语义。后续如果支持子目录 AGENTS.md，应在这里扩展，而不是散落在 agent
+    loop 或 Textual UI 中。
+    """
+
+    agents_path = Path(project_root) / "AGENTS.md"
+    if not agents_path.exists():
+        return ""
+    return agents_path.read_text(encoding="utf-8")
+
+
+def provider_capabilities_for(provider_name: str, *, provider_model: str = "") -> dict[str, Any]:
+    """返回第一版 provider 能力描述。
+
+    这里使用静态表是刻意的：真实 provider 还没有 capability discovery 协议，先把影响
+    system prompt fingerprint 的 provider 事实集中在一个窄入口，后续再替换成配置或探测。
+    """
+
+    normalized = provider_name.lower()
+    base: dict[str, Any] = {
+        "tool_calling": True,
+        "parallel_tool_calls": False,
+        "system_prompt": "message",
+        "tool_result_role": "tool",
+    }
+    if normalized == "anthropic":
+        base.update(
+            {
+                "system_prompt": "separate_field",
+                "tool_schema": "anthropic_messages",
+                "tool_result_role": "user_tool_result_block",
+            }
+        )
+    else:
+        base.update({"tool_schema": "openai_compatible_tools"})
+
+    if provider_model:
+        base["model"] = provider_model
+    return base
+
+
+def build_system_prompt_inputs(
+    *,
+    base_rules: str,
+    agents_md: str,
+    tools: list[ToolDefinition],
+    provider_name: str,
+    provider_model: str = "",
+    provider_capability_overrides: dict[str, Any] | None = None,
+    permission_policy: dict[str, Any] | None = None,
+    mode: str = "default",
+) -> SystemPromptInputs:
+    """组装 `SystemPromptInputs`，保证调用侧不用手写分散字段。"""
+
+    capabilities = provider_capabilities_for(provider_name, provider_model=provider_model)
+    capabilities.update(provider_capability_overrides or {})
+
+    resolved_permission_policy = dict(DEFAULT_PERMISSION_POLICY)
+    resolved_permission_policy.update(permission_policy or {})
+
+    return SystemPromptInputs(
+        base_rules=base_rules,
+        agents_md=agents_md,
+        tools=tools,
+        provider_name=provider_name,
+        provider_capabilities=capabilities,
+        permission_policy=resolved_permission_policy,
+        mode=mode,
+    )
