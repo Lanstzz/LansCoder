@@ -16,6 +16,7 @@ from firstcoder.tools.ls import create_ls_tool
 from firstcoder.tools.python_exec import create_python_exec_tool
 from firstcoder.tools.read_multi import create_read_multi_tool
 from firstcoder.tools.shell import create_shell_tool
+from firstcoder.tools.task_boundary import create_task_boundary_tool
 from firstcoder.tools.registry import ToolRegistry
 from firstcoder.tools.think import create_think_tool
 from firstcoder.tools.todo import create_todo_tool
@@ -46,6 +47,7 @@ __all__ = [
     "create_python_exec_tool",
     "create_read_multi_tool",
     "create_shell_tool",
+    "create_task_boundary_tool",
     "create_think_tool",
     "create_todo_tool",
     "create_tree_tool",
