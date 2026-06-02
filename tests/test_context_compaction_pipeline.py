@@ -180,12 +180,54 @@ def test_l3_only_handles_current_task_cold_content(tmp_path: Path) -> None:
 
 
 def test_l3_falls_back_to_plain_text_for_unregistered_route_type(tmp_path: Path) -> None:
+    content = "\n".join(
+        [
+            "diff --git a/firstcoder/app.py b/firstcoder/app.py",
+            "--- a/firstcoder/app.py",
+            "+++ b/firstcoder/app.py",
+            "@@ -1,4 +1,4 @@",
+            *[f"-old line {line}" for line in range(1, 80)],
+            *[f"+new line {line}" for line in range(1, 80)],
+        ]
+    )
     view = SessionView(
         session_id="sess_test",
         messages=[
             _message(
-                "msg_search_like_cold",
-                content=("firstcoder/app.py:10:def run():\nfirstcoder/app.py:20:def stop():\n" * 80),
+                "msg_diff_like_cold",
+                content=content,
+                task_hash="task_current",
+                created_turn=1,
+                metadata={"tool_name": "git_diff"},
+            )
+        ],
+    )
+
+    result = CompactionPipeline(root=tmp_path, cold_turn_distance=5).compact(
+        CompactionRequest(
+            view=view,
+            active_task_hash="task_current",
+            target_tokens=1,
+            current_turn=10,
+            enabled_levels=("l3",),
+        )
+    )
+
+    part = result.view.messages[0].parts[0]
+    assert part.metadata["compaction_state"] == "route_compacted"
+    assert part.metadata["content_type"] == "plain_text"
+    assert part.metadata["detected_content_type"] == "git_diff"
+    assert part.metadata["route_fallback_from"] == "git_diff"
+
+
+def test_l3_uses_search_results_route_compressor(tmp_path: Path) -> None:
+    content = "\n".join(f"firstcoder/app.py:{line}: def function_{line}(): pass" for line in range(1, 20))
+    view = SessionView(
+        session_id="sess_test",
+        messages=[
+            _message(
+                "msg_search_cold",
+                content=content,
                 task_hash="task_current",
                 created_turn=1,
                 metadata={"tool_name": "grep"},
@@ -204,10 +246,10 @@ def test_l3_falls_back_to_plain_text_for_unregistered_route_type(tmp_path: Path)
     )
 
     part = result.view.messages[0].parts[0]
-    assert part.metadata["compaction_state"] == "route_compacted"
-    assert part.metadata["content_type"] == "plain_text"
-    assert part.metadata["detected_content_type"] == "search_results"
-    assert part.metadata["route_fallback_from"] == "search_results"
+    assert part.metadata["content_type"] == "search_results"
+    assert part.metadata["compacted_by"] == "l3_search_results"
+    assert part.metadata["search_original_matches"] == 19
+    assert part.metadata["search_kept_matches"] < 19
 
 
 def test_pipeline_stops_after_budget_target_is_met(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ from firstcoder.context.content.router import (
     RouteContext,
     RouteCompactRouter,
 )
+from firstcoder.context.content.search import SearchResultsRouteCompressor
 from firstcoder.context.models import MessagePart
 
 
@@ -89,3 +90,49 @@ def test_route_compact_skips_when_no_compressor_is_registered() -> None:
     result = router.compact_part(_part("firstcoder/app.py:10:def run():"))
 
     assert result is None
+
+
+def test_search_results_compressor_groups_files_and_records_omissions() -> None:
+    content = "\n".join(
+        [
+            "firstcoder/app.py:1: def old_1(): pass",
+            *[f"firstcoder/app.py:{line}: def old_{line}(): pass with repeated context" for line in range(2, 40)],
+            "firstcoder/app.py:3: TODO important path",
+            "firstcoder/tools.py:10: normal match",
+            *[f"firstcoder/tools.py:{line}: normal match with repeated context" for line in range(12, 50)],
+            "firstcoder/tools.py:11: ERROR must keep this",
+        ]
+    )
+    router = RouteCompactRouter(
+        compressors={RouteContentType.SEARCH_RESULTS: SearchResultsRouteCompressor(max_matches_per_file=3)},
+        min_original_tokens=1,
+    )
+
+    result = router.compact_part(_part(content))
+
+    assert result is not None
+    assert result.metadata["content_type"] == "search_results"
+    assert result.metadata["compacted_by"] == "l3_search_results"
+    assert result.metadata["search_original_matches"] > 70
+    assert result.metadata["search_kept_matches"] < result.metadata["search_original_matches"]
+    assert "firstcoder/app.py:1:" in result.content
+    assert "firstcoder/app.py:3: TODO important path" in result.content
+    assert "firstcoder/tools.py:11: ERROR must keep this" in result.content
+    assert "omitted" in result.content
+
+
+def test_search_results_compressor_parses_windows_paths() -> None:
+    content = "\n".join(
+        rf"C:\repo\firstcoder\app.py:{line}: def run_{line}(): pass with repeated context"
+        for line in range(1, 30)
+    )
+    router = RouteCompactRouter(
+        compressors={RouteContentType.SEARCH_RESULTS: SearchResultsRouteCompressor(max_matches_per_file=2)},
+        min_original_tokens=1,
+    )
+
+    result = router.compact_part(_part(content))
+
+    assert result is not None
+    assert result.metadata["search_file_count"] == 1
+    assert r"C:\repo\firstcoder\app.py:1:" in result.content

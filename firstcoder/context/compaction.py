@@ -15,6 +15,7 @@ from firstcoder.context.content.detector import (
     is_old_task_part,
 )
 from firstcoder.context.content.router import RouteCompactRouter, RouteContentType
+from firstcoder.context.content.search import SearchResultsRouteCompressor
 from firstcoder.context.identity import stable_json_hash
 from firstcoder.context.models import AgentMessage, MessagePart, SessionView, utc_now_iso
 from firstcoder.context.token_budget import estimate_text_tokens
@@ -181,7 +182,10 @@ class CompactionPipeline:
     ) -> list[dict[str, object]]:
         changed: list[dict[str, object]] = []
         router = RouteCompactRouter(
-            compressors={RouteContentType.PLAIN_TEXT: PlainTextRouteCompressor()},
+            compressors={
+                RouteContentType.SEARCH_RESULTS: SearchResultsRouteCompressor(),
+                RouteContentType.PLAIN_TEXT: PlainTextRouteCompressor(),
+            },
             preview_chars=self.cold_preview_chars,
         )
         for message in _effective_tail_messages(view):
