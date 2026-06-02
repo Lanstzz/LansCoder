@@ -8,6 +8,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from firstcoder.context.content.router import (
+    RouteCompactResult,
+    RouteContentType,
+    RouteContext,
+)
 from firstcoder.context.identity import content_fingerprint
 from firstcoder.context.models import MessagePart, utc_now_iso
 from firstcoder.context.token_budget import estimate_text_tokens
@@ -54,6 +59,35 @@ def compact_cold_text_part(part: MessagePart, *, preview_chars: int = 160) -> Me
         content=content,
         metadata=metadata,
     )
+
+
+class PlainTextRouteCompressor:
+    """L3 路由框架的兼容压缩器。
+
+    第 14 步会逐个补齐 search、diff、build、json、code、html 等专用压缩器。
+    plain_text 先保留旧版 L3 的 preview 语义，确保 pipeline 接入 router 后行为不漂移。
+    """
+
+    def compact(self, part: MessagePart, context: RouteContext) -> RouteCompactResult | None:
+        preview = part.content[: context.preview_chars]
+        content = "\n".join(
+            [
+                "[Current task cold content compacted]",
+                f"part_id={part.id}",
+                f"original_tokens={estimate_text_tokens(part.content)}",
+                f"preview_tokens={estimate_text_tokens(preview)}",
+                f"preview={preview}",
+            ]
+        )
+        return RouteCompactResult(
+            content=content,
+            content_type=RouteContentType.PLAIN_TEXT,
+            compacted_by="l3_current_task_cold",
+            metadata={
+                "preview": preview,
+                "preview_tokens": estimate_text_tokens(preview),
+            },
+        )
 
 
 def _compacted_metadata(part: MessagePart, *, state: str, compacted_by: str) -> dict[str, Any]:

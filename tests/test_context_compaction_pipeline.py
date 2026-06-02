@@ -173,8 +173,41 @@ def test_l3_only_handles_current_task_cold_content(tmp_path: Path) -> None:
     )
 
     assert result.view.messages[0].parts[0].metadata["compaction_state"] == "route_compacted"
+    assert result.view.messages[0].parts[0].metadata["content_type"] == "plain_text"
+    assert result.view.messages[0].parts[0].metadata["route_confidence"] > 0
     assert result.view.messages[1].parts[0].content == "当前任务热信息" * 120
     assert result.view.messages[2].parts[0].content == "其他任务内容" * 120
+
+
+def test_l3_falls_back_to_plain_text_for_unregistered_route_type(tmp_path: Path) -> None:
+    view = SessionView(
+        session_id="sess_test",
+        messages=[
+            _message(
+                "msg_search_like_cold",
+                content=("firstcoder/app.py:10:def run():\nfirstcoder/app.py:20:def stop():\n" * 80),
+                task_hash="task_current",
+                created_turn=1,
+                metadata={"tool_name": "grep"},
+            )
+        ],
+    )
+
+    result = CompactionPipeline(root=tmp_path, cold_turn_distance=5).compact(
+        CompactionRequest(
+            view=view,
+            active_task_hash="task_current",
+            target_tokens=1,
+            current_turn=10,
+            enabled_levels=("l3",),
+        )
+    )
+
+    part = result.view.messages[0].parts[0]
+    assert part.metadata["compaction_state"] == "route_compacted"
+    assert part.metadata["content_type"] == "plain_text"
+    assert part.metadata["detected_content_type"] == "search_results"
+    assert part.metadata["route_fallback_from"] == "search_results"
 
 
 def test_pipeline_stops_after_budget_target_is_met(tmp_path: Path) -> None:

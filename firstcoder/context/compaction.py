@@ -8,12 +8,13 @@ from typing import Literal
 
 from firstcoder.context.archive import ToolResultArchive
 from firstcoder.context.checkpoint import CheckpointIndex
-from firstcoder.context.content.compressors import compact_cold_text_part, compact_old_task_part
+from firstcoder.context.content.compressors import PlainTextRouteCompressor, compact_old_task_part
 from firstcoder.context.content.detector import (
     is_current_task_cold_part,
     is_large_tool_result,
     is_old_task_part,
 )
+from firstcoder.context.content.router import RouteCompactRouter, RouteContentType
 from firstcoder.context.identity import stable_json_hash
 from firstcoder.context.models import AgentMessage, MessagePart, SessionView, utc_now_iso
 from firstcoder.context.token_budget import estimate_text_tokens
@@ -179,6 +180,10 @@ class CompactionPipeline:
         current_turn: int,
     ) -> list[dict[str, object]]:
         changed: list[dict[str, object]] = []
+        router = RouteCompactRouter(
+            compressors={RouteContentType.PLAIN_TEXT: PlainTextRouteCompressor()},
+            preview_chars=self.cold_preview_chars,
+        )
         for message in _effective_tail_messages(view):
             for index, part in enumerate(message.parts):
                 if is_current_task_cold_part(
@@ -187,10 +192,9 @@ class CompactionPipeline:
                     current_turn=current_turn,
                     cold_turn_distance=self.cold_turn_distance,
                 ):
-                    compacted = compact_cold_text_part(
-                        part,
-                        preview_chars=self.cold_preview_chars,
-                    )
+                    compacted = router.compact_part(part)
+                    if compacted is None:
+                        continue
                     if _replace_if_smaller(message.parts, index, compacted):
                         changed.append(_replacement_event(message_id=message.id, source=part, replacement=compacted))
         return changed
