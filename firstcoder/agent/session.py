@@ -11,6 +11,7 @@ from pathlib import Path
 
 from firstcoder.agent.tool_flow import assistant_response_to_parts, tool_result_to_part
 from firstcoder.context.identity import new_message_id
+from firstcoder.context.runtime_replay import replay_runtime_state
 from firstcoder.context.runtime_state import SessionRuntimeState
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.context.system_prompt import PromptPrefixCache, SystemPromptBuilder, SystemPromptInputs
@@ -92,6 +93,41 @@ class AgentSession:
         agents_path = Path(project_root) / "AGENTS.md"
         agents_md = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
         return cls.create(store=store, session_id=session_id, agents_md=agents_md, tools=tools)
+
+    @classmethod
+    def resume(
+        cls,
+        *,
+        store: JsonlSessionStore,
+        session_id: str,
+        agents_md: str = "",
+        tools: list[Tool] | None = None,
+    ) -> "AgentSession":
+        """从 JSONL 会话日志恢复运行期 session。
+
+        `rebuild_session_view()` 恢复可投影的消息和 checkpoint；`replay_runtime_state()`
+        恢复 task hash、compact 熔断和最近压缩事实。这里还要把历史 message id 注入
+        `known_message_ids`，否则恢复后的 task_boundary 工具会拒绝模型引用旧消息。
+        """
+
+        runtime_state = replay_runtime_state(store, session_id)
+        view = store.rebuild_session_view(session_id)
+        known_message_ids = {message.id for message in view.messages}
+        registry = create_session_tool_registry(
+            session_id=session_id,
+            runtime_state=runtime_state,
+            tools=tools,
+            known_message_ids=known_message_ids,
+        )
+        return cls(
+            session_id=session_id,
+            store=store,
+            runtime_state=runtime_state,
+            tool_registry=registry,
+            writer=SessionEventWriter(store=store, session_id=session_id),
+            agents_md=agents_md,
+            known_message_ids=known_message_ids,
+        )
 
     def append_session_created(self) -> None:
         self.writer.append_session_created()

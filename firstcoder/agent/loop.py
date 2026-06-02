@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+from typing import Protocol
+
 from firstcoder.agent.session import AgentSession
 from firstcoder.context.context_builder import ContextBuilder
+from firstcoder.context.manager import ContextCompactRequest, ContextWindowTrigger
 from firstcoder.providers.base import ChatProvider
 from firstcoder.providers.types import ChatRequest, ChatResponse, ToolCall
 from firstcoder.tools.types import Tool
+
+
+class ContextManagerLike(Protocol):
+    def compact_if_needed(self, request: ContextCompactRequest):
+        ...
 
 
 class AgentLoop:
@@ -24,11 +32,13 @@ class AgentLoop:
         provider: ChatProvider,
         tools: list[Tool] | None = None,
         context_builder: ContextBuilder | None = None,
+        context_manager: ContextManagerLike | None = None,
         max_tool_rounds: int = 4,
     ) -> None:
         self.session = session
         self.provider = provider
         self.context_builder = context_builder or ContextBuilder()
+        self.context_manager = context_manager
         self.max_tool_rounds = max_tool_rounds
         if tools:
             for tool in tools:
@@ -37,6 +47,7 @@ class AgentLoop:
 
     def run_user_turn(self, content: str) -> ChatResponse:
         self.session.append_user_message(content)
+        self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
 
         response = self._complete_once()
         tool_rounds = 0
@@ -46,7 +57,10 @@ class AgentLoop:
                 break
 
             self.session.append_assistant_response(response)
-            self._execute_tool_calls(response.tool_calls)
+            task_hash_changed = self._execute_tool_calls(response.tool_calls)
+            if task_hash_changed:
+                self._compact_if_needed(trigger=ContextWindowTrigger.TASK_HASH_CHANGED)
+            self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
 
             tool_rounds += 1
             if tool_rounds >= self.max_tool_rounds:
@@ -55,6 +69,7 @@ class AgentLoop:
             response = self._complete_once()
 
         self.session.append_assistant_response(response)
+        self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
         return response
 
     def _complete_once(self) -> ChatResponse:
@@ -66,10 +81,25 @@ class AgentLoop:
         )
         return self.provider.complete(ChatRequest(messages=messages, tools=definitions))
 
-    def _execute_tool_calls(self, tool_calls: list[ToolCall]) -> None:
+    def _execute_tool_calls(self, tool_calls: list[ToolCall]) -> bool:
+        task_hash_changed = False
         for tool_call in tool_calls:
             result = self.session.execute_tool_call(tool_call)
             self.session.append_tool_result(tool_call=tool_call, result=result)
+            if tool_call.name == "task_boundary" and result.ok and result.data.get("should_trigger_compaction"):
+                task_hash_changed = True
+        return task_hash_changed
+
+    def _compact_if_needed(self, *, trigger: ContextWindowTrigger) -> None:
+        if self.context_manager is None:
+            return
+        self.context_manager.compact_if_needed(
+            ContextCompactRequest(
+                view=self.session.rebuild_view(),
+                runtime_state=self.session.runtime_state,
+                trigger=trigger,
+            )
+        )
 
     def _tool_round_limit_response(self, response: ChatResponse) -> ChatResponse:
         """工具轮次上限命中后，只保存纯文本说明，避免写入未执行的 tool_call。"""

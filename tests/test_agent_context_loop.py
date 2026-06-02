@@ -5,6 +5,7 @@ import re
 
 from firstcoder.agent.loop import AgentLoop
 from firstcoder.agent.session import AgentSession
+from firstcoder.context.manager import ContextCompactResult, ContextWindowTrigger
 from firstcoder.context.runtime_replay import replay_runtime_state
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.providers.base import ChatProvider
@@ -63,6 +64,24 @@ class BoundaryProvider(ChatProvider):
                 )
             ],
             finish_reason="tool_calls",
+        )
+
+
+@dataclass
+class FakeContextManager:
+    results: list[ContextCompactResult] = field(default_factory=list)
+    calls: list[object] = field(default_factory=list)
+
+    def compact_if_needed(self, request):
+        self.calls.append(request)
+        if self.results:
+            return self.results.pop(0)
+        return ContextCompactResult(
+            status="skipped",
+            reason="under_threshold",
+            view=request.view,
+            before_tokens=0,
+            after_tokens=0,
         )
 
 
@@ -299,3 +318,84 @@ def test_agent_loop_does_not_persist_unexecuted_tool_calls_after_round_limit(tmp
     assert view.messages[2].parts[0].metadata["tool_call_id"] == "call_1"
     assert view.messages[3].parts[0].kind == "text"
     assert all(part.kind != "tool_call" for part in view.messages[3].parts)
+
+
+def test_agent_session_resume_replays_runtime_state_and_known_message_ids(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    original = AgentSession.create(store=store, session_id="sess_test", agents_md="rules")
+    message_id = original.append_user_message("历史消息")
+    tool_call = ToolCall(
+        id="call_boundary",
+        name="task_boundary",
+        arguments={"decision": "new", "basis_message_id": message_id},
+    )
+    first = original.execute_tool_call(tool_call)
+    original.append_tool_result(tool_call=tool_call, result=first)
+    second = original.execute_tool_call(tool_call)
+    original.append_tool_result(tool_call=tool_call, result=second)
+
+    resumed = AgentSession.resume(store=store, session_id="sess_test", agents_md="rules")
+    result = resumed.tool_registry.execute(
+        "task_boundary",
+        {"decision": "same", "basis_message_id": message_id},
+    )
+
+    assert resumed.runtime_state.active_task_hash == original.runtime_state.active_task_hash
+    assert message_id in resumed.known_message_ids
+    assert result.ok is True
+
+
+def test_agent_loop_runs_compact_when_task_boundary_confirms_change(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
+    provider = BoundaryProvider()
+    context_manager = FakeContextManager()
+
+    AgentLoop(
+        session=session,
+        provider=provider,
+        context_manager=context_manager,
+    ).run_user_turn("换一个任务")
+
+    triggers = [call.trigger for call in context_manager.calls]
+    assert ContextWindowTrigger.TASK_HASH_CHANGED in triggers
+
+
+def test_agent_loop_runs_auto_compact_after_large_tool_result(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[ToolCall(id="call_1", name="echo", arguments={"text": "large"})],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="完成"),
+        ]
+    )
+
+    def large_echo(text: str) -> ToolResult:
+        return ToolResult(name="echo", ok=True, content="large output\n" * 400)
+
+    tool = Tool(
+        definition=ToolDefinition(
+            name="echo",
+            description="大输出",
+            parameters={"type": "object", "properties": {"text": {"type": "string"}}},
+        ),
+        executor=large_echo,
+    )
+    context_manager = FakeContextManager()
+
+    AgentLoop(
+        session=session,
+        provider=provider,
+        tools=[tool],
+        context_manager=context_manager,
+    ).run_user_turn("调用大工具")
+
+    triggers = [call.trigger for call in context_manager.calls]
+    assert ContextWindowTrigger.AUTO in triggers
