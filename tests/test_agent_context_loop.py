@@ -39,7 +39,10 @@ class FakeProvider(ChatProvider):
 
     def complete(self, request: ChatRequest) -> ChatResponse:
         self.requests.append(request)
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, ProviderError):
+            raise response
+        return response
 
 
 @dataclass
@@ -98,12 +101,14 @@ class FakeContextManager:
 @dataclass
 class RecordingContextManager:
     calls: list[object] = field(default_factory=list)
+    status: str = "skipped"
+    reason: str = "under_threshold"
 
     def compact_if_needed(self, request):
         self.calls.append(request)
         return ContextCompactResult(
-            status="skipped",
-            reason="under_threshold",
+            status=self.status,
+            reason=self.reason,
             view=request.view,
             before_tokens=0,
             after_tokens=0,
@@ -111,8 +116,23 @@ class RecordingContextManager:
 
 
 @dataclass
+class PromptTooLongSuccessContextManager(RecordingContextManager):
+    def compact_if_needed(self, request):
+        self.calls.append(request)
+        status = "success" if request.trigger == ContextWindowTrigger.PROMPT_TOO_LONG else "skipped"
+        reason = request.trigger.value if request.trigger == ContextWindowTrigger.PROMPT_TOO_LONG else "under_threshold"
+        return ContextCompactResult(
+            status=status,
+            reason=reason,
+            view=request.view,
+            before_tokens=100,
+            after_tokens=10,
+        )
+
+
+@dataclass
 class StreamingProvider(ChatProvider):
-    responses: list[ChatResponse]
+    responses: list[ChatResponse | ProviderError]
     requests: list[ChatRequest] = field(default_factory=list)
 
     @property
@@ -129,6 +149,8 @@ class StreamingProvider(ChatProvider):
     async def astream(self, request: ChatRequest):
         self.requests.append(request)
         response = self.responses.pop(0)
+        if isinstance(response, ProviderError):
+            raise response
         yield ChatStreamEvent(kind="message_started")
         if response.content:
             for text in response.content:
@@ -192,6 +214,79 @@ class IncompleteStreamingProvider(ChatProvider):
     async def astream(self, request: ChatRequest):
         yield ChatStreamEvent(kind="message_started")
         yield ChatStreamEvent(kind="text_delta", text="partial")
+
+
+@dataclass
+class PartialThenErrorStreamingProvider(ChatProvider):
+    error: ProviderError
+    requests: list[ChatRequest] = field(default_factory=list)
+
+    @property
+    def name(self) -> str:
+        return "partial-error-stream"
+
+    @property
+    def model(self) -> str:
+        return "partial-error-stream-model"
+
+    def complete(self, request: ChatRequest) -> ChatResponse:
+        raise AssertionError("streaming test should not call complete")
+
+    async def astream(self, request: ChatRequest):
+        self.requests.append(request)
+        yield ChatStreamEvent(kind="message_started")
+        yield ChatStreamEvent(kind="text_delta", text="partial")
+        raise self.error
+
+
+@dataclass
+class PartialPromptTooLongThenSuccessStreamingProvider(ChatProvider):
+    requests: list[ChatRequest] = field(default_factory=list)
+
+    @property
+    def name(self) -> str:
+        return "partial-retry-stream"
+
+    @property
+    def model(self) -> str:
+        return "partial-retry-stream-model"
+
+    def complete(self, request: ChatRequest) -> ChatResponse:
+        raise AssertionError("streaming test should not call complete")
+
+    async def astream(self, request: ChatRequest):
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            yield ChatStreamEvent(kind="message_started")
+            yield ChatStreamEvent(kind="text_delta", text="partial")
+            raise ProviderError(ProviderErrorKind.PROMPT_TOO_LONG, "too long")
+
+        response = ChatResponse(provider=self.name, model=self.model, content="ok")
+        yield ChatStreamEvent(kind="message_started")
+        yield ChatStreamEvent(kind="text_delta", text="ok")
+        yield ChatStreamEvent(kind="message_completed", response=response)
+
+
+@dataclass
+class PartialPromptTooLongThenPartialPromptTooLongStreamingProvider(ChatProvider):
+    requests: list[ChatRequest] = field(default_factory=list)
+
+    @property
+    def name(self) -> str:
+        return "partial-retry-fail-stream"
+
+    @property
+    def model(self) -> str:
+        return "partial-retry-fail-stream-model"
+
+    def complete(self, request: ChatRequest) -> ChatResponse:
+        raise AssertionError("streaming test should not call complete")
+
+    async def astream(self, request: ChatRequest):
+        self.requests.append(request)
+        yield ChatStreamEvent(kind="message_started")
+        yield ChatStreamEvent(kind="text_delta", text=f"partial-{len(self.requests)}")
+        raise ProviderError(ProviderErrorKind.PROMPT_TOO_LONG, "too long")
 
 
 def _echo_tool() -> Tool:
@@ -423,6 +518,84 @@ def test_agent_loop_streaming_incomplete_message_does_not_persist_assistant(tmp_
     assert [message.role for message in view.messages] == ["user"]
 
 
+def test_agent_loop_streaming_retries_once_after_prompt_too_long_compaction(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_stream_retry", agents_md="")
+    provider = StreamingProvider(
+        [
+            ProviderError(ProviderErrorKind.PROMPT_TOO_LONG, "too long"),
+            ChatResponse(provider="fake-stream", model="fake-stream-model", content="ok"),
+        ]
+    )
+    context_manager = PromptTooLongSuccessContextManager()
+
+    result = AgentLoop(session=session, provider=provider, context_manager=context_manager).run_user_turn_streaming_sync(
+        "问题"
+    )
+
+    assert result.content == "ok"
+    assert len(provider.requests) == 2
+    assert [call.trigger for call in context_manager.calls] == [
+        ContextWindowTrigger.AUTO,
+        ContextWindowTrigger.PROMPT_TOO_LONG,
+        ContextWindowTrigger.AUTO,
+    ]
+
+
+def test_agent_loop_streaming_prompt_too_long_retry_discards_failed_attempt_events(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_stream_retry_events", agents_md="")
+    provider = PartialPromptTooLongThenSuccessStreamingProvider()
+    context_manager = PromptTooLongSuccessContextManager()
+    loop = AgentLoop(session=session, provider=provider, context_manager=context_manager)
+
+    result = loop.run_user_turn_streaming_sync("问题")
+
+    assert result.content == "ok"
+    assert len(provider.requests) == 2
+    assert [event.kind for event in loop.last_stream_events] == [
+        "message_started",
+        "text_delta",
+        "message_completed",
+    ]
+    assert [event.text for event in loop.last_stream_events if event.kind == "text_delta"] == ["ok"]
+
+
+def test_agent_loop_streaming_second_prompt_too_long_discards_retry_attempt_events(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_stream_retry_events_fail", agents_md="")
+    provider = PartialPromptTooLongThenPartialPromptTooLongStreamingProvider()
+    context_manager = PromptTooLongSuccessContextManager()
+    loop = AgentLoop(session=session, provider=provider, context_manager=context_manager)
+
+    with pytest.raises(ProviderError) as exc_info:
+        loop.run_user_turn_streaming_sync("问题")
+
+    assert exc_info.value.kind == ProviderErrorKind.PROMPT_TOO_LONG
+    assert len(provider.requests) == 2
+    assert loop.last_stream_events == []
+
+
+def test_agent_loop_streaming_prompt_too_long_does_not_retry_when_compaction_fails(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_stream_retry_fail", agents_md="")
+    provider = StreamingProvider([ProviderError(ProviderErrorKind.PROMPT_TOO_LONG, "too long")])
+    context_manager = RecordingContextManager(status="failed", reason="l4_service_missing")
+
+    with pytest.raises(ProviderError) as exc_info:
+        AgentLoop(session=session, provider=provider, context_manager=context_manager).run_user_turn_streaming_sync(
+            "问题"
+        )
+
+    assert exc_info.value.kind == ProviderErrorKind.PROMPT_TOO_LONG
+    assert len(provider.requests) == 1
+    assert [call.trigger for call in context_manager.calls] == [
+        ContextWindowTrigger.AUTO,
+        ContextWindowTrigger.PROMPT_TOO_LONG,
+    ]
+    assert [message.role for message in store.rebuild_session_view("sess_stream_retry_fail").messages] == ["user"]
+
+
 def test_agent_loop_injects_stateful_task_boundary_tool(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
@@ -494,12 +667,106 @@ def test_agent_loop_passes_current_turn_into_context_manager(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
-    context_manager = RecordingContextManager()
+    context_manager = PromptTooLongSuccessContextManager()
 
     AgentLoop(session=session, provider=provider, context_manager=context_manager).run_user_turn("新任务")
 
     assert context_manager.calls
     assert context_manager.calls[0].current_turn == 1
+
+
+def test_agent_loop_retries_once_after_prompt_too_long_compaction(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_retry", agents_md="")
+    provider = FakeProvider(
+        [
+            ProviderError(ProviderErrorKind.PROMPT_TOO_LONG, "too long"),
+            ChatResponse(provider="fake", model="fake-model", content="ok"),
+        ]
+    )
+    context_manager = PromptTooLongSuccessContextManager()
+
+    result = AgentLoop(session=session, provider=provider, context_manager=context_manager).run_user_turn("问题")
+
+    assert result.content == "ok"
+    assert len(provider.requests) == 2
+    assert [call.trigger for call in context_manager.calls] == [
+        ContextWindowTrigger.AUTO,
+        ContextWindowTrigger.PROMPT_TOO_LONG,
+        ContextWindowTrigger.AUTO,
+    ]
+
+
+def test_agent_loop_prompt_too_long_retries_only_once(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_retry_once", agents_md="")
+    provider = FakeProvider(
+        [
+            ProviderError(ProviderErrorKind.PROMPT_TOO_LONG, "too long"),
+            ProviderError(ProviderErrorKind.PROMPT_TOO_LONG, "still too long"),
+        ]
+    )
+    context_manager = PromptTooLongSuccessContextManager()
+
+    with pytest.raises(ProviderError) as exc_info:
+        AgentLoop(session=session, provider=provider, context_manager=context_manager).run_user_turn("问题")
+
+    assert exc_info.value.kind == ProviderErrorKind.PROMPT_TOO_LONG
+    assert len(provider.requests) == 2
+    assert [call.trigger for call in context_manager.calls] == [
+        ContextWindowTrigger.AUTO,
+        ContextWindowTrigger.PROMPT_TOO_LONG,
+    ]
+    assert [message.role for message in store.rebuild_session_view("sess_retry_once").messages] == ["user"]
+
+
+def test_agent_loop_prompt_too_long_does_not_retry_when_compaction_fails(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_retry_fail", agents_md="")
+    provider = FakeProvider([ProviderError(ProviderErrorKind.PROMPT_TOO_LONG, "too long")])
+    context_manager = RecordingContextManager(status="failed", reason="l4_service_missing")
+
+    with pytest.raises(ProviderError) as exc_info:
+        AgentLoop(session=session, provider=provider, context_manager=context_manager).run_user_turn("问题")
+
+    assert exc_info.value.kind == ProviderErrorKind.PROMPT_TOO_LONG
+    assert len(provider.requests) == 1
+    assert [call.trigger for call in context_manager.calls] == [
+        ContextWindowTrigger.AUTO,
+        ContextWindowTrigger.PROMPT_TOO_LONG,
+    ]
+    assert [message.role for message in store.rebuild_session_view("sess_retry_fail").messages] == ["user"]
+
+
+def test_agent_loop_does_not_retry_non_compaction_provider_error(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_no_retry", agents_md="")
+    provider = FakeProvider([ProviderError(ProviderErrorKind.AUTH_ERROR, "bad key")])
+    context_manager = RecordingContextManager()
+
+    with pytest.raises(ProviderError) as exc_info:
+        AgentLoop(session=session, provider=provider, context_manager=context_manager).run_user_turn("问题")
+
+    assert exc_info.value.kind == ProviderErrorKind.AUTH_ERROR
+    assert len(provider.requests) == 1
+    assert [call.trigger for call in context_manager.calls] == [ContextWindowTrigger.AUTO]
+
+
+def test_agent_loop_streaming_does_not_retry_non_compaction_provider_error(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_stream_no_retry", agents_md="")
+    provider = PartialThenErrorStreamingProvider(ProviderError(ProviderErrorKind.AUTH_ERROR, "bad key"))
+    context_manager = RecordingContextManager()
+    loop = AgentLoop(session=session, provider=provider, context_manager=context_manager)
+
+    with pytest.raises(ProviderError) as exc_info:
+        loop.run_user_turn_streaming_sync("问题")
+
+    assert exc_info.value.kind == ProviderErrorKind.AUTH_ERROR
+    assert len(provider.requests) == 1
+    assert loop.last_stream_events == []
+    assert [call.trigger for call in context_manager.calls] == [ContextWindowTrigger.AUTO]
+    assert [message.role for message in store.rebuild_session_view("sess_stream_no_retry").messages] == ["user"]
 
 
 def test_agent_loop_resume_keeps_turn_counter_and_metadata(tmp_path) -> None:

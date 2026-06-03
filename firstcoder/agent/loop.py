@@ -52,7 +52,7 @@ class AgentLoop:
         self.session.append_user_message(content)
         self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
 
-        response = self._complete_once()
+        response = self._complete_once_with_recovery()
         tool_rounds = 0
         while response.tool_calls:
             if tool_rounds >= self.max_tool_rounds:
@@ -69,7 +69,7 @@ class AgentLoop:
             if tool_rounds >= self.max_tool_rounds:
                 response = self._tool_round_limit_response(response)
                 break
-            response = self._complete_once()
+            response = self._complete_once_with_recovery()
 
         self.session.append_assistant_response(response)
         self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
@@ -86,7 +86,7 @@ class AgentLoop:
         self.session.append_user_message(content)
         self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
 
-        response = await self._stream_once()
+        response = await self._stream_once_with_recovery()
         tool_rounds = 0
         while response.tool_calls:
             if tool_rounds >= self.max_tool_rounds:
@@ -103,7 +103,7 @@ class AgentLoop:
             if tool_rounds >= self.max_tool_rounds:
                 response = self._tool_round_limit_response(response)
                 break
-            response = await self._stream_once()
+            response = await self._stream_once_with_recovery()
 
         self.session.append_assistant_response(response)
         self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
@@ -131,6 +131,17 @@ class AgentLoop:
         )
         return self.provider.complete(ChatRequest(messages=messages, tools=definitions))
 
+    def _complete_once_with_recovery(self) -> ChatResponse:
+        try:
+            return self._complete_once()
+        except ProviderError as exc:
+            if not exc.requires_compaction:
+                raise
+            result = self._compact_if_needed(trigger=ContextWindowTrigger.PROMPT_TOO_LONG)
+            if result is None or result.status != "success":
+                raise
+            return self._complete_once()
+
     async def _stream_once(self) -> ChatResponse:
         definitions = self.session.tool_registry.definitions()
         system_prefix = self.session.build_system_prefix(
@@ -154,6 +165,25 @@ class AgentLoop:
             )
         return final_response
 
+    async def _stream_once_with_recovery(self) -> ChatResponse:
+        try:
+            return await self._stream_once_attempt()
+        except ProviderError as exc:
+            if not exc.requires_compaction:
+                raise
+            result = self._compact_if_needed(trigger=ContextWindowTrigger.PROMPT_TOO_LONG)
+            if result is None or result.status != "success":
+                raise
+            return await self._stream_once_attempt()
+
+    async def _stream_once_attempt(self) -> ChatResponse:
+        start_event_count = len(self.last_stream_events)
+        try:
+            return await self._stream_once()
+        except ProviderError:
+            del self.last_stream_events[start_event_count:]
+            raise
+
     def _execute_tool_calls(self, tool_calls: list[ToolCall]) -> bool:
         task_hash_changed = False
         for tool_call in tool_calls:
@@ -163,10 +193,10 @@ class AgentLoop:
                 task_hash_changed = True
         return task_hash_changed
 
-    def _compact_if_needed(self, *, trigger: ContextWindowTrigger) -> None:
+    def _compact_if_needed(self, *, trigger: ContextWindowTrigger):
         if self.context_manager is None:
-            return
-        self.context_manager.compact_if_needed(
+            return None
+        return self.context_manager.compact_if_needed(
             ContextCompactRequest(
                 view=self.session.rebuild_view(),
                 runtime_state=self.session.runtime_state,
