@@ -8,6 +8,9 @@ from typing import Any
 from firstcoder.providers.types import ProviderCapabilities
 
 
+OPENAI_COMPATIBLE_CAPABILITIES = ProviderCapabilities(supports_streaming=True)
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderPreset:
     """从环境变量构造 provider 时使用的静态配置。"""
@@ -19,7 +22,7 @@ class ProviderPreset:
     default_model: str
     base_url_env: str | None = None
     default_base_url: str | None = None
-    capabilities: ProviderCapabilities = ProviderCapabilities()
+    capabilities: ProviderCapabilities = OPENAI_COMPATIBLE_CAPABILITIES
     extra_headers: dict[str, str] | None = None
     extra_body: dict[str, Any] | None = None
 
@@ -98,5 +101,6 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         api_key_env="ANTHROPIC_API_KEY",
         model_env="ANTHROPIC_MODEL",
         default_model="claude-sonnet-4-5",
+        capabilities=ProviderCapabilities(supports_streaming=False),
     ),
 }

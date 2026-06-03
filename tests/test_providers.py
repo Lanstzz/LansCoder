@@ -178,6 +178,304 @@ class _FakeOpenAIResponseErrorClient:
         self.chat = _Object(completions=_FakeOpenAIResponseErrorCompletions())
 
 
+class _FakeOpenAITextStreamCompletions:
+    def __init__(self):
+        self.last_params = None
+
+    def create(self, **params):
+        self.last_params = params
+        return iter(
+            [
+                _Object(
+                    model=params["model"],
+                    choices=[_Object(delta=_Object(content="你"), finish_reason=None)],
+                ),
+                _Object(
+                    model=params["model"],
+                    choices=[_Object(delta=_Object(content="好"), finish_reason=None)],
+                ),
+                _Object(
+                    model=params["model"],
+                    choices=[_Object(delta=_Object(), finish_reason="stop")],
+                ),
+            ]
+        )
+
+
+class _FakeOpenAITextStreamClient:
+    def __init__(self):
+        self.completions = _FakeOpenAITextStreamCompletions()
+        self.chat = _Object(completions=self.completions)
+
+
+class _FakeOpenAIToolStreamCompletions:
+    def __init__(self):
+        self.last_params = None
+
+    def create(self, **params):
+        self.last_params = params
+        return iter(
+            [
+                _Object(
+                    model=params["model"],
+                    choices=[
+                        _Object(
+                            delta=_Object(
+                                tool_calls=[
+                                    _Object(
+                                        index=0,
+                                        id="call_1",
+                                        function=_Object(name="read_file", arguments='{"path"'),
+                                    )
+                                ]
+                            ),
+                            finish_reason=None,
+                        )
+                    ],
+                ),
+                _Object(
+                    model=params["model"],
+                    choices=[
+                        _Object(
+                            delta=_Object(
+                                tool_calls=[
+                                    _Object(
+                                        index=0,
+                                        function=_Object(arguments=': "README.md"}'),
+                                    )
+                                ]
+                            ),
+                            finish_reason=None,
+                        )
+                    ],
+                ),
+                _Object(
+                    model=params["model"],
+                    choices=[_Object(delta=_Object(), finish_reason="tool_calls")],
+                ),
+            ]
+        )
+
+
+class _FakeOpenAIToolStreamClient:
+    def __init__(self):
+        self.completions = _FakeOpenAIToolStreamCompletions()
+        self.chat = _Object(completions=self.completions)
+
+
+class _FakeOpenAITruncatedToolStreamCompletions:
+    def create(self, **params):
+        return iter(
+            [
+                _Object(
+                    model=params["model"],
+                    choices=[
+                        _Object(
+                            delta=_Object(
+                                tool_calls=[
+                                    _Object(
+                                        index=0,
+                                        id="call_partial",
+                                        function=_Object(name="read_file", arguments='{"path": "README'),
+                                    )
+                                ]
+                            ),
+                            finish_reason=None,
+                        )
+                    ],
+                ),
+                _Object(
+                    model=params["model"],
+                    choices=[_Object(delta=_Object(), finish_reason="length")],
+                ),
+            ]
+        )
+
+
+class _FakeOpenAITruncatedToolStreamClient:
+    def __init__(self):
+        self.chat = _Object(completions=_FakeOpenAITruncatedToolStreamCompletions())
+
+
+class _FakeOpenAIMultiToolStreamCompletions:
+    def create(self, **params):
+        return iter(
+            [
+                _Object(
+                    model=params["model"],
+                    choices=[
+                        _Object(
+                            delta=_Object(
+                                tool_calls=[
+                                    _Object(
+                                        index=1,
+                                        id="call_b",
+                                        function=_Object(name="grep", arguments='{"pattern"'),
+                                    ),
+                                    _Object(
+                                        index=0,
+                                        id="call_a",
+                                        function=_Object(name="read_file", arguments='{"path"'),
+                                    ),
+                                ]
+                            ),
+                            finish_reason=None,
+                        )
+                    ],
+                ),
+                _Object(
+                    model=params["model"],
+                    choices=[
+                        _Object(
+                            delta=_Object(
+                                tool_calls=[
+                                    _Object(index=0, function=_Object(arguments=': "README.md"}')),
+                                    _Object(index=1, function=_Object(arguments=': "TODO"}')),
+                                ]
+                            ),
+                            finish_reason=None,
+                        )
+                    ],
+                ),
+                _Object(
+                    model=params["model"],
+                    choices=[_Object(delta=_Object(), finish_reason="tool_calls")],
+                ),
+            ]
+        )
+
+
+class _FakeOpenAIMultiToolStreamClient:
+    def __init__(self):
+        self.chat = _Object(completions=_FakeOpenAIMultiToolStreamCompletions())
+
+
+class _FakeOpenAIInvalidToolStreamCompletions:
+    def create(self, **params):
+        return iter(
+            [
+                _Object(
+                    model=params["model"],
+                    choices=[
+                        _Object(
+                            delta=_Object(
+                                tool_calls=[
+                                    _Object(
+                                        index=0,
+                                        id="call_bad",
+                                        function=_Object(name="read_file", arguments='{"path": "README.md"'),
+                                    )
+                                ]
+                            ),
+                            finish_reason=None,
+                        )
+                    ],
+                ),
+                _Object(
+                    model=params["model"],
+                    choices=[_Object(delta=_Object(), finish_reason="tool_calls")],
+                ),
+            ]
+        )
+
+
+class _FakeOpenAIInvalidToolStreamClient:
+    def __init__(self):
+        self.chat = _Object(completions=_FakeOpenAIInvalidToolStreamCompletions())
+
+
+class _FakeOpenAIMissingArgumentsToolStreamCompletions:
+    def create(self, **params):
+        return iter(
+            [
+                _Object(
+                    model=params["model"],
+                    choices=[
+                        _Object(
+                            delta=_Object(
+                                tool_calls=[
+                                    _Object(index=0, id="call_empty", function=_Object(name="read_file"))
+                                ]
+                            ),
+                            finish_reason=None,
+                        )
+                    ],
+                ),
+                _Object(
+                    model=params["model"],
+                    choices=[_Object(delta=_Object(), finish_reason="tool_calls")],
+                ),
+            ]
+        )
+
+
+class _FakeOpenAIMissingArgumentsToolStreamClient:
+    def __init__(self):
+        self.chat = _Object(completions=_FakeOpenAIMissingArgumentsToolStreamCompletions())
+
+
+class _FakeOpenAIStopToolStreamCompletions:
+    def create(self, **params):
+        return iter(
+            [
+                _Object(
+                    model=params["model"],
+                    choices=[
+                        _Object(
+                            delta=_Object(
+                                tool_calls=[
+                                    _Object(
+                                        index=0,
+                                        id="call_stop",
+                                        function=_Object(name="read_file", arguments='{"path": "README.md"}'),
+                                    )
+                                ]
+                            ),
+                            finish_reason=None,
+                        )
+                    ],
+                ),
+                _Object(
+                    model=params["model"],
+                    choices=[_Object(delta=_Object(), finish_reason="stop")],
+                ),
+            ]
+        )
+
+
+class _FakeOpenAIStopToolStreamClient:
+    def __init__(self):
+        self.chat = _Object(completions=_FakeOpenAIStopToolStreamCompletions())
+
+
+class _FakeOpenAIErrorChunkStreamCompletions:
+    def create(self, **params):
+        return iter([_Object(error=_Object(message="rate limit exceeded", status_code=429))])
+
+
+class _FakeOpenAIErrorChunkStreamClient:
+    def __init__(self):
+        self.chat = _Object(completions=_FakeOpenAIErrorChunkStreamCompletions())
+
+
+class _FailingStream:
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        raise _StatusError("stream unavailable", 503)
+
+
+class _FakeOpenAIFailingStreamCompletions:
+    def create(self, **params):
+        return _FailingStream()
+
+
+class _FakeOpenAIFailingStreamClient:
+    def __init__(self):
+        self.chat = _Object(completions=_FakeOpenAIFailingStreamCompletions())
+
+
 class _FakeAnthropicMessages:
     def __init__(self):
         self.last_params = None
@@ -439,6 +737,263 @@ def test_openai_compatible_provider_wraps_response_status_error_kind():
 def test_chat_provider_default_astream_reports_unsupported():
     async def collect_stream_error() -> None:
         events = _NoStreamProvider().astream(ChatRequest(messages=[ChatMessage(role="user", content="hi")]))
+        with pytest.raises(ProviderError) as exc_info:
+            async for _event in events:
+                pass
+        assert exc_info.value.kind == ProviderErrorKind.UNSUPPORTED
+
+    asyncio.run(collect_stream_error())
+
+
+def test_openai_compatible_provider_streams_text_deltas_and_final_response():
+    async def collect_events():
+        client = _FakeOpenAITextStreamClient()
+        provider = OpenAICompatibleProvider(
+            name="test-openai",
+            model="test-model",
+            api_key="test-key",
+            client=client,
+        )
+
+        events = [
+            event
+            async for event in provider.astream(ChatRequest(messages=[ChatMessage(role="user", content="hi")]))
+        ]
+        return client, events
+
+    client, events = asyncio.run(collect_events())
+
+    assert client.completions.last_params["stream"] is True
+    assert [event.kind for event in events] == [
+        "message_started",
+        "text_delta",
+        "text_delta",
+        "message_completed",
+    ]
+    assert [event.text for event in events if event.kind == "text_delta"] == ["你", "好"]
+    assert events[-1].response is not None
+    assert events[-1].response.content == "你好"
+    assert events[-1].response.finish_reason == "stop"
+
+
+def test_openai_compatible_provider_accumulates_streaming_tool_calls():
+    async def collect_events():
+        client = _FakeOpenAIToolStreamClient()
+        provider = OpenAICompatibleProvider(
+            name="test-openai",
+            model="test-model",
+            api_key="test-key",
+            client=client,
+        )
+
+        events = [
+            event
+            async for event in provider.astream(
+                ChatRequest(
+                    messages=[ChatMessage(role="user", content="读取 README")],
+                    tools=[ToolDefinition(name="read_file", description="读取文件")],
+                )
+            )
+        ]
+        return client, events
+
+    client, events = asyncio.run(collect_events())
+
+    assert client.completions.last_params["stream"] is True
+    assert "tools" in client.completions.last_params
+    assert [event.kind for event in events] == [
+        "message_started",
+        "tool_call_started",
+        "tool_call_delta",
+        "tool_call_delta",
+        "tool_call_completed",
+        "message_completed",
+    ]
+    assert [event.arguments_delta for event in events if event.kind == "tool_call_delta"] == [
+        '{"path"',
+        ': "README.md"}',
+    ]
+    completed = [event.tool_call for event in events if event.kind == "tool_call_completed"][0]
+    assert completed is not None
+    assert completed.id == "call_1"
+    assert completed.name == "read_file"
+    assert completed.arguments == {"path": "README.md"}
+    assert events[-1].response is not None
+    assert events[-1].response.tool_calls == [completed]
+    assert events[-1].response.finish_reason == "tool_calls"
+
+
+def test_openai_compatible_provider_does_not_complete_truncated_streaming_tool_call():
+    async def collect_events():
+        provider = OpenAICompatibleProvider(
+            name="test-openai",
+            model="test-model",
+            api_key="test-key",
+            client=_FakeOpenAITruncatedToolStreamClient(),
+        )
+
+        return [
+            event
+            async for event in provider.astream(ChatRequest(messages=[ChatMessage(role="user", content="读取 README")]))
+        ]
+
+    events = asyncio.run(collect_events())
+
+    assert "tool_call_completed" not in [event.kind for event in events]
+    assert events[-1].response is not None
+    assert events[-1].response.finish_reason == "length"
+    assert events[-1].response.tool_calls == []
+    assert events[-1].response.diagnostics.warnings
+
+
+def test_openai_compatible_provider_accumulates_multiple_streaming_tool_calls_by_index():
+    async def collect_events():
+        provider = OpenAICompatibleProvider(
+            name="test-openai",
+            model="test-model",
+            api_key="test-key",
+            client=_FakeOpenAIMultiToolStreamClient(),
+        )
+
+        return [
+            event
+            async for event in provider.astream(ChatRequest(messages=[ChatMessage(role="user", content="查找")]))
+        ]
+
+    events = asyncio.run(collect_events())
+
+    completed = [event.tool_call for event in events if event.kind == "tool_call_completed"]
+    assert len(completed) == 2
+    assert completed[0] is not None
+    assert completed[1] is not None
+    assert completed[0].id == "call_a"
+    assert completed[0].arguments == {"path": "README.md"}
+    assert completed[1].id == "call_b"
+    assert completed[1].arguments == {"pattern": "TODO"}
+
+
+def test_openai_compatible_provider_emits_error_for_invalid_streaming_tool_arguments():
+    async def collect_events():
+        provider = OpenAICompatibleProvider(
+            name="test-openai",
+            model="test-model",
+            api_key="test-key",
+            client=_FakeOpenAIInvalidToolStreamClient(),
+        )
+
+        return [
+            event
+            async for event in provider.astream(ChatRequest(messages=[ChatMessage(role="user", content="读取 README")]))
+        ]
+
+    events = asyncio.run(collect_events())
+
+    assert "error" in [event.kind for event in events]
+    assert "tool_call_completed" not in [event.kind for event in events]
+    assert events[-1].response is not None
+    assert events[-1].response.tool_calls == []
+    assert events[-1].response.diagnostics.warnings
+
+
+def test_openai_compatible_provider_rejects_streaming_tool_call_without_arguments():
+    async def collect_events():
+        provider = OpenAICompatibleProvider(
+            name="test-openai",
+            model="test-model",
+            api_key="test-key",
+            client=_FakeOpenAIMissingArgumentsToolStreamClient(),
+        )
+
+        return [
+            event
+            async for event in provider.astream(ChatRequest(messages=[ChatMessage(role="user", content="读取 README")]))
+        ]
+
+    events = asyncio.run(collect_events())
+
+    assert "error" in [event.kind for event in events]
+    assert "tool_call_completed" not in [event.kind for event in events]
+    assert events[-1].response is not None
+    assert events[-1].response.tool_calls == []
+    assert events[-1].response.diagnostics.warnings
+
+
+def test_openai_compatible_provider_only_completes_streaming_tools_on_tool_calls_finish():
+    async def collect_events():
+        provider = OpenAICompatibleProvider(
+            name="test-openai",
+            model="test-model",
+            api_key="test-key",
+            client=_FakeOpenAIStopToolStreamClient(),
+        )
+
+        return [
+            event
+            async for event in provider.astream(ChatRequest(messages=[ChatMessage(role="user", content="读取 README")]))
+        ]
+
+    events = asyncio.run(collect_events())
+
+    assert "error" in [event.kind for event in events]
+    assert "tool_call_completed" not in [event.kind for event in events]
+    assert events[-1].response is not None
+    assert events[-1].response.finish_reason == "stop"
+    assert events[-1].response.tool_calls == []
+
+
+def test_openai_compatible_provider_raises_for_stream_error_chunk():
+    async def collect_events():
+        provider = OpenAICompatibleProvider(
+            name="test-openai",
+            model="test-model",
+            api_key="test-key",
+            client=_FakeOpenAIErrorChunkStreamClient(),
+        )
+
+        events = []
+        with pytest.raises(ProviderError) as exc_info:
+            async for event in provider.astream(ChatRequest(messages=[ChatMessage(role="user", content="hi")])):
+                events.append(event)
+        return events, exc_info.value
+
+    events, error = asyncio.run(collect_events())
+
+    assert error.kind == ProviderErrorKind.RATE_LIMIT
+    assert [event.kind for event in events] == ["message_started", "error"]
+
+
+def test_openai_compatible_provider_wraps_stream_iteration_error():
+    async def collect_events():
+        provider = OpenAICompatibleProvider(
+            name="test-openai",
+            model="test-model",
+            api_key="test-key",
+            client=_FakeOpenAIFailingStreamClient(),
+        )
+
+        events = []
+        with pytest.raises(ProviderError) as exc_info:
+            async for event in provider.astream(ChatRequest(messages=[ChatMessage(role="user", content="hi")])):
+                events.append(event)
+        return events, exc_info.value
+
+    events, error = asyncio.run(collect_events())
+
+    assert error.kind == ProviderErrorKind.SERVER_ERROR
+    assert [event.kind for event in events] == ["message_started"]
+
+
+def test_openai_compatible_provider_rejects_streaming_when_capability_disabled():
+    async def collect_stream_error() -> None:
+        provider = OpenAICompatibleProvider(
+            name="test-openai",
+            model="test-model",
+            api_key="test-key",
+            client=_FakeOpenAITextStreamClient(),
+            capabilities=ProviderCapabilities(supports_streaming=False),
+        )
+
+        events = provider.astream(ChatRequest(messages=[ChatMessage(role="user", content="hi")]))
         with pytest.raises(ProviderError) as exc_info:
             async for _event in events:
                 pass

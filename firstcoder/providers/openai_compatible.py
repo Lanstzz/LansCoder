@@ -2,16 +2,27 @@
 
 from __future__ import annotations
 
+import asyncio
+import queue
+import threading
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any
 
 from firstcoder.utils.json_utils import dumps_json, loads_json_object
 from firstcoder.providers.base import ChatProvider
-from firstcoder.providers.errors import ProviderError, ProviderErrorKind, classify_provider_exception
+from firstcoder.providers.errors import (
+    ProviderError,
+    ProviderErrorKind,
+    classify_provider_error,
+    classify_provider_exception,
+)
 from firstcoder.providers.tool_adapters import to_openai_tool
 from firstcoder.providers.types import (
     ChatMessage,
     ChatRequest,
     ChatResponse,
+    ChatStreamEvent,
     FinishReason,
     ProviderCapabilities,
     ProviderDiagnostics,
@@ -57,7 +68,7 @@ class OpenAICompatibleProvider(ChatProvider):
         self._name = name
         self._model = model
         self._base_url = base_url
-        self._capabilities = capabilities or ProviderCapabilities()
+        self._capabilities = capabilities or ProviderCapabilities(supports_streaming=True)
         self._extra_headers = dict(extra_headers or {})
         self._extra_body = dict(extra_body or {})
 
@@ -101,31 +112,7 @@ class OpenAICompatibleProvider(ChatProvider):
     def complete(self, request: ChatRequest) -> ChatResponse:
         """调用 Chat Completions，并转换成项目内部统一响应。"""
 
-        if request.tools and not self._capabilities.supports_tools:
-            raise ProviderError(
-                ProviderErrorKind.CONFIG_ERROR,
-                f"provider {self._name} 不支持 tool calling，不能发送 tools",
-            )
-
-        params: dict[str, Any] = {
-            "model": self._model,
-            "messages": [self._to_openai_message(message) for message in request.messages],
-        }
-
-        if request.tools:
-            params["tools"] = [to_openai_tool(tool) for tool in request.tools]
-            params["tool_choice"] = _to_openai_tool_choice(request.tool_choice)
-            if self._capabilities.supports_parallel_tool_calls:
-                params["parallel_tool_calls"] = True
-        if request.temperature is not None:
-            params["temperature"] = request.temperature
-        if request.max_tokens is not None:
-            params[self._capabilities.token_param] = request.max_tokens
-
-        extra_body = {**self._extra_body, **request.extra_body}
-        if extra_body:
-            params["extra_body"] = extra_body
-
+        params = self._build_completion_params(request)
         try:
             response = self._client.chat.completions.create(**params)
         except Exception as exc:
@@ -151,6 +138,138 @@ class OpenAICompatibleProvider(ChatProvider):
             diagnostics=diagnostics,
             raw=response,
         )
+
+    async def astream(self, request: ChatRequest) -> AsyncIterator[ChatStreamEvent]:
+        """调用 Chat Completions streaming，并转换成内部流式事件。
+
+        OpenAI-compatible 原始 chunk 只在这里解析。工具调用 delta 会先按 index
+        累积，直到 stream 完成后才产出完整 `tool_call_completed` 事件。
+        """
+
+        if not self._capabilities.supports_streaming:
+            raise ProviderError(
+                ProviderErrorKind.UNSUPPORTED,
+                f"provider {self._name} 不支持 streaming",
+            )
+
+        params = self._build_completion_params(request)
+        params["stream"] = True
+        diagnostics = ProviderDiagnostics()
+        content_parts: list[str] = []
+        tool_accumulators: dict[int, _StreamToolCallAccumulator] = {}
+        raw_finish_reason: Any = None
+        response_model = self._model
+
+        try:
+            stream = await asyncio.to_thread(self._client.chat.completions.create, **params)
+        except Exception as exc:
+            message = str(exc)
+            raise ProviderError(classify_provider_exception(exc), message) from exc
+
+        yield ChatStreamEvent(kind="message_started")
+
+        stream_queue, stop_stream = _start_stream_worker(stream)
+        try:
+            while True:
+                item = await asyncio.to_thread(stream_queue.get)
+                if item is _STREAM_ENDED:
+                    break
+                if isinstance(item, _StreamFailure):
+                    message = str(item.error)
+                    raise ProviderError(classify_provider_exception(item.error), message) from item.error
+
+                chunk = item
+                stream_error = _parse_stream_error(chunk)
+                if stream_error is not None:
+                    diagnostics.warnings.append(stream_error.message)
+                    yield ChatStreamEvent(kind="error", diagnostics=diagnostics)
+                    raise stream_error
+
+                response_model = _read_field(chunk, "model", response_model) or response_model
+                choices = _read_field(chunk, "choices", []) or []
+                if not choices:
+                    continue
+
+                choice = choices[0]
+                delta = _read_field(choice, "delta", {}) or {}
+                choice_finish_reason = _read_field(choice, "finish_reason")
+                if choice_finish_reason is not None:
+                    raw_finish_reason = choice_finish_reason
+
+                text = _read_field(delta, "content")
+                if text:
+                    content_parts.append(text)
+                    yield ChatStreamEvent(kind="text_delta", text=text)
+
+                for event in _accumulate_stream_tool_call_deltas(
+                    _read_field(delta, "tool_calls", []) or [],
+                    accumulators=tool_accumulators,
+                    diagnostics=diagnostics,
+                ):
+                    yield event
+        finally:
+            stop_stream.set()
+            await asyncio.to_thread(_close_stream, stream)
+
+        finish_reason = _normalize_finish_reason(raw_finish_reason)
+        diagnostics.raw_finish_reason = raw_finish_reason
+
+        tool_calls: list[ToolCall] = []
+        if tool_accumulators and finish_reason != "tool_calls":
+            diagnostics.warnings.append(
+                f"finish_reason={finish_reason}，丢弃 streaming 中未以 tool_calls 完成的 tool_calls。"
+            )
+        elif tool_accumulators:
+            tool_calls = _complete_stream_tool_calls(tool_accumulators, diagnostics=diagnostics)
+        if diagnostics.warnings and tool_accumulators and not tool_calls:
+            yield ChatStreamEvent(kind="error", diagnostics=diagnostics)
+
+        for tool_call in tool_calls:
+            yield ChatStreamEvent(
+                kind="tool_call_completed",
+                tool_call=tool_call,
+                tool_call_id=tool_call.id,
+                tool_name=tool_call.name,
+            )
+
+        response = ChatResponse(
+            provider=self._name,
+            model=response_model,
+            content="".join(content_parts),
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            diagnostics=diagnostics,
+        )
+        yield ChatStreamEvent(kind="message_completed", response=response, diagnostics=diagnostics)
+
+    def _build_completion_params(self, request: ChatRequest) -> dict[str, Any]:
+        """构造 OpenAI-compatible Chat Completions 请求参数。"""
+
+        if request.tools and not self._capabilities.supports_tools:
+            raise ProviderError(
+                ProviderErrorKind.CONFIG_ERROR,
+                f"provider {self._name} 不支持 tool calling，不能发送 tools",
+            )
+
+        params: dict[str, Any] = {
+            "model": self._model,
+            "messages": [self._to_openai_message(message) for message in request.messages],
+        }
+
+        if request.tools:
+            params["tools"] = [to_openai_tool(tool) for tool in request.tools]
+            params["tool_choice"] = _to_openai_tool_choice(request.tool_choice)
+            if self._capabilities.supports_parallel_tool_calls:
+                params["parallel_tool_calls"] = True
+        if request.temperature is not None:
+            params["temperature"] = request.temperature
+        if request.max_tokens is not None:
+            params[self._capabilities.token_param] = request.max_tokens
+
+        extra_body = {**self._extra_body, **request.extra_body}
+        if extra_body:
+            params["extra_body"] = extra_body
+        return params
 
     @staticmethod
     def _to_openai_message(message: ChatMessage) -> dict[str, Any]:
@@ -249,3 +368,143 @@ def _to_openai_tool_choice(tool_choice: ToolChoice | None) -> str | dict[str, An
     if isinstance(tool_choice, str) and tool_choice in {"auto", "none", "required"}:
         return tool_choice
     raise ProviderError(ProviderErrorKind.CONFIG_ERROR, f"不支持的 tool_choice：{tool_choice!r}")
+
+
+@dataclass(slots=True)
+class _StreamToolCallAccumulator:
+    index: int
+    id: str = ""
+    name: str = ""
+    arguments_text: str = ""
+    saw_arguments: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamFailure:
+    error: BaseException
+
+
+_STREAM_ENDED = object()
+
+
+def _start_stream_worker(stream: Any) -> tuple[queue.Queue[Any], threading.Event]:
+    """用单一后台线程拥有同步 stream iterator。
+
+    OpenAI SDK 的同步 streaming iterator 可能持有底层 HTTP 连接。让同一个线程顺序
+    消费它，可以避免每次 `next()` 被调度到不同线程造成的隐性连接生命周期问题。
+    """
+
+    stream_queue: queue.Queue[Any] = queue.Queue()
+    stop_event = threading.Event()
+
+    def worker() -> None:
+        try:
+            for chunk in stream:
+                if stop_event.is_set():
+                    break
+                stream_queue.put(chunk)
+        except BaseException as exc:
+            stream_queue.put(_StreamFailure(exc))
+        finally:
+            _close_stream(stream)
+            stream_queue.put(_STREAM_ENDED)
+
+    threading.Thread(target=worker, name="firstcoder-openai-stream", daemon=True).start()
+    return stream_queue, stop_event
+
+
+def _close_stream(stream: Any) -> None:
+    close = getattr(stream, "close", None)
+    if callable(close):
+        close()
+
+
+def _parse_stream_error(chunk: Any) -> ProviderError | None:
+    error = _read_field(chunk, "error")
+    if error is None:
+        return None
+
+    message = _read_field(error, "message") or str(error)
+    status_code = _read_field(error, "status_code")
+    return ProviderError(classify_provider_error(message, status_code=status_code), message)
+
+
+def _accumulate_stream_tool_call_deltas(
+    tool_call_deltas: list[Any],
+    *,
+    accumulators: dict[int, _StreamToolCallAccumulator],
+    diagnostics: ProviderDiagnostics,
+) -> list[ChatStreamEvent]:
+    events: list[ChatStreamEvent] = []
+    for delta in tool_call_deltas:
+        index = _read_field(delta, "index")
+        if not isinstance(index, int):
+            diagnostics.warnings.append("streaming tool_call delta 缺少 index，已忽略该片段。")
+            continue
+
+        is_new = index not in accumulators
+        accumulator = accumulators.setdefault(index, _StreamToolCallAccumulator(index=index))
+        call_id = _read_field(delta, "id")
+        if call_id:
+            accumulator.id = call_id
+
+        function = _read_field(delta, "function", {}) or {}
+        name_delta = _read_field(function, "name", "") or ""
+        arguments_delta = _read_field(function, "arguments", "") or ""
+        if name_delta:
+            accumulator.name += name_delta
+        if arguments_delta:
+            accumulator.arguments_text += arguments_delta
+            accumulator.saw_arguments = True
+
+        if is_new:
+            events.append(
+                ChatStreamEvent(
+                    kind="tool_call_started",
+                    tool_call_index=index,
+                    tool_call_id=accumulator.id or None,
+                    tool_name=accumulator.name or None,
+                )
+            )
+        events.append(
+            ChatStreamEvent(
+                kind="tool_call_delta",
+                tool_call_index=index,
+                tool_call_id=accumulator.id or None,
+                tool_name=accumulator.name or None,
+                arguments_delta=arguments_delta,
+            )
+        )
+    return events
+
+
+def _complete_stream_tool_calls(
+    accumulators: dict[int, _StreamToolCallAccumulator],
+    *,
+    diagnostics: ProviderDiagnostics,
+) -> list[ToolCall]:
+    parsed: list[ToolCall] = []
+    for index in sorted(accumulators):
+        accumulator = accumulators[index]
+        if not accumulator.id or not accumulator.name or not accumulator.saw_arguments:
+            diagnostics.warnings.append(
+                f"streaming tool_call 缺少 id、name 或 arguments，已丢弃整组不可执行调用：index={index}"
+            )
+            return []
+
+        arguments = loads_json_object(accumulator.arguments_text)
+        if not isinstance(arguments, dict):
+            diagnostics.warnings.append(
+                f"streaming tool_call 参数不是合法 JSON object，已丢弃整组不可执行调用："
+                f"index={index}, id={accumulator.id}, name={accumulator.name}"
+            )
+            return []
+
+        parsed.append(
+            ToolCall(
+                id=accumulator.id,
+                name=accumulator.name,
+                arguments=arguments,
+            )
+        )
+    return parsed
