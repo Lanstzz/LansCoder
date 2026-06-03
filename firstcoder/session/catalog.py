@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from firstcoder.context.events import SessionEvent
+from firstcoder.context.metadata import merge_metadata_patch
 from firstcoder.session.errors import SessionInvalidIdError, SessionNotFoundError
 from firstcoder.session.models import SessionRecord
 
@@ -107,7 +108,7 @@ def _build_record(*, session_id: str, events: list[SessionEvent]) -> SessionReco
 
     for event in events:
         if event.type in {"session_created", "session_metadata_updated"}:
-            metadata.update(event.payload)
+            metadata = merge_metadata_patch(metadata, event.payload)
 
         if event.type in MESSAGE_EVENT_TYPES:
             message_count += 1
@@ -133,6 +134,7 @@ def _build_record(*, session_id: str, events: list[SessionEvent]) -> SessionReco
             latest_checkpoint_id = _optional_str(event.payload.get("id")) or latest_checkpoint_id
 
     title = _optional_str(metadata.get("title")) or latest_user_input or session_id
+    metadata["session_id"] = session_id
     return SessionRecord(
         session_id=session_id,
         title=title,

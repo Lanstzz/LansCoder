@@ -14,6 +14,7 @@ from firstcoder.context.compaction import CompactionEvent
 from firstcoder.context.events import SessionEvent
 from firstcoder.context.identity import new_event_id, new_message_id, new_part_id
 from firstcoder.context.llm_compact import LlmCompactEvent
+from firstcoder.context.metadata import metadata_without_reserved_keys
 from firstcoder.context.models import MessagePart, utc_now_iso
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.context.task_boundary import TaskBoundaryObservation, TaskBoundaryService
@@ -37,13 +38,29 @@ class SessionEventWriter:
 
     def append_session_created(self, **metadata: Any) -> None:
         payload = {"session_id": self.session_id}
-        payload.update(metadata)
+        payload.update(metadata_without_reserved_keys(metadata))
         self.store.append_event(
             SessionEvent(
                 id=new_event_id(),
                 session_id=self.session_id,
                 type="session_created",
                 payload=payload,
+            )
+        )
+
+    def append_session_metadata_updated(self, **metadata: Any) -> None:
+        """追加用户可见 session metadata patch。
+
+        这个事件只影响 session catalog/share 等用户入口，不生成普通消息，也不进入
+        provider context。
+        """
+
+        self.store.append_event(
+            SessionEvent(
+                id=new_event_id(),
+                session_id=self.session_id,
+                type="session_metadata_updated",
+                payload=metadata_without_reserved_keys(metadata),
             )
         )
 

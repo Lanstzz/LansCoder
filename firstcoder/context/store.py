@@ -8,6 +8,7 @@ from typing import Iterable
 
 from firstcoder.context.checkpoint import Checkpoint
 from firstcoder.context.events import SessionEvent
+from firstcoder.context.metadata import merge_metadata_patch
 from firstcoder.context.models import AgentMessage, MessagePart, SessionView
 
 
@@ -58,8 +59,9 @@ class JsonlSessionStore:
         return self.sessions_dir / f"{session_id}.jsonl"
 
     def _apply_event(self, view: SessionView, event: SessionEvent, *, sequence: int) -> None:
-        if event.type == "session_created":
-            view.metadata.update(event.payload)
+        if event.type in {"session_created", "session_metadata_updated"}:
+            view.metadata = merge_metadata_patch(view.metadata, event.payload)
+            view.metadata["session_id"] = event.session_id
             return
 
         if event.type == "checkpoint_created":

@@ -4,7 +4,13 @@
 本包后续只承载 catalog、resume 编排、只读 transcript 和 share export 等用户入口。
 """
 
-from firstcoder.session.errors import SessionCorruptError, SessionError, SessionInvalidIdError, SessionNotFoundError
+from firstcoder.session.errors import (
+    SessionCorruptError,
+    SessionEmptyError,
+    SessionError,
+    SessionInvalidIdError,
+    SessionNotFoundError,
+)
 from firstcoder.session.models import (
     RedactionOptions,
     SessionRecord,
@@ -16,6 +22,7 @@ from firstcoder.session.models import (
 __all__ = [
     "RedactionOptions",
     "SessionCorruptError",
+    "SessionEmptyError",
     "SessionError",
     "SessionInvalidIdError",
     "SessionNotFoundError",

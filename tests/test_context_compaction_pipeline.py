@@ -481,7 +481,7 @@ def test_pipeline_does_nothing_when_already_within_budget(tmp_path: Path) -> Non
     assert result.event.stopped_at == "already_within_budget"
     assert result.view.messages[0].parts[0].content == "旧任务内容" * 80
     assert result.view.messages[1].parts[0].content == "large tool output\n" * 200
-    assert not (tmp_path / ".firstcoder").exists()
+    assert not (tmp_path / "archives").exists()
 
 
 def test_already_within_budget_noop_is_deduped(tmp_path: Path) -> None:

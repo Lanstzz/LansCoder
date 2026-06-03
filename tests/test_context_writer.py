@@ -67,6 +67,17 @@ def test_writer_appends_session_created_once_when_requested(tmp_path) -> None:
     assert view.metadata["title"] == "demo"
 
 
+def test_writer_appends_session_metadata_update_event(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    writer = SessionEventWriter(store=store, session_id="sess_test")
+
+    writer.append_session_metadata_updated(title="renamed")
+
+    event = store.list_events("sess_test")[0]
+    assert event.type == "session_metadata_updated"
+    assert event.payload == {"title": "renamed"}
+
+
 def test_writer_appends_task_boundary_observation_event(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     writer = SessionEventWriter(store=store, session_id="sess_test")

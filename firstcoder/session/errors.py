@@ -19,5 +19,9 @@ class SessionInvalidIdError(SessionError):
     """session_id 不是安全的单文件名。"""
 
 
+class SessionEmptyError(SessionError):
+    """session 存在但没有可恢复事件。"""
+
+
 class SessionCorruptError(SessionError):
     """session 事件日志损坏，无法安全 resume 或导出。"""

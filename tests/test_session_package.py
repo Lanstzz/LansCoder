@@ -1,6 +1,7 @@
 from firstcoder.session import (
     RedactionOptions,
     SessionCorruptError,
+    SessionEmptyError,
     SessionError,
     SessionInvalidIdError,
     SessionNotFoundError,
@@ -24,6 +25,7 @@ def test_session_package_exports_core_models_and_errors() -> None:
     assert ShareOptions().include_tool_results is False
     assert issubclass(SessionNotFoundError, SessionError)
     assert issubclass(SessionInvalidIdError, SessionError)
+    assert issubclass(SessionEmptyError, SessionError)
     assert issubclass(SessionCorruptError, SessionError)
 
 

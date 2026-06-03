@@ -179,3 +179,45 @@ def test_l2_archive_placeholder_survives_rebuild_without_l4(tmp_path: Path) -> N
     assert part.metadata["compaction_state"] == "archived"
     assert part.metadata["archive_id"]
     assert "archive_id=" in part.content
+
+
+def test_store_and_compaction_pipeline_share_data_root(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session_id = "sess_test"
+    message = AgentMessage(
+        id="msg_tool",
+        session_id=session_id,
+        role="tool",
+        parts=[
+            MessagePart(
+                id="part_tool",
+                message_id="msg_tool",
+                kind="tool_result",
+                content="large tool output\n" * 200,
+                metadata={"tool_name": "shell", "tool_call_id": "call_1"},
+            )
+        ],
+    )
+    store.append_event(
+        SessionEvent(
+            id="evt_tool",
+            session_id=session_id,
+            type="tool_result",
+            payload={"message_id": message.id, "parts": [message.parts[0].to_dict()]},
+        )
+    )
+    result = CompactionPipeline(root=store.root, large_tool_result_tokens=20).compact(
+        CompactionRequest(
+            view=SessionView(session_id=session_id, messages=[message]),
+            active_task_hash="task_current",
+            target_tokens=1,
+            current_turn=10,
+            enabled_levels=("l2",),
+        )
+    )
+
+    archive_id = result.view.messages[0].parts[0].metadata["archive_id"]
+
+    assert (tmp_path / "sessions" / "sess_test.jsonl").exists()
+    assert (tmp_path / "archives" / "sess_test" / f"{archive_id}.txt").exists()
+    assert not (tmp_path / ".firstcoder").exists()

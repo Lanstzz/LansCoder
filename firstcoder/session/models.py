@@ -8,7 +8,10 @@ transcript 等用户入口。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from firstcoder.agent.session import AgentSession
 
 
 SessionStatus = Literal["ok", "empty", "corrupt"]
@@ -80,3 +83,11 @@ class Transcript:
 
     session: SessionRecord
     entries: list[TranscriptEntry] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ResumeResult:
+    """ResumeService 的返回值。"""
+
+    session: AgentSession
+    record: SessionRecord

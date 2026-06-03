@@ -17,7 +17,7 @@ def test_large_tool_result_is_written_to_archive(tmp_path) -> None:
     archived = ToolResultArchive(tmp_path).archive_part(session_id="sess_test", part=part)
 
     archive_id = archived.metadata["archive_id"]
-    archive_dir = tmp_path / ".firstcoder" / "archives" / "sess_test"
+    archive_dir = tmp_path / "archives" / "sess_test"
     assert (archive_dir / f"{archive_id}.txt").read_text(encoding="utf-8") == "line\n" * 200
 
     metadata = json.loads((archive_dir / f"{archive_id}.json").read_text(encoding="utf-8"))
@@ -69,7 +69,7 @@ def test_archived_tool_result_is_not_archived_twice(tmp_path) -> None:
     second = archive.archive_part(session_id="sess_test", part=first)
 
     assert second == first
-    archive_dir = tmp_path / ".firstcoder" / "archives" / "sess_test"
+    archive_dir = tmp_path / "archives" / "sess_test"
     assert len(list(archive_dir.glob("*.txt"))) == 1
     assert len(list(archive_dir.glob("*.json"))) == 1
 
@@ -89,7 +89,7 @@ def test_archive_part_accepts_caller_provided_archive_id(tmp_path) -> None:
         archive_id="ar_existing",
     )
 
-    archive_dir = tmp_path / ".firstcoder" / "archives" / "sess_test"
+    archive_dir = tmp_path / "archives" / "sess_test"
     assert archived.metadata["archive_id"] == "ar_existing"
     assert (archive_dir / "ar_existing.txt").exists()
     assert (archive_dir / "ar_existing.json").exists()

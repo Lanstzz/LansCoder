@@ -109,7 +109,7 @@ class ToolResultArchive:
         )
 
     def _archive_dir(self, session_id: str) -> Path:
-        return Path(self.root) / ".firstcoder" / "archives" / session_id
+        return Path(self.root) / "archives" / session_id
 
 
 def _default_summary(part: MessagePart, *, original_tokens: int) -> str:
