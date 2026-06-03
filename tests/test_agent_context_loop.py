@@ -85,6 +85,21 @@ class FakeContextManager:
         )
 
 
+@dataclass
+class RecordingContextManager:
+    calls: list[object] = field(default_factory=list)
+
+    def compact_if_needed(self, request):
+        self.calls.append(request)
+        return ContextCompactResult(
+            status="skipped",
+            reason="under_threshold",
+            view=request.view,
+            before_tokens=0,
+            after_tokens=0,
+        )
+
+
 def _echo_tool() -> Tool:
     def execute(text: str) -> ToolResult:
         return ToolResult(name="echo", ok=True, content=f"echo:{text}")
@@ -123,6 +138,10 @@ def test_agent_loop_appends_user_and_assistant_messages(tmp_path) -> None:
     assert [message.role for message in view.messages] == ["user", "assistant"]
     assert view.messages[0].parts[0].content == "你好"
     assert view.messages[1].parts[0].content == "收到"
+    assert view.messages[0].parts[0].metadata["created_turn"] == 1
+    assert view.messages[0].parts[0].metadata["turn_id"] == 1
+    assert view.messages[1].parts[0].metadata["created_turn"] == 1
+    assert view.messages[1].parts[0].metadata["turn_id"] == 1
 
 
 def test_agent_loop_builds_context_with_system_prefix_without_storing_it(tmp_path) -> None:
@@ -200,6 +219,9 @@ def test_agent_loop_executes_tool_call_and_appends_tool_result(tmp_path) -> None
     assert [message.role for message in view.messages] == ["user", "assistant", "tool", "assistant"]
     assert view.messages[1].parts[0].kind == "tool_call"
     assert view.messages[2].parts[0].metadata["tool_call_id"] == "call_1"
+    assert view.messages[0].parts[0].metadata["created_turn"] == 1
+    assert view.messages[1].parts[0].metadata["created_turn"] == 1
+    assert view.messages[2].parts[0].metadata["created_turn"] == 1
 
 
 def test_agent_loop_injects_stateful_task_boundary_tool(tmp_path) -> None:
@@ -267,6 +289,35 @@ def test_agent_loop_rejects_task_boundary_unknown_basis_message_id(tmp_path) -> 
     assert "task_boundary_observed" not in event_types
     assert session.runtime_state.active_task_hash is None
     assert replayed.active_task_hash is None
+
+
+def test_agent_loop_passes_current_turn_into_context_manager(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
+    provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
+    context_manager = RecordingContextManager()
+
+    AgentLoop(session=session, provider=provider, context_manager=context_manager).run_user_turn("新任务")
+
+    assert context_manager.calls
+    assert context_manager.calls[0].current_turn == 1
+
+
+def test_agent_loop_resume_keeps_turn_counter_and_metadata(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    original = AgentSession.create(store=store, session_id="sess_test", agents_md="")
+    first_provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="第一轮")])
+    AgentLoop(session=original, provider=first_provider).run_user_turn("第一轮问题")
+
+    resumed = AgentSession.resume(store=store, session_id="sess_test", agents_md="")
+    second_provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="第二轮")])
+    AgentLoop(session=resumed, provider=second_provider).run_user_turn("第二轮问题")
+
+    view = store.rebuild_session_view("sess_test")
+    assert view.messages[0].parts[0].metadata["created_turn"] == 1
+    assert view.messages[1].parts[0].metadata["created_turn"] == 1
+    assert view.messages[2].parts[0].metadata["created_turn"] == 2
+    assert view.messages[3].parts[0].metadata["created_turn"] == 2
 
 
 def test_task_boundary_tool_result_append_preserves_stable_window_metadata(tmp_path) -> None:

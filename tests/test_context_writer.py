@@ -36,6 +36,24 @@ def test_writer_appends_user_assistant_tool_messages_with_valid_parts(tmp_path) 
     assert view.messages[2].parts[0].kind == "tool_result"
     assert view.messages[2].parts[0].metadata["tool_call_id"] == "call_1"
     assert view.messages[2].parts[0].metadata["data"] == {"length": 3}
+    assert view.messages[0].parts[0].metadata["created_turn"] == 1
+    assert view.messages[0].parts[0].metadata["turn_id"] == 1
+    assert view.messages[1].parts[0].metadata["created_turn"] == 1
+    assert view.messages[1].parts[1].metadata["created_turn"] == 1
+    assert view.messages[2].parts[0].metadata["created_turn"] == 1
+
+
+def test_writer_advances_turn_on_user_messages(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    writer = SessionEventWriter(store=store, session_id="sess_test")
+
+    writer.append_user_message("第一轮")
+    writer.append_user_message("第二轮")
+
+    view = store.rebuild_session_view("sess_test")
+    assert view.messages[0].parts[0].metadata["created_turn"] == 1
+    assert view.messages[1].parts[0].metadata["created_turn"] == 2
+    assert writer.current_turn == 2
 
 
 def test_writer_appends_session_created_once_when_requested(tmp_path) -> None:

@@ -10,6 +10,7 @@ class FakeSession:
     def __init__(self) -> None:
         self.session_id = "sess_test"
         self.runtime_state = SessionRuntimeState(session_id="sess_test")
+        self.current_turn = 7
         self.view = SessionView(
             session_id="sess_test",
             messages=[
@@ -114,6 +115,7 @@ def test_manual_compact_command_calls_context_window_manager() -> None:
     assert len(context_manager.calls) == 1
     assert context_manager.calls[0].trigger == "manual"
     assert context_manager.calls[0].mode == "manual"
+    assert context_manager.calls[0].current_turn == 7
 
 
 def test_unknown_slash_command_is_reported() -> None:

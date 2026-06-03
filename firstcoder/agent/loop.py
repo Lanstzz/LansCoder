@@ -102,6 +102,7 @@ class AgentLoop:
                 view=self.session.rebuild_view(),
                 runtime_state=self.session.runtime_state,
                 trigger=trigger,
+                current_turn=self.session.current_turn,
             )
         )
 

@@ -23,11 +23,17 @@ from firstcoder.tools.types import ToolResult
 
 
 class SessionEventWriter:
-    """为单个 session 追加结构化事件。"""
+    """为单个 session 追加结构化事件。
 
-    def __init__(self, *, store: JsonlSessionStore, session_id: str) -> None:
+    writer 是所有消息事件落库前的最后一层公共入口，因此 turn 元数据在这里统一补齐。
+    上层 session 可以继续维护自己的运行期状态，但不需要在每条消息写入前重复拼
+    `created_turn` / `turn_id`，避免直接调用 writer 的路径漏掉上下文窗口判断需要的字段。
+    """
+
+    def __init__(self, *, store: JsonlSessionStore, session_id: str, current_turn: int = 0) -> None:
         self.store = store
         self.session_id = session_id
+        self.current_turn = current_turn
 
     def append_session_created(self, **metadata: Any) -> None:
         payload = {"session_id": self.session_id}
@@ -41,9 +47,22 @@ class SessionEventWriter:
             )
         )
 
-    def append_user_message(self, content: str, *, metadata: dict[str, Any] | None = None) -> str:
+    def append_user_message(
+        self,
+        content: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+        part_metadata: dict[str, Any] | None = None,
+    ) -> str:
+        self.current_turn += 1
         message_id = new_message_id()
-        part = MessagePart(id=new_part_id(), message_id=message_id, kind="text", content=content)
+        part = MessagePart(
+            id=new_part_id(),
+            message_id=message_id,
+            kind="text",
+            content=content,
+            metadata=self._part_metadata(part_metadata),
+        )
         self._append_message_event(
             "user_message",
             message_id=message_id,
@@ -56,9 +75,18 @@ class SessionEventWriter:
         message_id = new_message_id()
         parts: list[MessagePart] = []
         if response.content:
-            parts.append(MessagePart(id=new_part_id(), message_id=message_id, kind="text", content=response.content))
+            parts.append(
+                MessagePart(
+                    id=new_part_id(),
+                    message_id=message_id,
+                    kind="text",
+                    content=response.content,
+                    metadata=self._part_metadata(),
+                )
+            )
         for tool_call in response.tool_calls:
             parts.append(_tool_call_part(message_id=message_id, tool_call=tool_call))
+        self._attach_turn_metadata(parts)
         self._append_message_event(
             "assistant_message",
             message_id=message_id,
@@ -81,6 +109,7 @@ class SessionEventWriter:
         """写入已经由 agent 层转换好的 assistant parts。"""
 
         message_id = message_id or new_message_id()
+        self._attach_turn_metadata(parts)
         self._append_message_event(
             "assistant_message",
             message_id=message_id,
@@ -104,6 +133,7 @@ class SessionEventWriter:
                 "error": result.error,
             },
         )
+        self._attach_turn_metadata([part])
         self._append_message_event("tool_result", message_id=message_id, parts=[part])
         return message_id
 
@@ -111,6 +141,7 @@ class SessionEventWriter:
         """写入已经由 agent 层转换好的 tool_result part。"""
 
         message_id = message_id or part.message_id
+        self._attach_turn_metadata([part])
         self._append_message_event("tool_result", message_id=message_id, parts=[part])
         return message_id
 
@@ -197,6 +228,16 @@ class SessionEventWriter:
                 },
             )
         )
+
+    def _part_metadata(self, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+        merged = dict(metadata or {})
+        merged.setdefault("created_turn", self.current_turn)
+        merged.setdefault("turn_id", self.current_turn)
+        return merged
+
+    def _attach_turn_metadata(self, parts: list[MessagePart]) -> None:
+        for part in parts:
+            part.metadata = self._part_metadata(part.metadata)
 
 
 def _tool_call_part(*, message_id: str, tool_call: ToolCall) -> MessagePart:

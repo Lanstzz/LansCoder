@@ -19,6 +19,7 @@ from firstcoder.context.runtime_state import SessionRuntimeState
 class SessionLike(Protocol):
     session_id: str
     runtime_state: SessionRuntimeState
+    current_turn: int
 
     def rebuild_view(self) -> SessionView:
         ...
@@ -75,6 +76,7 @@ class ContextCommandHandler:
                 runtime_state=self.session.runtime_state,
                 trigger=ContextWindowTrigger.MANUAL,
                 mode="manual",
+                current_turn=self.session.current_turn,
             )
         )
         return (

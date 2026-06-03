@@ -26,6 +26,7 @@ from firstcoder.providers.types import ChatResponse, ToolCall, ToolDefinition
 from firstcoder.tools.registry import ToolRegistry
 from firstcoder.tools.session_registry import create_session_tool_registry
 from firstcoder.tools.types import Tool, ToolResult
+from firstcoder.context.models import AgentMessage, MessagePart
 
 
 DEFAULT_BASE_RULES = "你是 FirstCoder，一个本地 AI coding agent。请遵守项目规则并优先保持上下文可恢复。"
@@ -51,6 +52,7 @@ class AgentSession:
     provider_capability_overrides: dict[str, object] = field(default_factory=dict)
     permission_policy: dict[str, object] = field(default_factory=lambda: dict(DEFAULT_PERMISSION_POLICY))
     known_message_ids: set[str] = field(default_factory=set)
+    turn_counter: int = 0
     mode: str = "default"
 
     @classmethod
@@ -78,6 +80,7 @@ class AgentSession:
             writer=SessionEventWriter(store=store, session_id=session_id),
             agents_md=agents_md,
             known_message_ids=known_message_ids,
+            turn_counter=0,
         )
         session.append_session_created()
         return session
@@ -113,6 +116,7 @@ class AgentSession:
         runtime_state = replay_runtime_state(store, session_id)
         view = store.rebuild_session_view(session_id)
         known_message_ids = {message.id for message in view.messages}
+        turn_counter = _infer_turn_counter(view.messages)
         registry = create_session_tool_registry(
             session_id=session_id,
             runtime_state=runtime_state,
@@ -124,9 +128,10 @@ class AgentSession:
             store=store,
             runtime_state=runtime_state,
             tool_registry=registry,
-            writer=SessionEventWriter(store=store, session_id=session_id),
+            writer=SessionEventWriter(store=store, session_id=session_id, current_turn=turn_counter),
             agents_md=agents_md,
             known_message_ids=known_message_ids,
+            turn_counter=turn_counter,
         )
 
     def append_session_created(self) -> None:
@@ -154,14 +159,20 @@ class AgentSession:
         return entry.messages
 
     def append_user_message(self, content: str) -> str:
-        message_id = self.writer.append_user_message(content)
+        message_id = self.writer.append_user_message(
+            content,
+            part_metadata=self._current_context_metadata(),
+        )
+        self.turn_counter = self.writer.current_turn
         self.known_message_ids.add(message_id)
         return message_id
 
     def append_assistant_response(self, response: ChatResponse) -> str:
         message_id = new_message_id()
+        parts = assistant_response_to_parts(message_id=message_id, response=response)
+        self._attach_current_context_metadata(parts)
         assistant_message_id = self.writer.append_assistant_parts(
-            assistant_response_to_parts(message_id=message_id, response=response),
+            parts,
             message_id=message_id,
             metadata={
                 "provider": response.provider,
@@ -177,13 +188,19 @@ class AgentSession:
 
     def append_tool_result(self, *, tool_call: ToolCall, result: ToolResult) -> str:
         message_id = new_message_id()
+        part = tool_result_to_part(message_id=message_id, tool_call=tool_call, result=result)
+        self._attach_current_context_metadata([part])
         tool_message_id = self.writer.append_tool_result_part(
-            tool_result_to_part(message_id=message_id, tool_call=tool_call, result=result),
+            part,
             message_id=message_id,
         )
         self.known_message_ids.add(tool_message_id)
         self._append_task_boundary_observation_if_present(tool_call=tool_call, result=result)
         return tool_message_id
+
+    @property
+    def current_turn(self) -> int:
+        return self.writer.current_turn
 
     def rebuild_view(self):
         return self.store.rebuild_session_view(self.session_id)
@@ -194,3 +211,20 @@ class AgentSession:
         observation = observation_from_tool_result_data(result.data)
         if observation is not None:
             self.writer.append_task_boundary_observation(observation)
+
+    def _current_context_metadata(self) -> dict[str, object]:
+        metadata: dict[str, object] = {}
+        if self.runtime_state.active_task_hash:
+            metadata["task_hash"] = self.runtime_state.active_task_hash
+        return metadata
+
+    def _attach_current_context_metadata(self, parts: list[MessagePart]) -> None:
+        metadata = self._current_context_metadata()
+        for part in parts:
+            part.metadata.update(metadata)
+
+
+def _infer_turn_counter(messages: list[AgentMessage]) -> int:
+    """从已恢复的消息里推断下一轮 turn 编号。"""
+
+    return sum(1 for message in messages if message.role == "user")

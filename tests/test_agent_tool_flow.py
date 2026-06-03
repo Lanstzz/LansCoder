@@ -39,11 +39,11 @@ def test_assistant_tool_calls_are_persisted_as_tool_call_parts(tmp_path) -> None
     assert message_id == "msg_assistant"
     assert view.messages[0].role == "assistant"
     assert [part.kind for part in view.messages[0].parts] == ["text", "tool_call"]
-    assert view.messages[0].parts[1].metadata == {
-        "tool_call_id": "call_1",
-        "tool_name": "read_file",
-        "arguments": {"path": "a.py"},
-    }
+    assert view.messages[0].parts[1].metadata["tool_call_id"] == "call_1"
+    assert view.messages[0].parts[1].metadata["tool_name"] == "read_file"
+    assert view.messages[0].parts[1].metadata["arguments"] == {"path": "a.py"}
+    assert view.messages[0].parts[1].metadata["created_turn"] == 0
+    assert view.messages[0].parts[1].metadata["turn_id"] == 0
 
 
 def test_tool_results_are_persisted_with_matching_tool_call_id(tmp_path) -> None:
