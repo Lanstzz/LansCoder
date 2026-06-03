@@ -179,26 +179,16 @@ def test_l3_only_handles_current_task_cold_content(tmp_path: Path) -> None:
     assert result.view.messages[2].parts[0].content == "其他任务内容" * 120
 
 
-def test_l3_falls_back_to_plain_text_for_unregistered_route_type(tmp_path: Path) -> None:
-    content = "\n".join(
-        [
-            "diff --git a/firstcoder/app.py b/firstcoder/app.py",
-            "--- a/firstcoder/app.py",
-            "+++ b/firstcoder/app.py",
-            "@@ -1,4 +1,4 @@",
-            *[f"-old line {line}" for line in range(1, 80)],
-            *[f"+new line {line}" for line in range(1, 80)],
-        ]
-    )
+def test_l3_uses_html_route_compressor(tmp_path: Path) -> None:
+    content = "<html><body>" + "".join(f"<p>paragraph {line}</p>" for line in range(1, 160)) + "</body></html>"
     view = SessionView(
         session_id="sess_test",
         messages=[
             _message(
-                "msg_diff_like_cold",
+                "msg_html_like_cold",
                 content=content,
                 task_hash="task_current",
                 created_turn=1,
-                metadata={"tool_name": "git_diff"},
             )
         ],
     )
@@ -215,9 +205,10 @@ def test_l3_falls_back_to_plain_text_for_unregistered_route_type(tmp_path: Path)
 
     part = result.view.messages[0].parts[0]
     assert part.metadata["compaction_state"] == "route_compacted"
-    assert part.metadata["content_type"] == "plain_text"
-    assert part.metadata["detected_content_type"] == "git_diff"
-    assert part.metadata["route_fallback_from"] == "git_diff"
+    assert part.metadata["content_type"] == "html"
+    assert part.metadata["detected_content_type"] == "html"
+    assert part.metadata["compacted_by"] == "l3_html"
+    assert part.metadata["html_omitted_text_blocks"] > 0
 
 
 def test_l3_uses_search_results_route_compressor(tmp_path: Path) -> None:
@@ -250,6 +241,184 @@ def test_l3_uses_search_results_route_compressor(tmp_path: Path) -> None:
     assert part.metadata["compacted_by"] == "l3_search_results"
     assert part.metadata["search_original_matches"] == 19
     assert part.metadata["search_kept_matches"] < 19
+
+
+def test_l3_uses_git_diff_route_compressor(tmp_path: Path) -> None:
+    content = "\n".join(
+        [
+            "diff --git a/firstcoder/app.py b/firstcoder/app.py",
+            "--- a/firstcoder/app.py",
+            "+++ b/firstcoder/app.py",
+            "@@ -1,4 +1,4 @@",
+            *[f" context {line}" for line in range(1, 40)],
+            "-old line",
+            "+new line",
+            *[f" more context {line}" for line in range(40, 80)],
+        ]
+    )
+    view = SessionView(
+        session_id="sess_test",
+        messages=[
+            _message(
+                "msg_diff_cold",
+                content=content,
+                task_hash="task_current",
+                created_turn=1,
+                metadata={"tool_name": "git_diff"},
+            )
+        ],
+    )
+
+    result = CompactionPipeline(root=tmp_path, cold_turn_distance=5).compact(
+        CompactionRequest(
+            view=view,
+            active_task_hash="task_current",
+            target_tokens=1,
+            current_turn=10,
+            enabled_levels=("l3",),
+        )
+    )
+
+    part = result.view.messages[0].parts[0]
+    assert part.metadata["content_type"] == "git_diff"
+    assert part.metadata["compacted_by"] == "l3_git_diff"
+    assert part.metadata["diff_additions"] == 1
+    assert part.metadata["diff_deletions"] == 1
+
+
+def test_l3_uses_build_output_route_compressor(tmp_path: Path) -> None:
+    content = "\n".join(
+        [
+            "pytest tests/test_context.py",
+            *[f"normal test output line {line}" for line in range(1, 90)],
+            "tests/test_context.py::test_resume FAILED",
+            "Traceback (most recent call last):",
+            '  File "tests/test_context.py", line 33, in test_resume',
+            "    assert resume()",
+            "AssertionError",
+            *[f"more noise {line}" for line in range(90, 160)],
+            "FAILED tests/test_context.py::test_resume - AssertionError",
+            "1 failed, 12 passed in 1.23s",
+        ]
+    )
+    view = SessionView(
+        session_id="sess_test",
+        messages=[
+            _message(
+                "msg_build_cold",
+                content=content,
+                task_hash="task_current",
+                created_turn=1,
+                metadata={"tool_name": "pytest"},
+            )
+        ],
+    )
+
+    result = CompactionPipeline(root=tmp_path, cold_turn_distance=5).compact(
+        CompactionRequest(
+            view=view,
+            active_task_hash="task_current",
+            target_tokens=1,
+            current_turn=10,
+            enabled_levels=("l3",),
+        )
+    )
+
+    part = result.view.messages[0].parts[0]
+    assert part.metadata["content_type"] == "build_output"
+    assert part.metadata["compacted_by"] == "l3_build_output"
+    assert part.metadata["build_omitted_lines"] > 0
+    assert "tests/test_context.py::test_resume FAILED" in part.content
+    assert "1 failed, 12 passed" in part.content
+
+
+def test_l3_uses_json_route_compressor(tmp_path: Path) -> None:
+    content = (
+        "["
+        + ",".join(
+            '{"id":%d,"status":"%s","message":"%s"}'
+            % (
+                line,
+                "failed" if line == 44 else "ok",
+                "ERROR important" if line == 44 else f"normal {line}",
+            )
+            for line in range(1, 90)
+        )
+        + "]"
+    )
+    view = SessionView(
+        session_id="sess_test",
+        messages=[
+            _message(
+                "msg_json_cold",
+                content=content,
+                task_hash="task_current",
+                created_turn=1,
+            )
+        ],
+    )
+
+    result = CompactionPipeline(root=tmp_path, cold_turn_distance=5).compact(
+        CompactionRequest(
+            view=view,
+            active_task_hash="task_current",
+            target_tokens=1,
+            current_turn=10,
+            enabled_levels=("l3",),
+        )
+    )
+
+    part = result.view.messages[0].parts[0]
+    assert part.metadata["content_type"] == "json_array"
+    assert part.metadata["compacted_by"] == "l3_json_array"
+    assert part.metadata["json_omitted_items"] > 0
+    assert "ERROR important" in part.content
+
+
+def test_l3_uses_source_code_route_compressor(tmp_path: Path) -> None:
+    content = "\n".join(
+        [
+            "from pathlib import Path",
+            "",
+            "class ContextBuilder:",
+            "    def build(self) -> None:",
+            "        first = 1",
+            *[f"        intermediate_{line} = {line}" for line in range(1, 90)],
+            "        # FIXME important edge case",
+            "        raise ValueError('bad boundary')",
+            "",
+            "def make_builder() -> ContextBuilder:",
+            "    return ContextBuilder()",
+        ]
+    )
+    view = SessionView(
+        session_id="sess_test",
+        messages=[
+            _message(
+                "msg_code_cold",
+                content=content,
+                task_hash="task_current",
+                created_turn=1,
+            )
+        ],
+    )
+
+    result = CompactionPipeline(root=tmp_path, cold_turn_distance=5).compact(
+        CompactionRequest(
+            view=view,
+            active_task_hash="task_current",
+            target_tokens=1,
+            current_turn=10,
+            enabled_levels=("l3",),
+        )
+    )
+
+    part = result.view.messages[0].parts[0]
+    assert part.metadata["content_type"] == "source_code"
+    assert part.metadata["compacted_by"] == "l3_source_code"
+    assert part.metadata["code_omitted_lines"] > 0
+    assert "class ContextBuilder:" in part.content
+    assert "FIXME important edge case" in part.content
 
 
 def test_pipeline_stops_after_budget_target_is_met(tmp_path: Path) -> None:

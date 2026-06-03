@@ -8,12 +8,17 @@ from typing import Literal
 
 from firstcoder.context.archive import ToolResultArchive
 from firstcoder.context.checkpoint import CheckpointIndex
+from firstcoder.context.content.build import BuildOutputRouteCompressor
+from firstcoder.context.content.code import SourceCodeRouteCompressor
 from firstcoder.context.content.compressors import PlainTextRouteCompressor, compact_old_task_part
 from firstcoder.context.content.detector import (
     is_current_task_cold_part,
     is_large_tool_result,
     is_old_task_part,
 )
+from firstcoder.context.content.diff import GitDiffRouteCompressor
+from firstcoder.context.content.html import HtmlRouteCompressor
+from firstcoder.context.content.json import JsonRouteCompressor
 from firstcoder.context.content.router import RouteCompactRouter, RouteContentType
 from firstcoder.context.content.search import SearchResultsRouteCompressor
 from firstcoder.context.identity import stable_json_hash
@@ -181,9 +186,16 @@ class CompactionPipeline:
         current_turn: int,
     ) -> list[dict[str, object]]:
         changed: list[dict[str, object]] = []
+        json_compressor = JsonRouteCompressor()
         router = RouteCompactRouter(
             compressors={
+                RouteContentType.BUILD_OUTPUT: BuildOutputRouteCompressor(),
+                RouteContentType.GIT_DIFF: GitDiffRouteCompressor(),
+                RouteContentType.HTML: HtmlRouteCompressor(),
+                RouteContentType.JSON_ARRAY: json_compressor,
+                RouteContentType.JSON_OBJECT: json_compressor,
                 RouteContentType.SEARCH_RESULTS: SearchResultsRouteCompressor(),
+                RouteContentType.SOURCE_CODE: SourceCodeRouteCompressor(),
                 RouteContentType.PLAIN_TEXT: PlainTextRouteCompressor(),
             },
             preview_chars=self.cold_preview_chars,

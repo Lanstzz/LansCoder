@@ -138,8 +138,6 @@ def detect_route_content_type(content: str, *, tool_name: str | None = None) -> 
         return RouteDetection(RouteContentType.SEARCH_RESULTS, 0.95, {"source": "tool_hint"})
     if tool_hint in {"git_diff", "diff"}:
         return RouteDetection(RouteContentType.GIT_DIFF, 0.95, {"source": "tool_hint"})
-    if tool_hint in {"shell", "pytest"} and _BUILD_OUTPUT_PATTERN.search(stripped):
-        return RouteDetection(RouteContentType.BUILD_OUTPUT, 0.75, {"source": "tool_hint"})
 
     json_detection = _detect_json(stripped)
     if json_detection is not None:
@@ -151,10 +149,12 @@ def detect_route_content_type(content: str, *, tool_name: str | None = None) -> 
         return RouteDetection(RouteContentType.HTML, 0.85)
     if _SEARCH_RESULT_PATTERN.search(stripped):
         return RouteDetection(RouteContentType.SEARCH_RESULTS, 0.8)
-    if _BUILD_OUTPUT_PATTERN.search(stripped):
-        return RouteDetection(RouteContentType.BUILD_OUTPUT, 0.65)
     if _CODE_PATTERN.search(stripped):
         return RouteDetection(RouteContentType.SOURCE_CODE, 0.6)
+    if tool_hint in {"shell", "pytest"} and _BUILD_OUTPUT_PATTERN.search(stripped):
+        return RouteDetection(RouteContentType.BUILD_OUTPUT, 0.75, {"source": "tool_hint"})
+    if _BUILD_OUTPUT_PATTERN.search(stripped):
+        return RouteDetection(RouteContentType.BUILD_OUTPUT, 0.65)
     return RouteDetection(RouteContentType.PLAIN_TEXT, 0.5)
 
 
