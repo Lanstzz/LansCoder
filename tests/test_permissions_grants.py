@@ -1,4 +1,4 @@
-from firstcoder.permissions.grants import PermissionGrantStore
+from firstcoder.permissions.grants import FilePermissionGrantStore, PermissionGrantStore
 from firstcoder.permissions.types import (
     PermissionAction,
     PermissionDecisionKind,
@@ -202,3 +202,52 @@ def test_deny_grant_wins_over_allow_grant() -> None:
     assert decision.kind == PermissionDecisionKind.DENY
     assert decision.grant is not None
     assert decision.grant.id == "deny_pytest"
+
+
+def test_file_permission_grant_store_persists_added_grants(tmp_path) -> None:
+    path = tmp_path / "permissions.json"
+    store = FilePermissionGrantStore(path)
+    grant = _grant(
+        "grant_readme",
+        action=PermissionAction.WRITE_PATH,
+        scope_type=PermissionScopeType.EXACT_PATH,
+        scope_value=str(tmp_path / "README.md"),
+    )
+
+    store.add(grant)
+    reloaded = FilePermissionGrantStore(path)
+    decision = reloaded.matching_decision(
+        PermissionRequest(
+            id="req_write",
+            action=PermissionAction.WRITE_PATH,
+            target=str(tmp_path / "README.md"),
+        )
+    )
+
+    assert decision is not None
+    assert decision.kind == PermissionDecisionKind.ALLOW
+    assert decision.grant is not None
+    assert decision.grant.id == "grant_readme"
+
+
+def test_file_permission_grant_store_ignores_corrupt_file(tmp_path) -> None:
+    path = tmp_path / "permissions.json"
+    path.write_text("{not json", encoding="utf-8")
+
+    store = FilePermissionGrantStore(path)
+
+    assert store.list() == []
+
+
+def test_file_permission_grant_store_skips_invalid_entries(tmp_path) -> None:
+    path = tmp_path / "permissions.json"
+    path.write_text(
+        '{"grants": [{"id": "bad"}, {"id": "grant_pytest", "effect": "allow", '
+        '"action": "execute_shell", "scope_type": "command_prefix", '
+        '"scope_value": "pytest", "created_at": "2026-06-04T00:00:00+08:00"}]}',
+        encoding="utf-8",
+    )
+
+    store = FilePermissionGrantStore(path)
+
+    assert [grant.id for grant in store.list()] == ["grant_pytest"]

@@ -136,6 +136,8 @@ def permission_request_for_tool(tool: Tool, arguments: dict[str, Any]) -> Permis
 
 
 def _target_from_arguments(spec: ToolPermissionSpec, arguments: dict[str, Any]) -> str:
+    if spec.target_builder is not None:
+        return spec.target_builder(arguments)
     if spec.target_value is not None:
         return spec.target_value
     if spec.target_arg is None:

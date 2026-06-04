@@ -138,6 +138,7 @@ def test_project_session_permissioned_apply_patch_pauses_without_writing(tmp_pat
     assert result.ok is True
     assert result.data["request_type"] == "permission_confirmation"
     assert result.data["permission_request"]["action"] == "write_path"
+    assert result.data["permission_request"]["target"] == "created.txt"
     assert [option["id"] for option in result.data["options"]] == ["deny", "allow_once"]
     assert not (tmp_path / "created.txt").exists()
 

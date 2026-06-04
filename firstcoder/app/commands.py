@@ -61,7 +61,7 @@ class ContextCommandHandler:
         if normalized == "/compact":
             return CommandResult(handled=True, output=self._manual_compact())
 
-        return CommandResult(handled=True, output=f"Unknown command: {normalized}")
+        return CommandResult(handled=False)
 
     def _inspect(self) -> ContextInspectionReport:
         return self.inspector.inspect(self.session.rebuild_view(), self.session.runtime_state)

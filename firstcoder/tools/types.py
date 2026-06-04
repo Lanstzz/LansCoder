@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
 from firstcoder.providers.types import ToolDefinition
@@ -47,6 +48,7 @@ class ToolPermissionSpec:
     action: PermissionAction
     target_arg: str | None = None
     target_value: str | None = None
+    target_builder: Callable[[dict[str, Any]], str] | None = None
     cwd_arg: str | None = None
     reason: str = ""
     allow_always: bool = True

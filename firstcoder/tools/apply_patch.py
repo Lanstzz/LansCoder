@@ -69,12 +69,23 @@ def create_apply_patch_tool(root: str | Path) -> Tool:
     tool = tool_from_function(apply_patch)
     tool.permission = ToolPermissionSpec(
         action=PermissionAction.WRITE_PATH,
-        target_value=".",
+        target_builder=_permission_target_for_patch,
         reason="应用补丁会修改项目文件，需要用户确认。",
         allow_always=False,
         allow_auto=False,
     )
     return tool
+
+
+def _permission_target_for_patch(arguments: dict[str, object]) -> str:
+    patch = str(arguments.get("patch") or "")
+    plan = parse_patch(patch)
+    files: list[str] = []
+    for operation in plan.operations:
+        files.append(operation.path)
+        if operation.move_to:
+            files.append(operation.move_to)
+    return ", ".join(dict.fromkeys(files))
 
 
 def parse_patch(patch: str) -> PatchPlan:

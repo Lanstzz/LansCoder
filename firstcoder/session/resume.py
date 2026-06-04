@@ -10,10 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from firstcoder.agent.prompt_inputs import read_agents_md
-from firstcoder.agent.session import AgentSession
+from firstcoder.agent.session import AgentSession, create_project_permission_manager
 from firstcoder.context.store import JsonlSessionStore
-from firstcoder.permissions.manager import PermissionManager
-from firstcoder.permissions.policy import DefaultPermissionPolicy
+from firstcoder.permissions.grants import FilePermissionGrantStore
 from firstcoder.session.catalog import SessionCatalog
 from firstcoder.session.errors import SessionCorruptError, SessionEmptyError
 from firstcoder.session.models import ResumeResult
@@ -26,6 +25,7 @@ class ResumeService:
 
     store: JsonlSessionStore
     project_root: str | Path
+    data_root: str | Path | None = None
     tools: list[Tool] | None = None
     catalog: SessionCatalog | None = None
 
@@ -37,11 +37,16 @@ class ResumeService:
         if record.status == "empty":
             raise SessionEmptyError(f"session is empty: {session_id}")
 
+        data_root = Path(self.data_root) if self.data_root is not None else self.store.root
         session = AgentSession.resume(
             store=self.store,
             session_id=session_id,
             agents_md=read_agents_md(self.project_root),
             tools=self.tools,
-            permission_manager=PermissionManager(policy=DefaultPermissionPolicy(self.project_root)),
+            permission_manager=create_project_permission_manager(
+                self.project_root,
+                grants=FilePermissionGrantStore(data_root / "permissions.json"),
+            ),
         )
+        session.restore_pending_permission_execution()
         return ResumeResult(session=session, record=record)

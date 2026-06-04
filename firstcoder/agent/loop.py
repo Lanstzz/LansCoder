@@ -97,43 +97,18 @@ class AgentLoop:
         用本地 pending 状态补齐最终 tool_result，再继续下一次 provider 调用。
         """
 
-        pending = self.session.pending_permission_execution
-        if pending is None or pending.request_id != request_id:
-            return AgentTurnResult(
-                status=AgentTurnStatus.COMPLETED,
-                response=ChatResponse(
-                    provider=self.provider.name,
-                    model=self.provider.model,
-                    content="没有找到可恢复的权限确认请求。",
-                    finish_reason="error",
-                ),
-            )
-        if self.session.permission_manager is None:
-            return AgentTurnResult(
-                status=AgentTurnStatus.COMPLETED,
-                response=ChatResponse(
-                    provider=self.provider.name,
-                    model=self.provider.model,
-                    content="当前会话没有权限管理器，无法恢复权限确认。",
-                    finish_reason="error",
-                ),
-            )
-
-        decision = self.session.permission_manager.resolve_confirmation(pending.permission_request, answer)
-        if decision.kind == PermissionDecisionKind.DENY:
-            result = make_permission_denied_result(
-                tool_name=pending.tool_call.name,
-                request=pending.permission_request,
-                decision=decision,
-            )
-        else:
-            result = self.session.execute_tool_call_after_permission_confirmation(pending.tool_call)
-
-        self.session.pending_permission_execution = None
-        self.session.append_tool_result(tool_call=pending.tool_call, result=result)
-        self._append_skipped_tool_results(pending.skipped_tool_calls)
-        self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
+        result = self._append_permission_resume_result(request_id, answer)
+        if result is not None:
+            return result
         return self._run_tool_loop_interactive(self._complete_once_with_recovery)
+
+    async def resume_with_user_input_streaming(self, request_id: str, answer: str) -> AgentTurnResult:
+        """流式模式下恢复权限确认，并继续消费 provider stream。"""
+
+        result = self._append_permission_resume_result(request_id, answer)
+        if result is not None:
+            return result
+        return await self._run_tool_loop_interactive_async(self._stream_once_with_recovery)
 
     async def run_user_turn_streaming(self, content: str) -> ChatResponse:
         """使用 provider 内部 stream event 协议执行一轮会话。
@@ -178,6 +153,45 @@ class AgentLoop:
         """
 
         return asyncio.run(self.run_user_turn_streaming(content))
+
+    def _append_permission_resume_result(self, request_id: str, answer: str) -> AgentTurnResult | None:
+        pending = self.session.pending_permission_execution
+        if pending is None or pending.request_id != request_id:
+            return AgentTurnResult(
+                status=AgentTurnStatus.COMPLETED,
+                response=ChatResponse(
+                    provider=self.provider.name,
+                    model=self.provider.model,
+                    content="没有找到可恢复的权限确认请求。",
+                    finish_reason="error",
+                ),
+            )
+        if self.session.permission_manager is None:
+            return AgentTurnResult(
+                status=AgentTurnStatus.COMPLETED,
+                response=ChatResponse(
+                    provider=self.provider.name,
+                    model=self.provider.model,
+                    content="当前会话没有权限管理器，无法恢复权限确认。",
+                    finish_reason="error",
+                ),
+            )
+
+        decision = self.session.permission_manager.resolve_confirmation(pending.permission_request, answer)
+        if decision.kind == PermissionDecisionKind.DENY:
+            result = make_permission_denied_result(
+                tool_name=pending.tool_call.name,
+                request=pending.permission_request,
+                decision=decision,
+            )
+        else:
+            result = self.session.execute_tool_call_after_permission_confirmation(pending.tool_call)
+
+        self.session.pending_permission_execution = None
+        self.session.append_tool_result(tool_call=pending.tool_call, result=result)
+        self._append_skipped_tool_results(pending.skipped_tool_calls)
+        self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
+        return None
 
     def _complete_once(self) -> ChatResponse:
         definitions = self._provider_tool_definitions()

@@ -101,8 +101,40 @@ class FirstCoderApp(App[None]):
             output.write("Chat is still running. Please wait for the current turn to finish.")
             return
 
+        pending = getattr(self.chat_runner, "last_pending_input", None)
+        if getattr(pending, "kind", None) == "permission_confirmation":
+            choice = _permission_choice_for_text(text, pending)
+            if choice is None:
+                output.write(_permission_options_text(pending))
+                return
+            self._chat_busy = True
+            self.run_worker(self._resume_permission_turn(pending.id, choice))
+            return
+
         self._chat_busy = True
         self.run_worker(self._run_chat_turn(text))
+
+    async def _resume_permission_turn(self, request_id: str, answer: str) -> None:
+        output = self.query_one("#output", RichLog)
+        try:
+            async_resume = getattr(self.chat_runner, "aresume_with_user_input", None)
+            if async_resume is not None:
+                response = await async_resume(request_id, answer)
+                self._write_chat_response(response)
+                return
+            resume = getattr(self.chat_runner, "resume_with_user_input", None)
+            if resume is None:
+                output.write("Permission resume is not configured.")
+                return
+            response = resume(request_id, answer)
+        except Exception as exc:
+            output.write(f"Chat error: {exc}")
+            self._refresh_session_subtitle()
+            return
+        finally:
+            self._chat_busy = False
+
+        self._write_chat_response(response)
 
     async def _run_chat_turn(self, text: str) -> None:
         output = self.query_one("#output", RichLog)
@@ -119,6 +151,10 @@ class FirstCoderApp(App[None]):
         finally:
             self._chat_busy = False
 
+        self._write_chat_response(response)
+
+    def _write_chat_response(self, response) -> None:
+        output = self.query_one("#output", RichLog)
         display_lines = list(getattr(self.chat_runner, "last_display_lines", []) or [])
         if display_lines:
             for line in display_lines:
@@ -132,3 +168,34 @@ class FirstCoderApp(App[None]):
         if self.current_session is None:
             return
         self.sub_title = f"Session: {self.current_session.session_id}"
+
+
+def _permission_choice_for_text(text: str, pending) -> str | None:
+    normalized = text.strip().lower().replace(" ", "_")
+    aliases = {
+        "1": "deny",
+        "no": "deny",
+        "deny": "deny",
+        "2": "allow_once",
+        "allow_once": "allow_once",
+        "once": "allow_once",
+        "allow": "allow_once",
+        "3": "allow_always_same_scope",
+        "allow_always": "allow_always_same_scope",
+        "always": "allow_always_same_scope",
+        "allow_always_same_scope": "allow_always_same_scope",
+    }
+    if normalized in aliases:
+        return aliases[normalized]
+    for option in getattr(pending, "options", []) or []:
+        if normalized in {str(option.id).lower(), str(option.label).strip().lower().replace(" ", "_")}:
+            return str(option.id)
+    return None
+
+
+def _permission_options_text(pending) -> str:
+    options = getattr(pending, "options", []) or []
+    if not options:
+        return "请回复权限选择：deny / allow_once / allow_always_same_scope"
+    rendered = ", ".join(f"{option.id} ({option.label})" for option in options)
+    return f"请回复权限选择：{rendered}"

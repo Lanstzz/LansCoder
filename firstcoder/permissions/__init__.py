@@ -3,7 +3,7 @@
 第一阶段只暴露纯策略和内存授权匹配，不直接绑定工具执行层。
 """
 
-from firstcoder.permissions.grants import PermissionGrantStore
+from firstcoder.permissions.grants import FilePermissionGrantStore, PermissionGrantStore
 from firstcoder.permissions.manager import PermissionManager
 from firstcoder.permissions.policy import DefaultPermissionPolicy
 from firstcoder.permissions.types import (
@@ -20,6 +20,7 @@ from firstcoder.permissions.types import (
 
 __all__ = [
     "DefaultPermissionPolicy",
+    "FilePermissionGrantStore",
     "PermissionAction",
     "PermissionConfirmationChoice",
     "PermissionDecision",

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from firstcoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
+from firstcoder.permissions.types import PermissionAction
+from firstcoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result, make_text_result
 from firstcoder.utils import git as git_utils
 from firstcoder.utils.introspection import tool_from_function
 from firstcoder.utils.sandbox import PathSandbox
@@ -33,4 +34,10 @@ def create_git_status_tool(root: str | Path) -> Tool:
             clean=status_result.stdout.strip() == "",
         )
 
-    return tool_from_function(git_status)
+    tool = tool_from_function(git_status)
+    tool.permission = ToolPermissionSpec(
+        action=PermissionAction.GIT_OPERATION,
+        target_value="status --short",
+        reason="查看 git 状态属于 git 操作。",
+    )
+    return tool

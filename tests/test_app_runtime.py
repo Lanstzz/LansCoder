@@ -310,6 +310,51 @@ async def test_agent_chat_runner_streaming_exposes_pending_user_input(tmp_path) 
 
 
 @pytest.mark.anyio
+async def test_agent_chat_runner_streaming_resume_permission_uses_streaming(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    session = AgentSession.from_project(
+        store=store,
+        session_id="sess_stream_permission",
+        project_root=tmp_path,
+        tools=[create_write_tool(tmp_path)],
+    )
+    state = CurrentSessionState(session)
+    provider = FakeStreamingProvider(
+        [
+            ChatResponse(
+                provider="fake-stream",
+                model="fake-stream-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_write",
+                        name="write",
+                        arguments={"path": "README.md", "content": "hello"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake-stream", model="fake-stream-model", content="写好了"),
+        ]
+    )
+    runner = AgentChatRunner(current_session=state, provider=provider, use_streaming=True)
+
+    waiting = await runner.arun_user_turn("写 README")
+    assert waiting.finish_reason == AgentTurnStatus.WAITING_FOR_USER_INPUT.value
+    assert runner.last_pending_input is not None
+    response = await runner.aresume_with_user_input(runner.last_pending_input.id, "allow_once")
+
+    assert response.content == "写好了"
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "hello"
+    assert len(provider.requests) == 2
+    assert [event.kind for event in runner.last_stream_events] == [
+        "message_started",
+        "text_delta",
+        "message_completed",
+    ]
+
+
+@pytest.mark.anyio
 async def test_agent_chat_runner_streaming_error_clears_stale_display_lines(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_stream_error", agents_md="")

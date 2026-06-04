@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from firstcoder.agent.session import AgentSession
+from firstcoder.agent.session import AgentSession, create_project_permission_manager
 from firstcoder.app.commands import ContextCommandHandler
+from firstcoder.app.permission_commands import PermissionCommandHandler
 from firstcoder.app.router import CompositeCommandHandler
 from firstcoder.app.runtime import AgentChatRunner, CurrentSessionState
 from firstcoder.app.session_commands import SessionCommandHandler
@@ -17,6 +18,7 @@ from firstcoder.context.provider_summarizer import ProviderLlmCompactSummarizer
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.providers.base import ChatProvider
 from firstcoder.providers.factory import create_provider
+from firstcoder.permissions.grants import FilePermissionGrantStore
 from firstcoder.session.catalog import SessionCatalog
 from firstcoder.session.resume import ResumeService
 from firstcoder.session.share import SessionShareService
@@ -44,11 +46,14 @@ def create_firstcoder_app(
     store = JsonlSessionStore(resolved_data_root)
     resolved_tools = tools if tools is not None else create_builtin_registry(project_path).tools()
     resolved_provider = provider or create_provider()
+    grant_store = FilePermissionGrantStore(resolved_data_root / "permissions.json")
+    permission_manager = create_project_permission_manager(project_path, grants=grant_store)
     session = AgentSession.from_project(
         store=store,
         session_id=session_id or new_session_id(),
         project_root=project_path,
         tools=resolved_tools,
+        permission_manager=permission_manager,
     )
     current = CurrentSessionState(session)
     context_manager = ContextWindowManager(
@@ -62,6 +67,7 @@ def create_firstcoder_app(
     resume_service = ResumeService(
         store=store,
         project_root=project_path,
+        data_root=resolved_data_root,
         tools=resolved_tools,
         catalog=catalog,
     )
@@ -74,7 +80,8 @@ def create_firstcoder_app(
         on_resume=current.set_session,
     )
     context_handler = ContextCommandHandler(session=current, context_manager=context_manager)
-    command_handler = CompositeCommandHandler([session_handler, context_handler])
+    permission_handler = PermissionCommandHandler(session=current)
+    command_handler = CompositeCommandHandler([session_handler, context_handler, permission_handler])
     chat_runner = AgentChatRunner(
         current_session=current,
         provider=resolved_provider,

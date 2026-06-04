@@ -7,7 +7,8 @@ from firstcoder.app.runtime import AgentChatRunner
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.context.llm_compact import LlmCompactService
 from firstcoder.providers.base import ChatProvider
-from firstcoder.providers.types import ChatRequest, ChatResponse, ProviderCapabilities
+from firstcoder.providers.types import ChatRequest, ChatResponse, ProviderCapabilities, ToolCall
+from firstcoder.tools.write import create_write_tool
 
 
 @dataclass
@@ -117,3 +118,52 @@ def test_create_firstcoder_app_wires_l4_service_for_default_context_manager(tmp_
     )
 
     assert isinstance(app.chat_runner.context_manager.l4_service, LlmCompactService)
+
+
+def test_create_firstcoder_app_persists_permission_grants(tmp_path: Path) -> None:
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_write",
+                        name="write",
+                        arguments={"path": "README.md", "content": "hello"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="done"),
+        ]
+    )
+    app = create_firstcoder_app(
+        project_root=tmp_path,
+        data_root=tmp_path / ".firstcoder",
+        provider=provider,
+        session_id="sess_test",
+        tools=[create_write_tool(tmp_path)],
+    )
+
+    waiting = app.chat_runner.run_user_turn("写 README")
+    assert waiting.finish_reason == "waiting_for_user_input"
+    assert app.chat_runner.last_pending_input is not None
+    app.chat_runner.resume_with_user_input(app.chat_runner.last_pending_input.id, "allow_always_same_scope")
+
+    assert (tmp_path / ".firstcoder" / "permissions.json").exists()
+
+    second = create_firstcoder_app(
+        project_root=tmp_path,
+        data_root=tmp_path / ".firstcoder",
+        provider=FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")]),
+        session_id="sess_second",
+        tools=[create_write_tool(tmp_path)],
+    )
+    result = second.chat_runner.current_session.session.execute_tool_call(
+        ToolCall(id="call_write_again", name="write", arguments={"path": "README.md", "content": "again"})
+    )
+
+    assert result.ok is True
+    assert result.data.get("request_type") != "permission_confirmation"

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -65,6 +66,29 @@ class PermissionGrantStore:
         )
 
 
+class FilePermissionGrantStore(PermissionGrantStore):
+    """把 allow-always grant 持久化到项目数据目录。
+
+    第一版使用一个小 JSON 文件，保持容易阅读和手工复盘。后续如果迁移到 SQLite，
+    `PermissionGrantStore` 这层匹配接口可以继续保持不变。
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        super().__init__(_load_grants(self.path))
+
+    def add(self, grant: PermissionGrant) -> None:
+        super().add(grant)
+        self.save()
+
+    def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"version": 1, "grants": [_grant_to_dict(grant) for grant in self.list()]}
+        temp_path = self.path.with_suffix(self.path.suffix + ".tmp")
+        temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        temp_path.replace(self.path)
+
+
 def _grant_matches(grant: PermissionGrant, request: PermissionRequest) -> bool:
     if grant.action != request.action:
         return False
@@ -113,3 +137,47 @@ def _host_from_target(target: str) -> str:
     if parsed.hostname:
         return parsed.hostname.lower()
     return target.split("/", 1)[0].split(":", 1)[0].lower()
+
+
+def _load_grants(path: Path) -> list[PermissionGrant]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    raw_grants = data.get("grants") if isinstance(data, dict) else data
+    if not isinstance(raw_grants, list):
+        return []
+    grants: list[PermissionGrant] = []
+    for item in raw_grants:
+        if isinstance(item, dict):
+            try:
+                grants.append(_grant_from_dict(item))
+            except (KeyError, TypeError, ValueError):
+                continue
+    return grants
+
+
+def _grant_to_dict(grant: PermissionGrant) -> dict[str, str]:
+    return {
+        "id": grant.id,
+        "effect": grant.effect,
+        "action": grant.action.value,
+        "scope_type": grant.scope_type.value,
+        "scope_value": grant.scope_value,
+        "created_at": grant.created_at,
+        "reason": grant.reason,
+    }
+
+
+def _grant_from_dict(data: dict[str, object]) -> PermissionGrant:
+    return PermissionGrant(
+        id=str(data["id"]),
+        effect=str(data["effect"]),  # type: ignore[arg-type]
+        action=PermissionAction(str(data["action"])),
+        scope_type=PermissionScopeType(str(data["scope_type"])),
+        scope_value=str(data["scope_value"]),
+        created_at=str(data["created_at"]),
+        reason=str(data.get("reason") or ""),
+    )

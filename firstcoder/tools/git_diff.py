@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from firstcoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
+from firstcoder.permissions.types import PermissionAction
+from firstcoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result, make_text_result
 from firstcoder.utils import git as git_utils
 from firstcoder.utils.introspection import tool_from_function
 from firstcoder.utils.sandbox import PathSandbox
@@ -49,4 +50,10 @@ def create_git_diff_tool(root: str | Path) -> Tool:
             truncated=truncated,
         )
 
-    return tool_from_function(git_diff)
+    tool = tool_from_function(git_diff)
+    tool.permission = ToolPermissionSpec(
+        action=PermissionAction.GIT_OPERATION,
+        target_builder=lambda arguments: "diff --cached" if bool(arguments.get("staged")) else "diff",
+        reason="查看 git diff 属于 git 操作。",
+    )
+    return tool

@@ -123,8 +123,8 @@ def test_unknown_slash_command_is_reported() -> None:
 
     result = handler.handle("/unknown")
 
-    assert result.handled is True
-    assert "Unknown command: /unknown" in result.output
+    assert result.handled is False
+    assert result.output == ""
 
 
 def test_plain_input_is_not_handled_as_command() -> None:

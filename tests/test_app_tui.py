@@ -2,6 +2,7 @@ import pytest
 
 from firstcoder.app.commands import CommandResult
 from firstcoder.app.commands import ContextCommandHandler
+from firstcoder.agent.user_input import UserInputOption, UserInputRequest
 from firstcoder.app.router import CompositeCommandHandler
 from firstcoder.app.session_commands import SessionCommandHandler
 from firstcoder.app.tui import FirstCoderApp, FirstCoderTuiConfig
@@ -55,6 +56,27 @@ class FailingAsyncChatRunner(FakeChatRunner):
     async def arun_user_turn(self, content: str) -> ChatResponse:
         self.inputs.append(content)
         raise RuntimeError("provider down")
+
+
+class FakePermissionResumeRunner(FakeChatRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_pending_input = UserInputRequest(
+            id="perm_write",
+            kind="permission_confirmation",
+            question="允许写 README 吗？",
+            options=[
+                UserInputOption(id="deny", label="Deny"),
+                UserInputOption(id="allow_once", label="Allow once"),
+            ],
+        )
+        self.resumes: list[tuple[str, str]] = []
+
+    async def aresume_with_user_input(self, request_id: str, answer: str) -> ChatResponse:
+        self.resumes.append((request_id, answer))
+        self.last_pending_input = None
+        self.last_display_lines = ["Tool result: write success: ok", "done"]
+        return ChatResponse(provider="fake", model="fake", content="done")
 
 
 class BlockingAsyncChatRunner(FakeChatRunner):
@@ -179,3 +201,18 @@ async def test_firstcoder_app_rejects_chat_input_while_turn_is_running() -> None
         await pilot.pause()
 
     assert runner.inputs == ["first"]
+
+
+@pytest.mark.anyio
+async def test_firstcoder_app_routes_permission_answer_to_resume() -> None:
+    runner = FakePermissionResumeRunner()
+    app = FirstCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        await pilot.press(*"allow once")
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert runner.inputs == []
+    assert runner.resumes == [("perm_write", "allow_once")]

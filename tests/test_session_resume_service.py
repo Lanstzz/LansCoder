@@ -3,12 +3,32 @@ from pathlib import Path
 import pytest
 
 from firstcoder.agent.session import AgentSession
+from firstcoder.agent.loop import AgentLoop
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.context.writer import SessionEventWriter
-from firstcoder.providers.types import ToolCall
+from firstcoder.providers.base import ChatProvider
+from firstcoder.providers.types import ChatRequest, ChatResponse, ToolCall
 from firstcoder.session.errors import SessionCorruptError, SessionEmptyError, SessionNotFoundError
 from firstcoder.session.resume import ResumeService
 from firstcoder.tools.write import create_write_tool
+
+
+class FakeProvider(ChatProvider):
+    def __init__(self, responses: list[ChatResponse]) -> None:
+        self.responses = responses
+        self.requests: list[ChatRequest] = []
+
+    @property
+    def name(self) -> str:
+        return "fake"
+
+    @property
+    def model(self) -> str:
+        return "fake-model"
+
+    def complete(self, request: ChatRequest) -> ChatResponse:
+        self.requests.append(request)
+        return self.responses.pop(0)
 
 
 def test_resume_service_resumes_existing_session_and_reads_agents_md(tmp_path: Path) -> None:
@@ -80,6 +100,89 @@ def test_resume_service_keeps_permission_wrapper_for_project_tools(tmp_path: Pat
     assert tool_result.data["request_type"] == "permission_confirmation"
     assert tool_result.data["permission_request"]["action"] == "write_path"
     assert not (tmp_path / "README.md").exists()
+
+
+def test_resume_service_restores_pending_permission_confirmation(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    original = AgentSession.from_project(
+        store=store,
+        session_id="sess_pending_permission",
+        project_root=tmp_path,
+        tools=[create_write_tool(tmp_path)],
+    )
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_write",
+                        name="write",
+                        arguments={"path": "README.md", "content": "hello"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+        ]
+    )
+
+    pending = AgentLoop(session=original, provider=provider).run_user_turn_interactive("写 README")
+    assert pending.pending_input is not None
+    result = ResumeService(
+        store=store,
+        project_root=tmp_path,
+        data_root=tmp_path / ".firstcoder",
+        tools=[create_write_tool(tmp_path)],
+    ).resume("sess_pending_permission")
+
+    assert result.session.pending_permission_execution is not None
+    assert result.session.pending_permission_execution.tool_call.id == "call_write"
+
+
+def test_resume_service_restores_pending_permission_even_after_grant_exists(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    original = AgentSession.from_project(
+        store=store,
+        session_id="sess_pending_with_grant",
+        project_root=tmp_path,
+        tools=[create_write_tool(tmp_path)],
+    )
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_write",
+                        name="write",
+                        arguments={"path": "README.md", "content": "hello"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+        ]
+    )
+
+    pending = AgentLoop(session=original, provider=provider).run_user_turn_interactive("写 README")
+    assert pending.pending_input is not None
+    original.permission_manager.resolve_confirmation(
+        original.pending_permission_execution.permission_request,
+        "allow_always_same_scope",
+    )
+
+    result = ResumeService(
+        store=store,
+        project_root=tmp_path,
+        data_root=tmp_path / ".firstcoder",
+        tools=[create_write_tool(tmp_path)],
+    ).resume("sess_pending_with_grant")
+
+    assert result.session.pending_permission_execution is not None
+    assert result.session.pending_permission_execution.request_id == pending.pending_input.id
 
 
 def test_resume_service_rejects_missing_session(tmp_path: Path) -> None:

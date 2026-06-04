@@ -22,8 +22,10 @@ from firstcoder.context.store import JsonlSessionStore
 from firstcoder.context.system_prompt import PromptPrefixCache, SystemPromptBuilder
 from firstcoder.context.task_boundary import observation_from_tool_result_data
 from firstcoder.context.writer import SessionEventWriter
+from firstcoder.permissions.grants import FilePermissionGrantStore, PermissionGrantStore
 from firstcoder.permissions.manager import PermissionManager
 from firstcoder.permissions.policy import DefaultPermissionPolicy
+from firstcoder.permissions.types import PermissionMode
 from firstcoder.providers.types import ChatResponse, ProviderCapabilities, ToolCall, ToolDefinition
 from firstcoder.permissions.types import PermissionDecision, PermissionRequest
 from firstcoder.tools.permission_registry import PermissionAwareToolRegistry
@@ -111,6 +113,7 @@ class AgentSession:
             known_message_ids=known_message_ids,
             permission_manager=permission_manager,
             turn_counter=0,
+            mode=permission_manager.mode.value if permission_manager is not None else "default",
         )
         session.append_session_created()
         return session
@@ -123,9 +126,13 @@ class AgentSession:
         session_id: str,
         project_root: str | Path,
         tools: list[Tool] | None = None,
+        permission_manager: PermissionManager | None = None,
     ) -> "AgentSession":
         agents_md = read_agents_md(project_root)
-        permission_manager = PermissionManager(policy=DefaultPermissionPolicy(project_root))
+        permission_manager = permission_manager or create_project_permission_manager(
+            project_root,
+            grants=FilePermissionGrantStore(store.root / "permissions.json"),
+        )
         return cls.create(
             store=store,
             session_id=session_id,
@@ -172,7 +179,34 @@ class AgentSession:
             known_message_ids=known_message_ids,
             permission_manager=permission_manager,
             turn_counter=turn_counter,
+            mode=permission_manager.mode.value if permission_manager is not None else "default",
         )
+
+    def restore_pending_permission_execution(self) -> PendingPermissionExecution | None:
+        """从 append-only 历史中重建未完成的权限确认。
+
+        只有最后一个 assistant tool_call 批次仍缺少 tool_result 时才尝试重建。
+        即使 grant 已经存在，也只恢复 pending，不自动执行工具，避免 resume 阶段
+        产生隐式副作用或留下悬空 tool_call。
+        """
+
+        pending = self._pending_tool_calls_from_tail()
+        if len(pending) != 1:
+            return None
+
+        tool_call, skipped_tool_calls = pending[0]
+        preflight = self.preflight_tool_call_permission(tool_call)
+        if preflight is None:
+            return None
+
+        restored = PendingPermissionExecution(
+            request_id=preflight.request.id,
+            tool_call=tool_call,
+            permission_request=preflight.request,
+            skipped_tool_calls=skipped_tool_calls,
+        )
+        self.pending_permission_execution = restored
+        return restored
 
     def append_session_created(self) -> None:
         self.writer.append_session_created()
@@ -254,6 +288,15 @@ class AgentSession:
             return registry.execute_without_permission_check(tool_call.name, tool_call.arguments)
         return registry.execute(tool_call.name, tool_call.arguments)
 
+    def set_permission_mode(self, mode: PermissionMode | str) -> PermissionMode:
+        """切换当前 session 的权限策略模式。"""
+
+        resolved = PermissionMode(str(mode))
+        self.mode = resolved.value
+        if self.permission_manager is not None:
+            self.permission_manager.mode = resolved
+        return resolved
+
     def append_tool_result(self, *, tool_call: ToolCall, result: ToolResult) -> str:
         message_id = new_message_id()
         part = tool_result_to_part(message_id=message_id, tool_call=tool_call, result=result)
@@ -291,8 +334,56 @@ class AgentSession:
         for part in parts:
             part.metadata.update(metadata)
 
+    def _pending_tool_calls_from_tail(self) -> list[tuple[ToolCall, list[ToolCall]]]:
+        messages = self.rebuild_view().messages
+        if not messages:
+            return []
+
+        assistant_index = None
+        for index in range(len(messages) - 1, -1, -1):
+            if messages[index].role == "assistant":
+                assistant_index = index
+                break
+        if assistant_index is None:
+            return []
+
+        assistant = messages[assistant_index]
+        tool_calls = [
+            ToolCall(
+                id=str(part.metadata["tool_call_id"]),
+                name=str(part.metadata["tool_name"]),
+                arguments=part.metadata.get("arguments", {}),
+            )
+            for part in assistant.parts
+            if part.kind == "tool_call"
+        ]
+        if not tool_calls:
+            return []
+
+        completed_ids: set[str] = set()
+        for message in messages[assistant_index + 1 :]:
+            if message.role != "tool":
+                return []
+            for part in message.parts:
+                if part.kind == "tool_result" and part.metadata.get("tool_call_id"):
+                    completed_ids.add(str(part.metadata["tool_call_id"]))
+
+        pending_calls = [tool_call for tool_call in tool_calls if tool_call.id not in completed_ids]
+        if not pending_calls:
+            return []
+        return [(pending_calls[0], pending_calls[1:])]
+
 
 def _infer_turn_counter(messages: list[AgentMessage]) -> int:
     """从已恢复的消息里推断下一轮 turn 编号。"""
 
     return sum(1 for message in messages if message.role == "user")
+
+
+def create_project_permission_manager(
+    project_root: str | Path,
+    *,
+    grants: PermissionGrantStore | None = None,
+    mode: PermissionMode = PermissionMode.STANDARD,
+) -> PermissionManager:
+    return PermissionManager(policy=DefaultPermissionPolicy(project_root), grants=grants, mode=mode)
