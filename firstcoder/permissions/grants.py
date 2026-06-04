@@ -76,6 +76,9 @@ def _grant_matches(grant: PermissionGrant, request: PermissionRequest) -> bool:
         target = Path(_canonical_path(request.target, cwd=request.cwd))
         return target == root or root in target.parents
     if grant.scope_type == PermissionScopeType.COMMAND_PREFIX:
+        if request.action in {PermissionAction.EXECUTE_SHELL, PermissionAction.GIT_OPERATION}:
+            if _has_shell_control_operator(request.target):
+                return False
         if request.action == PermissionAction.EXECUTE_SHELL and _has_shell_control_operator(request.target):
             return False
         return _command_matches_prefix(request.target, grant.scope_value)

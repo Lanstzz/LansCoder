@@ -71,6 +71,27 @@ def test_shell_command_prefix_grant_does_not_match_compound_command() -> None:
         assert store.matching_decision(request) is None
 
 
+def test_git_command_prefix_grant_does_not_match_compound_target() -> None:
+    store = PermissionGrantStore(
+        [
+            _grant(
+                "grant_git_status",
+                action=PermissionAction.GIT_OPERATION,
+                scope_type=PermissionScopeType.COMMAND_PREFIX,
+                scope_value="status",
+            )
+        ]
+    )
+
+    request = PermissionRequest(
+        id="req_1",
+        action=PermissionAction.GIT_OPERATION,
+        target="status && reset --hard",
+    )
+
+    assert store.matching_decision(request) is None
+
+
 def test_path_grants_match_exact_path_and_tree(tmp_path) -> None:
     exact = tmp_path / "README.md"
     tree = tmp_path / "firstcoder"

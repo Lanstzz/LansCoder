@@ -82,7 +82,7 @@ def user_input_request_from_tool_result(
         "tool_name": tool_name,
         "tool_result_name": result.name,
     }
-    for key in ("request_type", "permission_request_id", "pending_tool_call"):
+    for key in ("request_type", "permission_request_id", "permission_request", "pending_tool_call"):
         if key in result.data:
             payload[key] = result.data[key]
 

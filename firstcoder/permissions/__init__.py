@@ -8,6 +8,7 @@ from firstcoder.permissions.manager import PermissionManager
 from firstcoder.permissions.policy import DefaultPermissionPolicy
 from firstcoder.permissions.types import (
     PermissionAction,
+    PermissionConfirmationChoice,
     PermissionDecision,
     PermissionDecisionKind,
     PermissionGrant,
@@ -20,6 +21,7 @@ from firstcoder.permissions.types import (
 __all__ = [
     "DefaultPermissionPolicy",
     "PermissionAction",
+    "PermissionConfirmationChoice",
     "PermissionDecision",
     "PermissionDecisionKind",
     "PermissionGrant",

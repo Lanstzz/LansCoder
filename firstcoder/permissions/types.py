@@ -58,6 +58,14 @@ class PermissionScopeType(StrEnum):
     ENV_KEY = "env_key"
 
 
+class PermissionConfirmationChoice(StrEnum):
+    """用户在权限确认 UI 中可以选择的动作。"""
+
+    DENY = "deny"
+    ALLOW_ONCE = "allow_once"
+    ALLOW_ALWAYS_SAME_SCOPE = "allow_always_same_scope"
+
+
 @dataclass(slots=True)
 class PermissionRequest:
     """描述工具准备执行的动作。"""
