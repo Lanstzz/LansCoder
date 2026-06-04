@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from firstcoder.permissions.types import PermissionAction
 from firstcoder.providers.types import ToolDefinition
 
 
@@ -34,11 +35,26 @@ class ToolExecutor(Protocol):
 
 
 @dataclass(slots=True)
+class ToolPermissionSpec:
+    """工具的程序侧权限声明。
+
+    这个声明不进入模型可见 schema，只给权限 wrapper 用来构造
+    `PermissionRequest`。第一版先支持从工具参数中取 target/cwd。
+    """
+
+    action: PermissionAction
+    target_arg: str | None = None
+    cwd_arg: str | None = None
+    reason: str = ""
+
+
+@dataclass(slots=True)
 class Tool:
     """一个完整工具由模型可见 schema 和本地 executor 组成。"""
 
     definition: ToolDefinition
     executor: ToolExecutor
+    permission: ToolPermissionSpec | None = None
 
     @property
     def name(self) -> str:

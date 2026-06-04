@@ -42,7 +42,7 @@ class PermissionManager:
         self.mode = mode
 
     def preflight(self, request: PermissionRequest) -> PermissionDecision:
-        request = self._normalize_request(request)
+        request = self.normalize_request(request)
         grant_decision = self.grants.matching_decision(request)
         if grant_decision is not None:
             return grant_decision
@@ -51,7 +51,7 @@ class PermissionManager:
     def build_confirmation(self, request: PermissionRequest) -> UserInputRequest:
         """把 `ASK` 权限请求转换成 UI 可展示的结构化用户输入请求。"""
 
-        request = self._normalize_request(request)
+        request = self.normalize_request(request)
         scope = default_scope_for_request(request, project_root=self.policy.project_root)
         question = _question_for_request(request)
         return UserInputRequest(
@@ -81,7 +81,7 @@ class PermissionManager:
     def resolve_confirmation(self, request: PermissionRequest, choice: str) -> PermissionDecision:
         """解析用户选择，并在 allow always 时写入内存 grant。"""
 
-        request = self._normalize_request(request)
+        request = self.normalize_request(request)
         normalized = _normalize_choice(choice)
         if normalized == PermissionConfirmationChoice.DENY:
             return PermissionDecision(
@@ -139,11 +139,13 @@ class PermissionManager:
             return policy_decision
         return None
 
-    def _normalize_request(self, request: PermissionRequest) -> PermissionRequest:
+    def normalize_request(self, request: PermissionRequest) -> PermissionRequest:
         """让 manager 入口中的相对路径解析和默认策略保持同一基准。"""
 
         if request.cwd is not None:
-            return request
+            if request.cwd.is_absolute():
+                return request
+            return replace(request, cwd=(self.policy.project_root / request.cwd).resolve())
         if request.action not in {
             PermissionAction.READ_PATH,
             PermissionAction.WRITE_PATH,

@@ -45,6 +45,11 @@ class ToolRegistry:
 
         return list(self._tools.values())
 
+    def get(self, name: str) -> Tool | None:
+        """按名称返回工具对象。"""
+
+        return self._tools.get(name)
+
     def execute(self, name: str, arguments: dict[str, Any] | str | None = None) -> ToolResult:
         """执行指定工具。
 
