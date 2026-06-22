@@ -6,6 +6,7 @@ import re
 import pytest
 
 from firstcoder.agent.loop import AgentLoop
+from firstcoder.agent.loop_limits import AgentLoopLimits
 from firstcoder.agent.user_input import AgentTurnStatus
 from firstcoder.agent.session import AgentSession
 from firstcoder.context.manager import ContextCompactResult, ContextWindowTrigger
@@ -133,6 +134,16 @@ class PromptTooLongSuccessContextManager(RecordingContextManager):
             before_tokens=100,
             after_tokens=10,
         )
+
+
+class FakeClock:
+    def __init__(self, values: list[float]) -> None:
+        self.values = values
+
+    def __call__(self) -> float:
+        if not self.values:
+            return 999.0
+        return self.values.pop(0)
 
 
 @dataclass
@@ -311,6 +322,43 @@ def _echo_tool() -> Tool:
         ),
         executor=execute,
     )
+
+
+def _success_tool() -> Tool:
+    definition = ToolDefinition(
+        name="shell",
+        description="fake shell",
+        parameters={"type": "object", "properties": {}},
+    )
+
+    def execute(**kwargs):
+        return ToolResult(
+            name="shell",
+            ok=True,
+            content="3 passed",
+            data={"command": "pytest -q", "exit_code": 0, "stdout": "3 passed", "stderr": ""},
+        )
+
+    return Tool(definition=definition, executor=execute)
+
+
+def _failed_test_tool() -> Tool:
+    definition = ToolDefinition(
+        name="shell",
+        description="fake shell",
+        parameters={"type": "object", "properties": {}},
+    )
+
+    def execute(**kwargs):
+        return ToolResult(
+            name="shell",
+            ok=False,
+            content="1 failed",
+            data={"command": "pytest -q", "exit_code": 1, "stdout": "", "stderr": "1 failed"},
+            error="命令退出码为 1",
+        )
+
+    return Tool(definition=definition, executor=execute)
 
 
 def test_agent_loop_persists_provider_diagnostics_metadata(tmp_path) -> None:
@@ -927,6 +975,237 @@ def test_agent_loop_does_not_persist_unexecuted_tool_calls_after_round_limit(tmp
     assert view.messages[2].parts[0].metadata["tool_call_id"] == "call_1"
     assert view.messages[3].parts[0].kind == "text"
     assert all(part.kind != "tool_call" for part in view.messages[3].parts)
+
+
+def test_agent_loop_passes_tool_choice_none_for_final_only_completion(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_tool_choice", agents_md="")
+    provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="final")])
+    loop = AgentLoop(
+        session=session,
+        provider=provider,
+        limits=AgentLoopLimits.default(),
+    )
+
+    response = loop._complete_once(tool_choice="none")
+
+    assert response.content == "final"
+    assert provider.requests[0].tool_choice == "none"
+
+
+def test_agent_loop_resets_provider_call_count_for_each_user_turn(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_provider_count_reset", agents_md="")
+    provider = FakeProvider(
+        [
+            ChatResponse(provider="fake", model="fake-model", content="first"),
+            ChatResponse(provider="fake", model="fake-model", content="second"),
+        ]
+    )
+    loop = AgentLoop(
+        session=session,
+        provider=provider,
+        limits=AgentLoopLimits(max_tool_rounds=1, max_provider_calls=1, max_turn_seconds=None),
+    )
+
+    first = loop.run_user_turn("第一轮")
+    second = loop.run_user_turn("第二轮")
+
+    assert first.content == "first"
+    assert second.content == "second"
+
+
+def test_agent_loop_allows_unlimited_tool_rounds_when_limit_is_none(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_unlimited_tools", agents_md="")
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[ToolCall(id="call_echo_1", name="echo", arguments={"text": "one"})],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[ToolCall(id="call_echo_2", name="echo", arguments={"text": "two"})],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="done"),
+        ]
+    )
+
+    response = AgentLoop(
+        session=session,
+        provider=provider,
+        tools=[_echo_tool()],
+        limits=AgentLoopLimits(
+            max_tool_rounds=None,
+            max_provider_calls=10,
+            max_turn_seconds=None,
+            successful_verification_stop=False,
+        ),
+    ).run_user_turn("调用两轮工具")
+
+    assert response.content == "done"
+    assert response.finish_reason != "tool_round_limit"
+
+
+def test_agent_loop_allows_public_max_tool_rounds_none_override(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_public_unlimited_tools", agents_md="")
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[ToolCall(id=f"call_echo_{index}", name="echo", arguments={"text": str(index)})],
+                finish_reason="tool_calls",
+            )
+            for index in range(21)
+        ]
+        + [ChatResponse(provider="fake", model="fake-model", content="done")]
+    )
+
+    response = AgentLoop(
+        session=session,
+        provider=provider,
+        tools=[_echo_tool()],
+        max_tool_rounds=None,
+        limits=AgentLoopLimits(max_tool_rounds=20, max_provider_calls=30, max_turn_seconds=None),
+    ).run_user_turn("调用很多轮工具")
+
+    assert response.content == "done"
+    assert response.finish_reason != "tool_round_limit"
+
+
+def test_agent_loop_forces_final_answer_after_successful_verification(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_verify_stop", agents_md="")
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[ToolCall(id="call_test", name="shell", arguments={})],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="Tests pass."),
+        ]
+    )
+
+    response = AgentLoop(
+        session=session,
+        provider=provider,
+        tools=[_success_tool()],
+        limits=AgentLoopLimits.default(),
+    ).run_user_turn("修测试")
+
+    assert response.content == "Tests pass."
+    assert len(provider.requests) == 2
+    assert provider.requests[0].tool_choice == "auto"
+    assert provider.requests[1].tool_choice == "none"
+    assert [message.role for message in store.rebuild_session_view("sess_verify_stop").messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+
+
+def test_agent_loop_does_not_force_final_answer_after_failed_verification(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_verify_fail", agents_md="")
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[ToolCall(id="call_test", name="shell", arguments={})],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="继续修复"),
+        ]
+    )
+
+    response = AgentLoop(
+        session=session,
+        provider=provider,
+        tools=[_failed_test_tool()],
+        limits=AgentLoopLimits.default(),
+    ).run_user_turn("修测试")
+
+    assert response.content == "继续修复"
+    assert provider.requests[1].tool_choice == "auto"
+
+
+def test_agent_loop_stops_when_provider_call_limit_is_reached(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_provider_limit", agents_md="")
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[ToolCall(id="call_echo", name="echo", arguments={"text": "one"})],
+                finish_reason="tool_calls",
+            ),
+        ]
+    )
+
+    response = AgentLoop(
+        session=session,
+        provider=provider,
+        tools=[_echo_tool()],
+        limits=AgentLoopLimits(
+            max_tool_rounds=None,
+            max_provider_calls=1,
+            max_turn_seconds=None,
+            successful_verification_stop=False,
+        ),
+    ).run_user_turn("调用工具")
+
+    assert response.finish_reason == "provider_call_limit"
+    assert "provider 调用次数达到上限" in response.content
+
+
+def test_agent_loop_stops_when_turn_timeout_is_reached(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_turn_timeout", agents_md="")
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[ToolCall(id="call_echo", name="echo", arguments={"text": "one"})],
+                finish_reason="tool_calls",
+            ),
+        ]
+    )
+
+    response = AgentLoop(
+        session=session,
+        provider=provider,
+        tools=[_echo_tool()],
+        limits=AgentLoopLimits(
+            max_tool_rounds=None,
+            max_provider_calls=None,
+            max_turn_seconds=5,
+            successful_verification_stop=False,
+        ),
+        clock=FakeClock([0.0, 0.0, 6.0]),
+    ).run_user_turn("调用工具")
+
+    assert response.finish_reason == "turn_timeout"
+    assert "本轮任务耗时达到上限" in response.content
 
 
 def test_agent_session_resume_replays_runtime_state_and_known_message_ids(tmp_path) -> None:

@@ -11,6 +11,7 @@ from typing import Any
 from firstcoder.context.runtime_state import SessionRuntimeState
 from firstcoder.context.task_boundary import TaskBoundaryDecision, TaskBoundaryService
 from firstcoder.providers.types import ToolDefinition
+from firstcoder.tools.descriptions import apply_agent_tool_description
 from firstcoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 
 
@@ -79,7 +80,7 @@ def create_task_boundary_tool(
             created_at=observation.created_at,
         )
 
-    return Tool(
+    return apply_agent_tool_description(Tool(
         definition=ToolDefinition(
             name="task_boundary",
             description="判断当前消息是否开启新任务；只提交 decision 和 basis_message_id。",
@@ -100,7 +101,7 @@ def create_task_boundary_tool(
             },
         ),
         executor=task_boundary,
-    )
+    ))
 
 
 def _format_observation(confirmed_change: bool, should_trigger_compaction: bool) -> str:

@@ -20,14 +20,14 @@ def create_delete_tool(root: str | Path) -> Tool:
         """删除项目内文件或目录；目录删除必须 recursive=true。"""
 
         try:
-            target = sandbox.resolve_validated(path)
+            target = _resolve_delete_target(sandbox, path)
         except ValueError as exc:
             return make_error_result("delete", str(exc))
-        if target == sandbox.root:
+        if target.resolve() == sandbox.root:
             return make_error_result("delete", "不能删除项目根目录")
 
         relative = sandbox.relative(target)
-        if target.is_dir():
+        if target.is_dir() and not target.is_symlink():
             if not recursive:
                 return make_error_result("delete", "删除目录必须启用 recursive")
             shutil.rmtree(target)
@@ -43,3 +43,15 @@ def create_delete_tool(root: str | Path) -> Tool:
         reason="删除路径需要用户确认。",
     )
     return tool
+
+
+def _resolve_delete_target(sandbox: PathSandbox, path: str | Path | None) -> Path:
+    """解析删除目标，但保留符号链接本身用于 unlink。"""
+
+    lexical = sandbox.root if path in (None, "") else sandbox.root / Path(path)
+    resolved = lexical.resolve()
+    if resolved != sandbox.root and sandbox.root not in resolved.parents:
+        raise ValueError(f"路径超出项目目录：{path}")
+    if not lexical.exists() and not lexical.is_symlink():
+        raise ValueError(f"路径不存在：{path}")
+    return lexical

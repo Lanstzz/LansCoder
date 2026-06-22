@@ -40,7 +40,11 @@ def load_instances_jsonl(path: str | Path) -> list[SwebenchInstance]:
 
 
 def repo_path_for_instance(repos_root: str | Path, instance: SwebenchInstance) -> Path:
-    return Path(repos_root) / instance.instance_id
+    root = Path(repos_root).resolve()
+    repo_path = (root / instance.instance_id).resolve()
+    if repo_path != root and root not in repo_path.parents:
+        raise ValueError(f"Instance repo path resolves outside repos_root: {instance.instance_id}")
+    return repo_path
 
 
 def write_predictions_jsonl(path: str | Path, results: Iterable[CodingTaskResult]) -> None:

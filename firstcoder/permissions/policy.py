@@ -21,7 +21,36 @@ _SENSITIVE_ENV_KEYWORDS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "COOKIE")
 _SENSITIVE_FILENAMES = {".env"}
 _SENSITIVE_SUFFIXES = {".pem", ".key"}
 _READONLY_GIT_COMMANDS = {"status", "diff", "log"}
-_AGGRESSIVE_ALLOWED_COMMANDS = ("pytest", "ruff", "mypy", "git status", "git diff", "git log")
+_AGGRESSIVE_ALLOWED_COMMANDS = (
+    "pytest",
+    "python -m pytest",
+    "python3 -m pytest",
+    "ruff",
+    "mypy",
+    "git status",
+    "git diff",
+    "git log",
+    "git apply",
+    "npm test",
+    "pnpm test",
+    "yarn test",
+    "go test",
+    "cargo test",
+    "make test",
+)
+_AGGRESSIVE_ALLOWED_EXECUTABLES = ("python", "python3", "sqlite3")
+_DANGEROUS_SHELL_PREFIXES = (
+    "rm",
+    "sudo",
+    "curl",
+    "wget",
+    "chmod",
+    "chown",
+    "python -m pip",
+    "python3 -m pip",
+    "pip",
+    "pip3",
+)
 _SHELL_CONTROL_PATTERN = re.compile(r"(&&|\|\||\$\(|[;&|<>`\r\n])")
 
 
@@ -92,10 +121,13 @@ class DefaultPermissionPolicy:
         return self._ask("git 操作需要用户确认。")
 
     def _decide_shell(self, request: PermissionRequest, *, mode: PermissionMode) -> PermissionDecision:
-        if _has_shell_control_operator(request.target):
+        command = request.target.strip()
+        if _has_shell_control_operator(command):
             return self._ask("包含 shell 控制符的命令需要用户确认。")
         if mode == PermissionMode.AGGRESSIVE and self._request_cwd_inside_root(request):
-            if any(_command_matches_prefix(request.target, prefix) for prefix in _AGGRESSIVE_ALLOWED_COMMANDS):
+            if _is_dangerous_shell_command(command):
+                return self._ask("高风险 shell 命令需要用户确认。")
+            if _is_aggressive_allowed_shell_command(command):
                 return self._allow("激进模式允许项目根目录内常见验证命令。")
         return self._ask("shell 命令需要用户确认。")
 
@@ -139,6 +171,21 @@ def _command_matches_prefix(command: str, prefix: str) -> bool:
     command = command.strip()
     prefix = prefix.strip()
     return bool(prefix) and (command == prefix or command.startswith(prefix + " "))
+
+
+def _is_aggressive_allowed_shell_command(command: str) -> bool:
+    if any(_command_matches_prefix(command, prefix) for prefix in _AGGRESSIVE_ALLOWED_COMMANDS):
+        return True
+    return _first_token(command) in _AGGRESSIVE_ALLOWED_EXECUTABLES
+
+
+def _is_dangerous_shell_command(command: str) -> bool:
+    return any(_command_matches_prefix(command, prefix) for prefix in _DANGEROUS_SHELL_PREFIXES)
+
+
+def _first_token(command: str) -> str:
+    parts = command.strip().split()
+    return parts[0] if parts else ""
 
 
 def _has_shell_control_operator(command: str) -> bool:

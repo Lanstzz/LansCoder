@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from firstcoder.agent.loop import AgentLoop
+from firstcoder.agent.loop_limits import AgentLoopLimits
 from firstcoder.agent.session import AgentSession
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.eval.patch import collect_git_diff
@@ -14,7 +15,7 @@ from firstcoder.eval.tasks import CodingTask, CodingTaskResult
 from firstcoder.permissions.grants import PermissionGrantStore
 from firstcoder.permissions.manager import PermissionManager
 from firstcoder.permissions.policy import DefaultPermissionPolicy
-from firstcoder.permissions.types import PermissionMode
+from firstcoder.permissions.types import PermissionAction, PermissionDecision, PermissionDecisionKind, PermissionMode
 from firstcoder.providers.base import ChatProvider
 from firstcoder.providers.factory import create_provider
 from firstcoder.tools.builtin import create_builtin_registry
@@ -79,7 +80,7 @@ class FirstCoderCodingAgentAdapter:
             include_network_tools=False,
         )
         permission_manager = PermissionManager(
-            policy=DefaultPermissionPolicy(task.repo_path),
+            policy=BenchmarkPermissionPolicy(task.repo_path),
             grants=PermissionGrantStore(),
             mode=PermissionMode.AGGRESSIVE,
         )
@@ -96,7 +97,34 @@ class FirstCoderCodingAgentAdapter:
             session=session,
             provider=self.provider_factory(self.provider_name),
             tools=tools,
+            limits=AgentLoopLimits.swe_lite(),
         )
+
+
+class BenchmarkPermissionPolicy(DefaultPermissionPolicy):
+    """Non-interactive benchmark policy for repo-local edits."""
+
+    def decide(self, request, *, mode: PermissionMode) -> PermissionDecision:
+        if request.action == PermissionAction.EXECUTE_SHELL:
+            command = request.target.strip()
+            if self._request_cwd_inside_root(request) and (
+                command == "python -m pytest"
+                or command.startswith("python -m pytest ")
+                or command == "python3 -m pytest"
+                or command.startswith("python3 -m pytest ")
+            ):
+                return PermissionDecision(
+                    kind=PermissionDecisionKind.ALLOW,
+                    reason="Benchmarks allow local pytest validation inside the task repository.",
+                )
+        if request.action == PermissionAction.WRITE_PATH:
+            target = self._resolve_path(request.target, cwd=request.cwd)
+            if self._is_inside_project(target) and not self._is_sensitive_path(target):
+                return PermissionDecision(
+                    kind=PermissionDecisionKind.ALLOW,
+                    reason="Benchmarks allow non-sensitive writes inside the task repository.",
+                )
+        return super().decide(request, mode=mode)
 
 
 def _build_task_prompt(task: CodingTask) -> str:

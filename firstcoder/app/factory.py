@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from firstcoder.agent.loop_limits import AgentLoopLimits
 from firstcoder.agent.session import AgentSession, create_project_permission_manager
 from firstcoder.app.commands import ContextCommandHandler
 from firstcoder.app.permission_commands import PermissionCommandHandler
@@ -44,7 +45,11 @@ def create_firstcoder_app(
     project_path = Path(project_root)
     resolved_data_root = Path(data_root) if data_root is not None else project_path / ".firstcoder"
     store = JsonlSessionStore(resolved_data_root)
-    resolved_tools = tools if tools is not None else create_builtin_registry(project_path).tools()
+    resolved_tools = tools if tools is not None else create_builtin_registry(
+        project_path,
+        include_mutation_tools=True,
+        include_execution_tools=True,
+    ).tools()
     resolved_provider = provider or create_provider()
     grant_store = FilePermissionGrantStore(resolved_data_root / "permissions.json")
     permission_manager = create_project_permission_manager(project_path, grants=grant_store)
@@ -87,6 +92,7 @@ def create_firstcoder_app(
         provider=resolved_provider,
         tools=resolved_tools,
         context_manager=context_manager,
+        limits=AgentLoopLimits.default(),
         use_streaming=bool(getattr(getattr(resolved_provider, "capabilities", None), "supports_streaming", False)),
     )
     return FirstCoderApp(

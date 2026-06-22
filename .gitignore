@@ -19,9 +19,12 @@ build/
 *.egg-info/
 .codex_tmp/
 .firstcoder/
+logs/
+runs/
+data/
+.tools/
 benchmark/runs/
 benchmark/topic_selfplay/runs/
-docs/
 *.doc
 *.docx
 *.docm

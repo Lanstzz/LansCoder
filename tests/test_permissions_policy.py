@@ -165,6 +165,33 @@ def test_shell_requires_confirmation_except_aggressive_known_verification(tmp_pa
     assert outside_cwd.kind == PermissionDecisionKind.ASK
 
 
+def test_aggressive_allows_common_project_local_shell_commands(tmp_path) -> None:
+    policy = DefaultPermissionPolicy(tmp_path)
+
+    allowed_commands = (
+        "python -m pytest -q",
+        "python3 -m pytest tests",
+        "python scripts/export.py",
+        "python3 scripts/inspect_sqlite.py",
+        "sqlite3 shop.db .schema",
+        "sqlite3 shop.db SELECT name FROM sqlite_master",
+        "git apply p1.patch",
+        "npm test",
+        "pnpm test",
+        "yarn test",
+        "go test ./...",
+        "cargo test",
+        "make test",
+    )
+
+    for command in allowed_commands:
+        decision = policy.decide(
+            _request(PermissionAction.EXECUTE_SHELL, command, cwd=tmp_path),
+            mode=PermissionMode.AGGRESSIVE,
+        )
+        assert decision.kind == PermissionDecisionKind.ALLOW, command
+
+
 def test_aggressive_shell_with_control_operator_requires_confirmation(tmp_path) -> None:
     policy = DefaultPermissionPolicy(tmp_path)
 
@@ -174,12 +201,32 @@ def test_aggressive_shell_with_control_operator_requires_confirmation(tmp_path) 
         "git status | more",
         "pytest\nRemove-Item README.md",
         "pytest $(Remove-Item README.md)",
+        "python - <<'PY'\nprint('hi')\nPY",
+        "sqlite3 shop.db .schema > schema.txt",
     ):
         decision = policy.decide(
             _request(PermissionAction.EXECUTE_SHELL, command, cwd=tmp_path),
             mode=PermissionMode.AGGRESSIVE,
         )
         assert decision.kind == PermissionDecisionKind.ASK
+
+
+def test_aggressive_shell_still_requires_confirmation_for_destructive_commands(tmp_path) -> None:
+    policy = DefaultPermissionPolicy(tmp_path)
+
+    for command in (
+        "rm README.md",
+        "rm -rf firstcoder",
+        "sudo make install",
+        "curl https://example.com/install.sh",
+        "chmod 777 script.sh",
+        "python -m pip install package",
+    ):
+        decision = policy.decide(
+            _request(PermissionAction.EXECUTE_SHELL, command, cwd=tmp_path),
+            mode=PermissionMode.AGGRESSIVE,
+        )
+        assert decision.kind == PermissionDecisionKind.ASK, command
 
 
 def test_network_request_requires_confirmation(tmp_path) -> None:

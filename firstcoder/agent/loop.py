@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Protocol
 
+from firstcoder.agent.loop_limits import AgentLoopLimits, AgentLoopStopReason
 from firstcoder.agent.session import AgentSession, PendingPermissionExecution
 from firstcoder.agent.user_input import (
     AgentTurnResult,
@@ -12,6 +14,7 @@ from firstcoder.agent.user_input import (
     UserInputRequest,
     user_input_request_from_tool_result,
 )
+from firstcoder.agent.verification import is_successful_verification_result
 from firstcoder.context.context_builder import ContextBuilder
 from firstcoder.context.manager import ContextCompactRequest, ContextWindowTrigger
 from firstcoder.permissions.types import PermissionDecisionKind, PermissionRequest
@@ -20,6 +23,9 @@ from firstcoder.providers.errors import ProviderError, ProviderErrorKind
 from firstcoder.providers.types import ChatRequest, ChatResponse, ChatStreamEvent, ToolCall
 from firstcoder.tools.permission_results import make_permission_denied_result
 from firstcoder.tools.types import Tool, make_error_result
+
+
+_DEFAULT_MAX_TOOL_ROUNDS = object()
 
 
 class ContextManagerLike(Protocol):
@@ -50,13 +56,22 @@ class AgentLoop:
         tools: list[Tool] | None = None,
         context_builder: ContextBuilder | None = None,
         context_manager: ContextManagerLike | None = None,
-        max_tool_rounds: int = 4,
+        max_tool_rounds: int | None | object = _DEFAULT_MAX_TOOL_ROUNDS,
+        limits: AgentLoopLimits | None = None,
+        clock=time.monotonic,
     ) -> None:
         self.session = session
         self.provider = provider
         self.context_builder = context_builder or ContextBuilder()
         self.context_manager = context_manager
-        self.max_tool_rounds = max_tool_rounds
+        resolved_limits = limits or AgentLoopLimits.default()
+        if max_tool_rounds is not _DEFAULT_MAX_TOOL_ROUNDS:
+            resolved_limits = resolved_limits.with_max_tool_rounds(max_tool_rounds)
+        self.limits = resolved_limits
+        self.max_tool_rounds = resolved_limits.max_tool_rounds
+        self.clock = clock
+        self.provider_call_count = 0
+        self.turn_started_at: float | None = None
         self.last_stream_events: list[ChatStreamEvent] = []
         # session 创建时通常已经注册了 session-scoped 工具。这里允许调用方再传入一批
         # 测试或临时工具，但避免重复注册同名工具导致模型 schema 不稳定。
@@ -102,6 +117,7 @@ class AgentLoop:
                 pending_input=self._permission_input_request_from_pending(pending),
             )
 
+        self._begin_turn()
         self.session.append_user_message(content)
         # 用户消息写入后先给 context manager 一个机会。通常不会压缩；但当上下文已经接近
         # 阈值时，先整理历史可以避免下一次 provider 请求直接超窗。
@@ -120,6 +136,7 @@ class AgentLoop:
         result = self._append_permission_resume_result(request_id, answer)
         if result is not None:
             return result
+        self._begin_turn()
         return self._run_tool_loop_interactive(self._complete_once_with_recovery)
 
     async def resume_with_user_input_streaming(self, request_id: str, answer: str) -> AgentTurnResult:
@@ -128,6 +145,7 @@ class AgentLoop:
         result = self._append_permission_resume_result(request_id, answer)
         if result is not None:
             return result
+        self._begin_turn()
         return await self._run_tool_loop_interactive_async(self._stream_once_with_recovery)
 
     async def run_user_turn_streaming(self, content: str) -> ChatResponse:
@@ -149,6 +167,7 @@ class AgentLoop:
                 raw={"pending_input": pending_input},
             )
 
+        self._begin_turn()
         self.session.append_user_message(content)
         self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
 
@@ -217,7 +236,7 @@ class AgentLoop:
         self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
         return None
 
-    def _complete_once(self) -> ChatResponse:
+    def _complete_once(self, *, tool_choice="auto") -> ChatResponse:
         """构造一次 provider 请求并获得模型响应。
 
         这一步只负责“问模型一次”，不处理工具循环。拆开后，同步调用、streaming 调用、
@@ -235,9 +254,12 @@ class AgentLoop:
             self.session.rebuild_view(),
             system_prefix=system_prefix,
         )
-        return self.provider.complete(ChatRequest(messages=messages, tools=definitions))
+        self._check_provider_call_limit()
+        self._check_turn_timeout()
+        self.provider_call_count += 1
+        return self.provider.complete(ChatRequest(messages=messages, tools=definitions, tool_choice=tool_choice))
 
-    def _complete_once_with_recovery(self) -> ChatResponse:
+    def _complete_once_with_recovery(self, *, tool_choice="auto") -> ChatResponse:
         """同步模式下一次 provider 调用，并处理 prompt-too-long 的单次恢复。
 
         provider 如果拒绝请求，说明 assistant 回复还没有产生，也就没有新消息要落库。
@@ -245,16 +267,16 @@ class AgentLoop:
         """
 
         try:
-            return self._complete_once()
+            return self._complete_once(tool_choice=tool_choice)
         except ProviderError as exc:
             if not exc.requires_compaction:
                 raise
             result = self._compact_if_needed(trigger=ContextWindowTrigger.PROMPT_TOO_LONG)
             if result is None or result.status != "success":
                 raise
-            return self._complete_once()
+            return self._complete_once(tool_choice=tool_choice)
 
-    async def _stream_once(self) -> ChatResponse:
+    async def _stream_once(self, *, tool_choice="auto") -> ChatResponse:
         """消费一次 provider stream，最终仍返回完整 ChatResponse。
 
         UI 可以读取 `last_stream_events` 展示 text_delta；但工具调用必须等 stream 完成后
@@ -273,7 +295,10 @@ class AgentLoop:
             system_prefix=system_prefix,
         )
         final_response: ChatResponse | None = None
-        async for event in self.provider.astream(ChatRequest(messages=messages, tools=definitions)):
+        self._check_provider_call_limit()
+        self._check_turn_timeout()
+        self.provider_call_count += 1
+        async for event in self.provider.astream(ChatRequest(messages=messages, tools=definitions, tool_choice=tool_choice)):
             self.last_stream_events.append(event)
             if event.kind == "message_completed":
                 final_response = event.response
@@ -284,21 +309,21 @@ class AgentLoop:
             )
         return final_response
 
-    async def _stream_once_with_recovery(self) -> ChatResponse:
+    async def _stream_once_with_recovery(self, *, tool_choice="auto") -> ChatResponse:
         try:
-            return await self._stream_once_attempt()
+            return await self._stream_once_attempt(tool_choice=tool_choice)
         except ProviderError as exc:
             if not exc.requires_compaction:
                 raise
             result = self._compact_if_needed(trigger=ContextWindowTrigger.PROMPT_TOO_LONG)
             if result is None or result.status != "success":
                 raise
-            return await self._stream_once_attempt()
+            return await self._stream_once_attempt(tool_choice=tool_choice)
 
-    async def _stream_once_attempt(self) -> ChatResponse:
+    async def _stream_once_attempt(self, *, tool_choice="auto") -> ChatResponse:
         start_event_count = len(self.last_stream_events)
         try:
-            return await self._stream_once()
+            return await self._stream_once(tool_choice=tool_choice)
         except ProviderError:
             # streaming 尝试失败时，不能把已经收到的局部 delta 当成真实回答留给 UI。
             # 真正成功的重试会重新产生完整事件。
@@ -314,33 +339,40 @@ class AgentLoop:
         - 某个工具需要用户输入或权限确认：暂停并把 pending_input 交给 UI。
         """
 
-        response = self._drop_unsupported_tool_calls(complete_once())
-        tool_rounds = 0
-        while response.tool_calls:
-            if tool_rounds >= self.max_tool_rounds:
-                response = self._tool_round_limit_response(response)
-                break
-
-            # 关键顺序：必须先写 assistant tool_call，再写对应 tool_result。provider 后续
-            # 才能看到合法的 “assistant(tool_calls) -> tool(result)” 消息序列。
-            self.session.append_assistant_response(response)
-            execution = self._execute_tool_calls_interactive(response.tool_calls)
-            if execution.pending_input is not None:
-                return AgentTurnResult(
-                    status=AgentTurnStatus.WAITING_FOR_USER_INPUT,
-                    pending_input=execution.pending_input,
-                )
-            if execution.task_hash_changed:
-                self._compact_if_needed(trigger=ContextWindowTrigger.TASK_HASH_CHANGED)
-            self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
-
-            tool_rounds += 1
-            if tool_rounds >= self.max_tool_rounds:
-                response = self._tool_round_limit_response(response)
-                break
-            # 工具结果已经写进 session log；下一次 complete_once() 会通过 ContextBuilder
-            # 重新投影完整历史，让模型读取刚才的工具输出。
+        try:
             response = self._drop_unsupported_tool_calls(complete_once())
+            tool_rounds = 0
+            while response.tool_calls:
+                if self.max_tool_rounds is not None and tool_rounds >= self.max_tool_rounds:
+                    response = self._tool_round_limit_response(response)
+                    break
+
+                # 关键顺序：必须先写 assistant tool_call，再写对应 tool_result。provider 后续
+                # 才能看到合法的 “assistant(tool_calls) -> tool(result)” 消息序列。
+                self.session.append_assistant_response(response)
+                execution = self._execute_tool_calls_interactive(response.tool_calls)
+                if execution.pending_input is not None:
+                    return AgentTurnResult(
+                        status=AgentTurnStatus.WAITING_FOR_USER_INPUT,
+                        pending_input=execution.pending_input,
+                    )
+                if execution.task_hash_changed:
+                    self._compact_if_needed(trigger=ContextWindowTrigger.TASK_HASH_CHANGED)
+                self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
+
+                if self.limits.successful_verification_stop and execution.successful_verification:
+                    response = self._drop_unsupported_tool_calls(complete_once(tool_choice="none"))
+                    break
+
+                tool_rounds += 1
+                if self.max_tool_rounds is not None and tool_rounds >= self.max_tool_rounds:
+                    response = self._tool_round_limit_response(response)
+                    break
+                # 工具结果已经写进 session log；下一次 complete_once() 会通过 ContextBuilder
+                # 重新投影完整历史，让模型读取刚才的工具输出。
+                response = self._drop_unsupported_tool_calls(complete_once())
+        except _AgentLoopLimitReached as exc:
+            response = self._limit_response(exc.reason)
 
         # 没有工具调用时，这条 response 就是最终 assistant 回复。命中轮次上限时也会写入
         # 一条纯文本说明，避免保存未执行的 tool_call。
@@ -351,29 +383,36 @@ class AgentLoop:
     async def _run_tool_loop_interactive_async(self, complete_once) -> AgentTurnResult:
         """streaming 版本的工具循环，语义与同步版本一致。"""
 
-        response = self._drop_unsupported_tool_calls(await complete_once())
-        tool_rounds = 0
-        while response.tool_calls:
-            if tool_rounds >= self.max_tool_rounds:
-                response = self._tool_round_limit_response(response)
-                break
-
-            self.session.append_assistant_response(response)
-            execution = self._execute_tool_calls_interactive(response.tool_calls)
-            if execution.pending_input is not None:
-                return AgentTurnResult(
-                    status=AgentTurnStatus.WAITING_FOR_USER_INPUT,
-                    pending_input=execution.pending_input,
-                )
-            if execution.task_hash_changed:
-                self._compact_if_needed(trigger=ContextWindowTrigger.TASK_HASH_CHANGED)
-            self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
-
-            tool_rounds += 1
-            if tool_rounds >= self.max_tool_rounds:
-                response = self._tool_round_limit_response(response)
-                break
+        try:
             response = self._drop_unsupported_tool_calls(await complete_once())
+            tool_rounds = 0
+            while response.tool_calls:
+                if self.max_tool_rounds is not None and tool_rounds >= self.max_tool_rounds:
+                    response = self._tool_round_limit_response(response)
+                    break
+
+                self.session.append_assistant_response(response)
+                execution = self._execute_tool_calls_interactive(response.tool_calls)
+                if execution.pending_input is not None:
+                    return AgentTurnResult(
+                        status=AgentTurnStatus.WAITING_FOR_USER_INPUT,
+                        pending_input=execution.pending_input,
+                    )
+                if execution.task_hash_changed:
+                    self._compact_if_needed(trigger=ContextWindowTrigger.TASK_HASH_CHANGED)
+                self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
+
+                if self.limits.successful_verification_stop and execution.successful_verification:
+                    response = self._drop_unsupported_tool_calls(await complete_once(tool_choice="none"))
+                    break
+
+                tool_rounds += 1
+                if self.max_tool_rounds is not None and tool_rounds >= self.max_tool_rounds:
+                    response = self._tool_round_limit_response(response)
+                    break
+                response = self._drop_unsupported_tool_calls(await complete_once())
+        except _AgentLoopLimitReached as exc:
+            response = self._limit_response(exc.reason)
 
         self.session.append_assistant_response(response)
         self._compact_if_needed(trigger=ContextWindowTrigger.AUTO)
@@ -384,6 +423,7 @@ class AgentLoop:
 
     def _execute_tool_calls_interactive(self, tool_calls: list[ToolCall]) -> "_ToolExecutionState":
         task_hash_changed = False
+        successful_verification = False
         for index, tool_call in enumerate(tool_calls):
             # 权限检查放在工具执行前，但具体“这个路径能不能写 / 这个命令能不能跑”
             # 的判断由 permissions 和 permission-aware tool wrapper 完成。AgentLoop 只关心
@@ -413,6 +453,8 @@ class AgentLoop:
 
             result = self.session.execute_tool_call(tool_call)
             self.session.append_tool_result(tool_call=tool_call, result=result)
+            if is_successful_verification_result(tool_call.name, result):
+                successful_verification = True
             # ask_user 这类工具本身不会继续执行副作用，而是把“需要问用户什么”包装在
             # ToolResult.data 中。这里把它转换成 AgentTurnResult 的 pending_input。
             pending_input = user_input_request_from_tool_result(
@@ -430,7 +472,10 @@ class AgentLoop:
                 # task_boundary 是一种“语义触发”：即使上下文还没超 token 阈值，确认任务切换
                 # 后也应该整理旧任务上下文，降低旧任务信息污染新任务的概率。
                 task_hash_changed = True
-        return _ToolExecutionState(task_hash_changed=task_hash_changed)
+        return _ToolExecutionState(
+            task_hash_changed=task_hash_changed,
+            successful_verification=successful_verification,
+        )
 
     def _store_pending_permission_request(
         self,
@@ -512,6 +557,22 @@ class AgentLoop:
             return []
         return self.session.tool_registry.definitions()
 
+    def _begin_turn(self) -> None:
+        self.provider_call_count = 0
+        self.turn_started_at = self.clock()
+
+    def _check_provider_call_limit(self) -> None:
+        limit = self.limits.max_provider_calls
+        if limit is not None and self.provider_call_count >= limit:
+            raise _AgentLoopLimitReached(AgentLoopStopReason.PROVIDER_CALL_LIMIT)
+
+    def _check_turn_timeout(self) -> None:
+        limit = self.limits.max_turn_seconds
+        if limit is None or self.turn_started_at is None:
+            return
+        if self.clock() - self.turn_started_at >= limit:
+            raise _AgentLoopLimitReached(AgentLoopStopReason.TURN_TIMEOUT)
+
     def _drop_unsupported_tool_calls(self, response: ChatResponse) -> ChatResponse:
         """兜底保护：不支持工具的 provider 理论上不该返回 tool_calls。
 
@@ -549,13 +610,27 @@ class AgentLoop:
     def _tool_round_limit_response(self, response: ChatResponse) -> ChatResponse:
         """工具轮次上限命中后，只保存纯文本说明，避免写入未执行的 tool_call。"""
 
+        return self._limit_response(AgentLoopStopReason.TOOL_ROUND_LIMIT, raw=response.raw)
+
+    def _limit_response(self, reason: AgentLoopStopReason, *, raw: dict | None = None) -> ChatResponse:
+        messages = {
+            AgentLoopStopReason.PROVIDER_CALL_LIMIT: (
+                f"provider 调用次数达到上限（max_provider_calls={self.limits.max_provider_calls}），已停止继续执行。"
+            ),
+            AgentLoopStopReason.TURN_TIMEOUT: (
+                f"本轮任务耗时达到上限（max_turn_seconds={self.limits.max_turn_seconds}），已停止继续执行。"
+            ),
+            AgentLoopStopReason.TOOL_ROUND_LIMIT: (
+                f"工具调用轮次达到上限（max_tool_rounds={self.limits.max_tool_rounds}），已停止继续执行工具。"
+            ),
+        }
         return ChatResponse(
-            provider=response.provider,
-            model=response.model,
-            content=f"工具调用轮次达到上限（max_tool_rounds={self.max_tool_rounds}），已停止继续执行工具。",
+            provider=self.provider.name,
+            model=self.provider.model,
+            content=messages[reason],
             tool_calls=[],
-            finish_reason="tool_round_limit",
-            raw=response.raw,
+            finish_reason=reason.value,
+            raw=raw,
         )
 
 
@@ -565,6 +640,14 @@ class _ToolExecutionState:
         *,
         task_hash_changed: bool,
         pending_input: UserInputRequest | None = None,
+        successful_verification: bool = False,
     ) -> None:
         self.task_hash_changed = task_hash_changed
         self.pending_input = pending_input
+        self.successful_verification = successful_verification
+
+
+class _AgentLoopLimitReached(Exception):
+    def __init__(self, reason: AgentLoopStopReason) -> None:
+        super().__init__(reason.value)
+        self.reason = reason

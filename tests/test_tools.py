@@ -27,6 +27,26 @@ from firstcoder.tools.git_status import create_git_status_tool
 from firstcoder.tools.web_search import create_web_search_tool
 
 
+def test_builtin_tool_descriptions_are_agent_facing_english(tmp_path):
+    registry = create_builtin_registry(
+        tmp_path,
+        include_mutation_tools=True,
+        include_execution_tools=True,
+        include_network_tools=True,
+    )
+    descriptions = {definition.name: definition.description for definition in registry.definitions()}
+
+    assert descriptions["view"].startswith("Read a UTF-8 text file")
+    assert "Use this instead of shell commands like cat" in descriptions["view"]
+    assert descriptions["grep"].startswith("Search file contents")
+    assert "literal text" in descriptions["grep"]
+    assert descriptions["apply_patch"].startswith("Apply a structured patch")
+    assert "Prefer this for multi-file edits" in descriptions["apply_patch"]
+    assert descriptions["shell"].startswith("Run a shell command")
+    assert "Prefer dedicated tools" in descriptions["shell"]
+    assert descriptions["todo"].startswith("Track progress")
+
+
 def test_builtin_registry_contains_read_only_tools(tmp_path):
     registry = create_builtin_registry(tmp_path)
 

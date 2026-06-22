@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from firstcoder.agent.loop import AgentLoop
+from firstcoder.agent.loop_limits import AgentLoopLimits
 from firstcoder.agent.session import AgentSession
 from firstcoder.agent.user_input import AgentTurnStatus, UserInputRequest
 from firstcoder.context.context_builder import ContextBuilder
@@ -22,6 +23,9 @@ from firstcoder.permissions.types import PermissionMode
 from firstcoder.providers.base import ChatProvider
 from firstcoder.providers.types import ChatResponse, ChatStreamEvent
 from firstcoder.tools.types import Tool
+
+
+_DEFAULT_MAX_TOOL_ROUNDS = object()
 
 
 @dataclass(slots=True)
@@ -70,7 +74,8 @@ class AgentChatRunner:
     tools: list[Tool] | None = None
     context_builder: ContextBuilder | None = None
     context_manager: Any | None = None
-    max_tool_rounds: int = 4
+    limits: AgentLoopLimits | None = None
+    max_tool_rounds: int | None | object = _DEFAULT_MAX_TOOL_ROUNDS
     use_streaming: bool = False
     loops: list[AgentLoop] = field(default_factory=list)
     last_display_lines: list[str] = field(default_factory=list)
@@ -86,7 +91,8 @@ class AgentChatRunner:
             tools=self.tools,
             context_builder=self.context_builder,
             context_manager=self.context_manager,
-            max_tool_rounds=self.max_tool_rounds,
+            limits=self.limits,
+            **self._legacy_max_tool_rounds_kwargs(),
         )
         self.loops.append(loop)
         result = loop.run_user_turn_interactive(content)
@@ -122,7 +128,8 @@ class AgentChatRunner:
             tools=self.tools,
             context_builder=self.context_builder,
             context_manager=self.context_manager,
-            max_tool_rounds=self.max_tool_rounds,
+            limits=self.limits,
+            **self._legacy_max_tool_rounds_kwargs(),
         )
         self.loops.append(loop)
         result = loop.resume_with_user_input(request_id, answer)
@@ -161,7 +168,8 @@ class AgentChatRunner:
                 tools=self.tools,
                 context_builder=self.context_builder,
                 context_manager=self.context_manager,
-                max_tool_rounds=self.max_tool_rounds,
+                limits=self.limits,
+                **self._legacy_max_tool_rounds_kwargs(),
             )
             self.loops.append(loop)
             self.last_display_lines = []
@@ -188,7 +196,8 @@ class AgentChatRunner:
                 tools=self.tools,
                 context_builder=self.context_builder,
                 context_manager=self.context_manager,
-                max_tool_rounds=self.max_tool_rounds,
+                limits=self.limits,
+                **self._legacy_max_tool_rounds_kwargs(),
             )
             self.loops.append(loop)
             self.last_display_lines = []
@@ -212,6 +221,11 @@ class AgentChatRunner:
             return response
 
         return await asyncio.to_thread(self.resume_with_user_input, request_id, answer)
+
+    def _legacy_max_tool_rounds_kwargs(self) -> dict[str, int | None | object]:
+        if self.max_tool_rounds is _DEFAULT_MAX_TOOL_ROUNDS:
+            return {}
+        return {"max_tool_rounds": self.max_tool_rounds}
 
 
 def _display_lines_from_messages(messages: list[AgentMessage]) -> list[str]:

@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from firstcoder.agent.loop_limits import AgentLoopLimits
 from firstcoder.app.factory import create_firstcoder_app
 from firstcoder.app.router import CompositeCommandHandler
 from firstcoder.app.runtime import AgentChatRunner
@@ -69,6 +70,12 @@ def test_create_firstcoder_app_enables_streaming_for_capable_provider(tmp_path: 
     assert app.chat_runner.use_streaming is True
 
 
+def test_app_factory_configures_default_loop_limits(tmp_path: Path) -> None:
+    app = create_firstcoder_app(project_root=tmp_path, provider=FakeProvider([]), tools=[])
+
+    assert app.chat_runner.limits == AgentLoopLimits.default()
+
+
 def test_create_firstcoder_app_keeps_streaming_disabled_without_capability(tmp_path: Path) -> None:
     app = create_firstcoder_app(
         project_root=tmp_path,
@@ -106,6 +113,30 @@ def test_create_firstcoder_app_can_use_default_builtin_tools(tmp_path: Path) -> 
     )
 
     assert app.chat_runner.tools
+    names = [tool.name for tool in app.chat_runner.tools or []]
+    assert "write" in names
+    assert "edit" in names
+    assert "apply_patch" in names
+    assert "shell" in names
+
+
+def test_create_firstcoder_app_exposes_task_boundary_in_real_prompt(tmp_path: Path) -> None:
+    provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
+    app = create_firstcoder_app(
+        project_root=tmp_path,
+        data_root=tmp_path / ".firstcoder",
+        provider=provider,
+        session_id="sess_test",
+    )
+
+    app.chat_runner.run_user_turn("你好")
+
+    tool_names = [tool.name for tool in provider.requests[0].tools]
+    assert "task_boundary" in tool_names
+    descriptions = {tool.name: tool.description for tool in provider.requests[0].tools}
+    assert descriptions["task_boundary"].startswith("Report whether the current user message starts a new task")
+    assert "Do not provide task hashes" in descriptions["task_boundary"]
+    assert "Call task_boundary before substantial work" in provider.requests[0].messages[0].content
 
 
 def test_create_firstcoder_app_wires_l4_service_for_default_context_manager(tmp_path: Path) -> None:

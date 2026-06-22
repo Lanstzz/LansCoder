@@ -19,26 +19,21 @@ def ensure_clean_repo(repo_path: str | Path) -> None:
 def collect_git_diff(repo_path: str | Path, *, include_untracked: bool = False) -> str:
     repo = Path(repo_path)
     if include_untracked:
-        return _collect_diff_with_untracked(repo)
+        return _collect_final_worktree_diff(repo)
     staged = _git(["diff", "--cached", "--binary"], repo).stdout
     unstaged = _git(["diff", "--binary"], repo).stdout
     return staged + unstaged
 
 
-def _collect_diff_with_untracked(repo: Path) -> str:
+def _collect_final_worktree_diff(repo: Path) -> str:
     with tempfile.NamedTemporaryFile(prefix="firstcoder-index-") as index:
         env = {"GIT_INDEX_FILE": index.name}
         real_index = Path(_git(["rev-parse", "--git-path", "index"], repo).stdout.strip())
         if not real_index.is_absolute():
             real_index = repo / real_index
         shutil.copyfile(real_index, index.name)
-        untracked = _git(["ls-files", "--others", "--exclude-standard", "-z"], repo).stdout
-        if untracked:
-            paths = [path for path in untracked.split("\0") if path]
-            _git(["add", "--", *paths], repo, env=env)
-        staged_and_untracked = _git(["diff", "--cached", "--binary"], repo, env=env).stdout
-        unstaged = _git(["diff", "--binary"], repo).stdout
-        return staged_and_untracked + unstaged
+        _git(["add", "-A"], repo, env=env)
+        return _git(["diff", "--cached", "--binary"], repo, env=env).stdout
 
 
 def _git(

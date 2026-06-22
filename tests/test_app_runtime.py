@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from firstcoder.app.runtime import AgentChatRunner, CurrentSessionState
+from firstcoder.agent.loop_limits import AgentLoopLimits
 from firstcoder.agent.session import AgentSession
 from firstcoder.agent.user_input import AgentTurnStatus
 from firstcoder.context.store import JsonlSessionStore
@@ -114,6 +115,19 @@ def test_agent_chat_runner_uses_current_session_and_can_follow_resume(tmp_path) 
         "第二轮",
         "second reply",
     ]
+
+
+def test_chat_runner_passes_loop_limits_to_agent_loop(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_runner_limits", agents_md="")
+    state = CurrentSessionState(session)
+    provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
+    limits = AgentLoopLimits(max_tool_rounds=7, max_provider_calls=8, max_turn_seconds=9)
+    runner = AgentChatRunner(current_session=state, provider=provider, limits=limits)
+
+    runner.run_user_turn("hi")
+
+    assert runner.loops[-1].limits == limits
 
 
 def test_agent_chat_runner_records_tool_call_and_result_display_lines(tmp_path) -> None:

@@ -105,6 +105,40 @@ def test_system_prompt_contains_readable_permission_policy_and_tool_schema() -> 
     assert '"type": "string"' in content
 
 
+def test_system_prompt_contains_english_agent_behavior_rules() -> None:
+    entry = SystemPromptBuilder().build(_inputs())
+    content = entry.messages[0].content
+
+    assert "# Role and operating context" in content
+    assert "# Working loop" in content
+    assert "# Task boundary" in content
+    assert "# Tool use" in content
+    assert "# Task tracking" in content
+    assert "# Verification and completion" in content
+    assert "# Communication style" in content
+    assert "Call task_boundary before substantial work" in content
+    assert "Never invent, guess, or display task hashes" in content
+    assert "Use todo for multi-step coding tasks" in content
+    assert "After successful verification, stop calling tools" in content
+
+
+def test_system_prompt_includes_external_few_shots() -> None:
+    entry = SystemPromptBuilder().build(_inputs())
+    content = entry.messages[0].content
+
+    assert "# Few-shot examples" in content
+    assert "Example: new coding task" in content
+    assert "task_boundary(decision=\"new\"" in content
+    assert "Example: verification passed" in content
+    assert "Do not call more tools after a successful verification command." in content
+
+
+def test_system_prompt_version_is_v4() -> None:
+    entry = SystemPromptBuilder().build(_inputs())
+
+    assert "prompt_version=v4" in entry.messages[0].content
+
+
 def test_system_prompt_token_estimate_uses_shared_estimator() -> None:
     entry = SystemPromptBuilder().build(_inputs(base_rules="12345", agents_md="", tools=[]))
 

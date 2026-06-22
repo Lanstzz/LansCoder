@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from firstcoder.eval.swebench import (
     SwebenchInstance,
     build_harness_command,
@@ -49,6 +51,18 @@ def test_repo_path_for_instance_uses_sanitized_instance_id(tmp_path: Path):
     )
 
     assert repo_path_for_instance(tmp_path, instance) == tmp_path / "sympy__sympy-20590"
+
+
+def test_repo_path_for_instance_rejects_path_escape(tmp_path: Path):
+    instance = SwebenchInstance(
+        instance_id="../outside",
+        repo="bad/repo",
+        base_commit="abc123",
+        problem_statement="Fix it.",
+    )
+
+    with pytest.raises(ValueError, match="outside repos_root"):
+        repo_path_for_instance(tmp_path, instance)
 
 
 def test_write_predictions_jsonl(tmp_path: Path):

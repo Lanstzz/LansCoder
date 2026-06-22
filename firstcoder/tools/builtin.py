@@ -26,6 +26,7 @@ from firstcoder.tools.tree import create_tree_tool
 from firstcoder.tools.view import create_view_tool
 from firstcoder.tools.web_search import create_web_search_tool
 from firstcoder.tools.write import create_write_tool
+from firstcoder.tools.descriptions import apply_agent_tool_description
 
 
 def create_builtin_registry(
@@ -77,4 +78,4 @@ def create_builtin_registry(
                 create_web_search_tool(),
             ]
         )
-    return ToolRegistry(tools)
+    return ToolRegistry([apply_agent_tool_description(tool) for tool in tools])

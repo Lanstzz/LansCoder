@@ -71,7 +71,7 @@ def test_collect_git_diff_can_include_untracked_files(tmp_path: Path):
     assert "+NEW_VALUE = 3" in diff
 
 
-def test_collect_git_diff_with_untracked_preserves_staged_only_changes(tmp_path: Path):
+def test_collect_git_diff_with_untracked_uses_final_worktree_over_staged_state(tmp_path: Path):
     repo = init_repo(tmp_path)
     (repo / "module.py").write_text("VALUE = 2\n", encoding="utf-8")
     run(["git", "add", "module.py"], repo)
@@ -79,9 +79,7 @@ def test_collect_git_diff_with_untracked_preserves_staged_only_changes(tmp_path:
 
     diff = collect_git_diff(repo, include_untracked=True)
 
-    assert "diff --git a/module.py b/module.py" in diff
-    assert "-VALUE = 1" in diff
-    assert "+VALUE = 2" in diff
+    assert diff == ""
 
 
 def test_collect_git_diff_with_untracked_does_not_mutate_real_index(tmp_path: Path):
@@ -111,3 +109,17 @@ def test_collect_git_diff_with_untracked_preserves_unstaged_tracked_changes(tmp_
     assert "+VALUE = 2" in diff
     assert "diff --git a/new_module.py b/new_module.py" in diff
     assert "+NEW_VALUE = 3" in diff
+
+
+def test_collect_git_diff_with_staged_and_unstaged_same_file_uses_final_worktree(tmp_path: Path):
+    repo = init_repo(tmp_path)
+    (repo / "module.py").write_text("VALUE = 2\n", encoding="utf-8")
+    run(["git", "add", "module.py"], repo)
+    (repo / "module.py").write_text("VALUE = 3\n", encoding="utf-8")
+
+    diff = collect_git_diff(repo, include_untracked=True)
+
+    assert diff.count("diff --git a/module.py b/module.py") == 1
+    assert "-VALUE = 1" in diff
+    assert "+VALUE = 3" in diff
+    assert "+VALUE = 2" not in diff

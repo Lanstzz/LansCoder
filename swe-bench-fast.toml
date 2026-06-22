@@ -1,0 +1,11 @@
+name = "swe-bench-fast"
+workers = 1
+timeout = 900
+checkpoint_dir = ".checkpoints/swe-bench-fast"
+arm64_registry = "docker.io/greynewell/swe-bench-arm64"
+x86_registry = "ghcr.io/epoch-research"
+x86_prefix = "swe-bench.eval"
+mem_limit = "6g"
+tmpfs = false
+runtime = ""
+build_workers = 1

@@ -3,10 +3,11 @@ import subprocess
 
 import pytest
 
+from firstcoder.agent.loop_limits import AgentLoopLimits
 from firstcoder.eval.adapter import FirstCoderCodingAgentAdapter
 from firstcoder.providers.base import ChatProvider
 from firstcoder.eval.tasks import CodingTask
-from firstcoder.providers.types import ChatRequest
+from firstcoder.providers.types import ChatRequest, ToolCall
 from firstcoder.providers.types import ChatResponse
 
 
@@ -48,6 +49,44 @@ class FakeProvider(ChatProvider):
         return "fake-model"
 
     def complete(self, request: ChatRequest) -> ChatResponse:
+        return ChatResponse(provider=self.name, model=self.model, content="done", finish_reason="stop")
+
+
+class PatchProvider(ChatProvider):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def name(self) -> str:
+        return "fake"
+
+    @property
+    def model(self) -> str:
+        return "fake-model"
+
+    def complete(self, request: ChatRequest) -> ChatResponse:
+        self.calls += 1
+        if self.calls == 1:
+            return ChatResponse(
+                provider=self.name,
+                model=self.model,
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCall(
+                        id="call_patch",
+                        name="apply_patch",
+                        arguments={
+                            "patch": (
+                                "*** Begin Patch\n"
+                                "*** Add File: fixed.py\n"
+                                "+VALUE = 42\n"
+                                "*** End Patch"
+                            )
+                        },
+                    )
+                ],
+            )
         return ChatResponse(provider=self.name, model=self.model, content="done", finish_reason="stop")
 
 
@@ -107,6 +146,28 @@ def test_default_loop_factory_keeps_session_outside_repo(tmp_path: Path):
     assert repo not in loop.session.store.root.parents
     assert loop.session.mode == "aggressive"
     assert "write" in loop.session.tool_registry.names()
+    assert loop.limits == AgentLoopLimits.swe_lite()
+
+
+def test_default_loop_factory_auto_allows_repo_writes_for_benchmarks(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repo(repo)
+    adapter = FirstCoderCodingAgentAdapter(
+        session_root=tmp_path / "sessions",
+        provider_factory=lambda provider_name: PatchProvider(),
+    )
+    task = CodingTask(
+        instance_id="sympy__sympy-20590",
+        repo_path=repo,
+        problem_statement="Create the fix.",
+    )
+
+    result = adapter.run_task(task)
+
+    assert result.raw_response == "done"
+    assert "diff --git a/fixed.py b/fixed.py" in result.model_patch
+    assert "+VALUE = 42" in result.model_patch
 
 
 def test_relative_session_root_is_resolved_outside_repo(tmp_path: Path, monkeypatch):
