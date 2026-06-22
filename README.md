@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/firstcoder-logo.png" alt="FirstCoder logo" width="220">
+  <img src="assets/firstcoder-logo.png" alt="FirstCoder logo" width="188">
 </p>
 
 <h1 align="center">FirstCoder</h1>
