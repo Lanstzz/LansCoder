@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -30,10 +29,7 @@ def collect_git_diff(repo_path: str | Path, *, include_untracked: bool = False) 
 def _collect_final_worktree_diff(repo: Path) -> str:
     with tempfile.NamedTemporaryFile(prefix="firstcoder-index-") as index:
         env = {"GIT_INDEX_FILE": index.name}
-        real_index = Path(_git(["rev-parse", "--git-path", "index"], repo).stdout.strip())
-        if not real_index.is_absolute():
-            real_index = repo / real_index
-        shutil.copyfile(real_index, index.name)
+        _git(["read-tree", "HEAD"], repo, env=env)
         _git(["add", "-A"], repo, env=env)
         return _git(["diff", "--cached", "--binary"], repo, env=env).stdout
 

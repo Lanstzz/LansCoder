@@ -2,6 +2,11 @@
 
 set -e
 
+fail() {
+  echo "FIRSTCODER_INSTALL_FAILED: $*" >&2
+  return 1 2>/dev/null || exit 1
+}
+
 {% if version %}
 PACKAGE_SPEC="{{ package }}=={{ version }}"
 {% else %}
@@ -19,9 +24,12 @@ if ! python3 -m pip --version >/dev/null 2>&1; then
   missing_packages+=("python3-pip")
 fi
 
-if ! python3 -m venv --help >/dev/null 2>&1; then
+venv_probe="$(mktemp -d)"
+if ! python3 -m venv "$venv_probe/test-venv" >/dev/null 2>&1 || \
+   ! "$venv_probe/test-venv/bin/python" -m pip --version >/dev/null 2>&1; then
   missing_packages+=("python3-venv")
 fi
+rm -rf "$venv_probe"
 
 if ! command -v git >/dev/null 2>&1; then
   missing_packages+=("git")
@@ -29,10 +37,11 @@ fi
 
 if [ "${missing_packages[*]}" != "" ]; then
   apt-get update
-  apt-get install -y "${missing_packages[@]}"
+  apt-get install -y "${missing_packages[@]}" || fail "apt-get install failed"
 fi
 
-python3 -m venv "$AGENT_VENV"
-"$AGENT_VENV/bin/python" -m pip install "$PACKAGE_SPEC"
+python3 -m venv "$AGENT_VENV" || fail "venv creation failed"
+"$AGENT_VENV/bin/python" -m pip --version >/dev/null 2>&1 || fail "venv pip is unavailable"
+"$AGENT_VENV/bin/python" -m pip install "$PACKAGE_SPEC" || fail "pip install failed"
 
 echo "FIRSTCODER_INSTALL_SUCCESS"
