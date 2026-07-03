@@ -18,6 +18,8 @@ def ensure_clean_repo(repo_path: str | Path) -> None:
 
 def collect_git_diff(repo_path: str | Path, *, include_untracked: bool = False) -> str:
     repo = Path(repo_path)
+    if not _is_git_worktree(repo):
+        return ""
     if include_untracked:
         return _collect_final_worktree_diff(repo)
     staged = _git(["diff", "--cached", "--binary"], repo).stdout
@@ -34,6 +36,16 @@ def _collect_final_worktree_diff(repo: Path) -> str:
         shutil.copyfile(real_index, index.name)
         _git(["add", "-A"], repo, env=env)
         return _git(["diff", "--cached", "--binary"], repo, env=env).stdout
+
+
+def _is_git_worktree(repo: Path) -> bool:
+    result = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
 
 
 def _git(

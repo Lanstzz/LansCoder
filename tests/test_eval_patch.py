@@ -71,6 +71,14 @@ def test_collect_git_diff_can_include_untracked_files(tmp_path: Path):
     assert "+NEW_VALUE = 3" in diff
 
 
+def test_collect_git_diff_returns_empty_for_non_git_directory(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "hello.txt").write_text("Hello, world!\n", encoding="utf-8")
+
+    assert collect_git_diff(workspace, include_untracked=True) == ""
+
+
 def test_collect_git_diff_with_untracked_uses_final_worktree_over_staged_state(tmp_path: Path):
     repo = init_repo(tmp_path)
     (repo / "module.py").write_text("VALUE = 2\n", encoding="utf-8")
