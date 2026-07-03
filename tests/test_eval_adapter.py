@@ -5,8 +5,10 @@ import pytest
 
 from firstcoder.agent.loop_limits import AgentLoopLimits
 from firstcoder.eval.adapter import FirstCoderCodingAgentAdapter
+from firstcoder.eval.adapter import RetryableBenchmarkProvider
 from firstcoder.providers.base import ChatProvider
 from firstcoder.eval.tasks import CodingTask
+from firstcoder.providers.errors import ProviderError, ProviderErrorKind
 from firstcoder.providers.types import ChatRequest, ToolCall
 from firstcoder.providers.types import ChatResponse
 
@@ -90,6 +92,27 @@ class PatchProvider(ChatProvider):
         return ChatResponse(provider=self.name, model=self.model, content="done", finish_reason="stop")
 
 
+class FlakyProvider(ChatProvider):
+    def __init__(self, failures: int, *, kind: ProviderErrorKind = ProviderErrorKind.SERVER_ERROR) -> None:
+        self.failures = failures
+        self.kind = kind
+        self.calls = 0
+
+    @property
+    def name(self) -> str:
+        return "flaky"
+
+    @property
+    def model(self) -> str:
+        return "flaky-model"
+
+    def complete(self, request: ChatRequest) -> ChatResponse:
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise ProviderError(self.kind, "temporary provider failure")
+        return ChatResponse(provider=self.name, model=self.model, content="done", finish_reason="stop")
+
+
 def init_repo(repo: Path) -> None:
     subprocess.run(["git", "init"], cwd=repo, check=True, text=True, capture_output=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
@@ -168,6 +191,49 @@ def test_default_loop_factory_uses_custom_limits(tmp_path: Path):
     loop = adapter._create_loop(task, tmp_path / "sessions" / task.instance_id)
 
     assert loop.limits == limits
+
+
+def test_default_loop_factory_wraps_provider_with_benchmark_retries(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repo(repo)
+    adapter = FirstCoderCodingAgentAdapter(
+        session_root=tmp_path / "sessions",
+        provider_factory=lambda provider_name: FakeProvider(),
+    )
+    task = CodingTask(
+        instance_id="sympy__sympy-20590",
+        repo_path=repo,
+        problem_statement="Fix the issue.",
+    )
+
+    loop = adapter._create_loop(task, tmp_path / "sessions" / task.instance_id)
+
+    assert isinstance(loop.provider, RetryableBenchmarkProvider)
+
+
+def test_retryable_benchmark_provider_retries_transient_errors() -> None:
+    provider = FlakyProvider(failures=2)
+    delays: list[float] = []
+    retrying = RetryableBenchmarkProvider(provider, max_retries=3, initial_delay_seconds=0.5, sleep=delays.append)
+
+    response = retrying.complete(ChatRequest(messages=[]))
+
+    assert response.content == "done"
+    assert provider.calls == 3
+    assert delays == [0.5, 1.0]
+
+
+def test_retryable_benchmark_provider_does_not_retry_non_retryable_errors() -> None:
+    provider = FlakyProvider(failures=1, kind=ProviderErrorKind.AUTH_ERROR)
+    delays: list[float] = []
+    retrying = RetryableBenchmarkProvider(provider, max_retries=3, initial_delay_seconds=0.5, sleep=delays.append)
+
+    with pytest.raises(ProviderError):
+        retrying.complete(ChatRequest(messages=[]))
+
+    assert provider.calls == 1
+    assert delays == []
 
 
 def test_default_loop_factory_auto_allows_repo_writes_for_benchmarks(tmp_path: Path):

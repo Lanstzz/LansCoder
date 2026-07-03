@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -17,7 +18,9 @@ from firstcoder.permissions.manager import PermissionManager
 from firstcoder.permissions.policy import DefaultPermissionPolicy
 from firstcoder.permissions.types import PermissionAction, PermissionDecision, PermissionDecisionKind, PermissionMode
 from firstcoder.providers.base import ChatProvider
+from firstcoder.providers.errors import ProviderError
 from firstcoder.providers.factory import create_provider
+from firstcoder.providers.types import ChatRequest, ChatResponse
 from firstcoder.tools.builtin import create_builtin_registry
 from firstcoder.utils.sandbox_access import SandboxAccess
 
@@ -42,6 +45,8 @@ class FirstCoderCodingAgentAdapter:
         provider_name: str | None = None,
         session_root: str | Path = ".firstcoder-eval",
         limits: AgentLoopLimits | None = None,
+        provider_retries: int = 3,
+        provider_retry_initial_delay_seconds: float = 2.0,
         loop_factory: LoopFactory | None = None,
         provider_factory: ProviderFactory = create_provider,
     ) -> None:
@@ -49,6 +54,8 @@ class FirstCoderCodingAgentAdapter:
         self.provider_name = provider_name
         self.session_root = Path(session_root)
         self.limits = limits
+        self.provider_retries = provider_retries
+        self.provider_retry_initial_delay_seconds = provider_retry_initial_delay_seconds
         self.loop_factory = loop_factory or self._create_loop
         self.provider_factory = provider_factory
 
@@ -101,10 +108,58 @@ class FirstCoderCodingAgentAdapter:
         )
         return AgentLoop(
             session=session,
-            provider=self.provider_factory(self.provider_name),
+            provider=self._create_provider(),
             tools=tools,
             limits=self.limits or AgentLoopLimits.swe_lite(),
         )
+
+    def _create_provider(self) -> ChatProvider:
+        provider = self.provider_factory(self.provider_name)
+        if self.provider_retries <= 0:
+            return provider
+        return RetryableBenchmarkProvider(
+            provider,
+            max_retries=self.provider_retries,
+            initial_delay_seconds=self.provider_retry_initial_delay_seconds,
+        )
+
+
+class RetryableBenchmarkProvider(ChatProvider):
+    """Retry transient provider failures during non-interactive benchmark runs."""
+
+    def __init__(
+        self,
+        provider: ChatProvider,
+        *,
+        max_retries: int,
+        initial_delay_seconds: float,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.provider = provider
+        self.max_retries = max(0, max_retries)
+        self.initial_delay_seconds = max(0.0, initial_delay_seconds)
+        self.sleep = sleep
+
+    @property
+    def name(self) -> str:
+        return self.provider.name
+
+    @property
+    def model(self) -> str:
+        return self.provider.model
+
+    def complete(self, request: ChatRequest) -> ChatResponse:
+        attempt = 0
+        while True:
+            try:
+                return self.provider.complete(request)
+            except ProviderError as exc:
+                if not exc.retryable or attempt >= self.max_retries:
+                    raise
+                delay = self.initial_delay_seconds * (2**attempt)
+                if delay > 0:
+                    self.sleep(delay)
+                attempt += 1
 
 
 class BenchmarkPermissionPolicy(DefaultPermissionPolicy):

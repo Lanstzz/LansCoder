@@ -27,8 +27,6 @@ if [ "${missing_packages[*]}" != "" ]; then
   apt-get install -y "${missing_packages[@]}"
 fi
 
-python3 -m pip install --upgrade pip
-
 python3 -m pip install "$PACKAGE_SPEC"
 
 echo "FIRSTCODER_INSTALL_SUCCESS"
