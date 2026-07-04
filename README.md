@@ -25,6 +25,7 @@
   · <a href="#quickstart">Quickstart</a>
   · <a href="#tui">TUI</a>
   · <a href="#core-experiment">Innovation</a>
+  · <a href="#skills">Skills</a>
   · <a href="#commands">Commands</a>
   · <a href="#architecture">Architecture</a>
 </p>
@@ -57,6 +58,7 @@ Most coding-agent demos show the surface: a prompt goes in, code changes come ou
 | How model responses become tool calls | `firstcoder/agent`, `firstcoder/providers` |
 | How tools touch files, shell, git, and the network | `firstcoder/tools` |
 | How an agent pauses before risky actions | `firstcoder/permissions` |
+| How reusable workflow instructions are discovered and loaded | `firstcoder/skills` |
 | How long sessions are stored, compacted, and resumed | `firstcoder/context`, `firstcoder/session` |
 | How a terminal UI streams state without hiding the loop | `firstcoder/app` |
 | How to evaluate a tiny coding-agent workflow locally | `benchmark/local_pytest` |
@@ -220,10 +222,36 @@ In short, FirstCoder treats compaction as a task lifecycle problem, not only a c
 | Streaming | OpenAI-compatible 流式 text, tool-call delta assembly, and basic `reasoning_delta` forwarding |
 | Tools | File reading/writing, shell, git, diagnostics, web fetch/search, todo, and user questions |
 | Permissions | Local `ALLOW / ASK / DENY` decisions plus long-lived grants |
+| Skills | Project and machine-level workflow discovery, routing, loading, and audit events |
 | Sessions | Append-only JSONL events, catalog, resume, rename, and share/export |
 | Context | Checkpoints, archives, task hashes, L1-L4 compaction, and `PROMPT_TOO_LONG` recovery |
 | TUI | Markdown rendering, live activity state, tool entries, permission prompts, and slash commands |
 | Evaluation | A small local pytest benchmark for checking whether the agent can solve tiny coding tasks |
+
+## Skills
+
+FirstCoder has a first-class skill layer for reusable workflow instructions. A skill is not just extra prose in `AGENTS.md`: it is discovered, routed, loaded before provider work, and recorded in the session log.
+
+Supported skill sources:
+
+| Source | Path |
+| --- | --- |
+| Project markdown skills | `<project-root>/skills/*.md` |
+| Project agent skills | `<project-root>/.agents/skills/*/SKILL.md` |
+| Machine-level agent skills | `~/.agents/skills/*/SKILL.md`, `~/.codex/skills/*/SKILL.md` |
+| Machine-level markdown skills | `~/.firstcoder/skills/*.md` |
+
+When a user message clearly matches a skill, FirstCoder loads that skill before the first provider request for the turn. Loaded skills can also declare required files, which are read from the same skill root and included with the loaded context.
+
+Skill behavior is auditable through append-only session events:
+
+```json
+{"type": "skill_selected", "skill_path": "skills/example.md", "reason": "metadata_match"}
+{"type": "skill_loaded", "skill_path": "skills/example.md", "content_hash": "..."}
+{"type": "skill_required_file_loaded", "file_path": "docs/policy.md", "content_hash": "..."}
+```
+
+Project skills take priority over global skills. Global skills can add machine-local capabilities, but they cannot override project instructions, permission policy, or sandbox boundaries.
 
 ## Providers
 
@@ -389,6 +417,9 @@ Textual TUI / CLI
                    +--> PermissionManager
                    |       allow / ask / deny / grants
                    |
+                   +--> SkillRouter / SkillLoader
+                   |       discover / route / load / audit
+                   |
                    +--> ContextWindowManager
                            checkpoint / archive / compact / recovery
 ```
@@ -404,6 +435,7 @@ firstcoder/
   eval/         benchmark adapter, patch extraction, prediction generation
   permissions/  policies, grants, project-level permission manager
   providers/    provider abstraction and vendor adapters
+  skills/       skill discovery, routing, loading, and session audit events
   session/      catalog, resume, transcript, share, redaction
   tools/        built-in tools, schemas, results, permission metadata
   utils/        JSON, schema, sandbox, subprocess, git helpers
