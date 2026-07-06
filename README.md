@@ -37,6 +37,10 @@ If you want to understand how coding agents actually work, FirstCoder keeps the 
 
 Most coding-agent demos show the surface: a prompt goes in, code changes come out. FirstCoder focuses on the machinery in between.
 
+Compared with larger projects like OpenCode, FirstCoder is intentionally smaller in scope. This repository keeps the core runtime in roughly 17k lines of Python, avoids a lot of extra platform surface area, and tries to preserve a better balance between practicality and readability.
+
+The goal is not to out-feature a bigger coding agent. The goal is to keep the system real enough to use, but small enough that you can still read it end to end and understand why each subsystem exists.
+
 It is built for people who want to:
 
 - study how a coding agent is assembled
