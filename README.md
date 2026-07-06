@@ -50,6 +50,17 @@ The goal is not to out-feature a bigger coding agent. The goal is to keep the sy
 
 That also makes FirstCoder a practical repo to study deeply, adapt for your own workflow, and turn into a resume-worthy or portfolio-friendly project after you have extended it.
 
+Compared with more tutorial-first or lightweight learning repos, FirstCoder also tries to stay closer to a small but testable engineering system.
+
+| Dimension | FirstCoder | Many learning-oriented agent repos |
+| --- | --- | --- |
+| Learning value | Readable subsystem boundaries and explicit docs | Often optimized for a single tutorial path or demo flow |
+| Practical surface | Real TUI, tools, permissions, sessions, provider adapters | Often focused on a narrower loop or a simpler proof of concept |
+| Verification | 80+ test files and multiple benchmark entry points | Often lighter on testing and benchmark integration |
+| Extension path | Easier to adapt into a portfolio or resume project | Often better for following along than for long-term extension |
+
+In this repo, the learning goal is important, but it is paired with enough runtime structure, tests, and benchmark hooks to make the project useful after the first read-through.
+
 It is built for people who want to:
 
 - study how a coding agent is assembled
