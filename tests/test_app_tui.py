@@ -3,9 +3,11 @@ import asyncio
 import pytest
 from rich.text import Text
 from textual.widgets import Markdown
+from textual.widgets import TextArea
 
 from firstcoder.agent.loop import ToolExecutionEvent
 from firstcoder.app.commands import CommandResult
+from firstcoder.app.command_suggestions import CommandSuggestionItem
 from firstcoder.app.commands import ContextCommandHandler
 from firstcoder.agent.user_input import UserInputOption, UserInputRequest
 from firstcoder.app.router import CompositeCommandHandler
@@ -779,6 +781,23 @@ class SubmitChatCommandHandler:
         )
 
 
+def _suggestions() -> list[CommandSuggestionItem]:
+    return [
+        CommandSuggestionItem(
+            replacement="/family-office-research",
+            label="family-office-research",
+            detail="家办研究",
+            kind="skill",
+        ),
+        CommandSuggestionItem(
+            replacement="/skills",
+            label="/skills",
+            detail="Pick a skill",
+            kind="command",
+        ),
+    ]
+
+
 def test_firstcoder_app_can_be_created_with_composite_handler_and_chat_runner() -> None:
     context_handler = ContextCommandHandler(session=FakeSession())
     composite = CompositeCommandHandler(
@@ -807,6 +826,96 @@ async def test_firstcoder_app_runs_plain_chat_when_only_chat_runner_is_configure
         await pilot.press("enter")
 
     assert runner.inputs == ["hello"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_firstcoder_app_submits_multiline_composer_text() -> None:
+    runner = FakeChatRunner()
+    app = FirstCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        input_widget = app.query_one("#input", TextArea)
+        input_widget.load_text("第一句\n第二句\n第三句")
+        await pilot.click("#input")
+        await pilot.press("enter")
+
+    assert runner.inputs == ["第一句\n第二句\n第三句"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_firstcoder_app_shift_enter_inserts_newline_without_submitting() -> None:
+    runner = FakeChatRunner()
+    app = FirstCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        await pilot.press(*"hello")
+        await pilot.press("shift+enter")
+        await pilot.press(*"world")
+        input_widget = app.query_one("#input", TextArea)
+
+    assert input_widget.text == "hello\nworld"
+    assert runner.inputs == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_firstcoder_app_shows_slash_suggestions_and_accepts_without_submitting() -> None:
+    runner = FakeChatRunner()
+    app = FirstCoderApp(chat_runner=runner, suggestion_items_provider=_suggestions)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        await pilot.press(*"/家办 研究 Walton")
+        await pilot.pause()
+        suggestions = app.query_one("#suggestions")
+        suggestion_text = str(getattr(suggestions, "content", ""))
+        assert "Suggestions:" in suggestion_text
+        assert "family-office-research" in suggestion_text
+
+        await pilot.press("enter")
+        await pilot.pause()
+        input_widget = app.query_one("#input", TextArea)
+
+    assert input_widget.text == "/family-office-research 研究 Walton"
+    assert runner.inputs == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_firstcoder_app_slash_suggestions_support_keyboard_selection() -> None:
+    app = FirstCoderApp(suggestion_items_provider=_suggestions)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        await pilot.press(*"/ski")
+        await pilot.pause()
+        await pilot.press("down")
+        await pilot.press("enter")
+        await pilot.pause()
+        input_widget = app.query_one("#input", TextArea)
+
+    assert input_widget.text == "/skills"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_firstcoder_app_escape_hides_slash_suggestions() -> None:
+    app = FirstCoderApp(suggestion_items_provider=_suggestions)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        await pilot.press(*"/家办")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        suggestions = app.query_one("#suggestions")
+        input_widget = app.query_one("#input", TextArea)
+
+    assert "hidden" in suggestions.classes
+    assert input_widget.text == "/家办"
 
 
 @pytest.mark.anyio
@@ -1022,7 +1131,7 @@ async def test_firstcoder_app_skill_picker_references_selected_skill_in_input() 
         input_widget = app.query_one("#input")
 
     assert handler.commands == ["/skills", "/skill-use skills/review.md"]
-    assert input_widget.value == "请使用 skills/review.md "
+    assert input_widget.text == "请使用 skills/review.md "
 
 
 @pytest.mark.anyio
@@ -1970,16 +2079,16 @@ async def test_firstcoder_app_recalls_input_history_with_arrow_keys() -> None:
 
         await pilot.press("up")
         input_widget = app.query_one("#input")
-        assert input_widget.value == "second"
+        assert input_widget.text == "second"
 
         await pilot.press("up")
-        assert input_widget.value == "first"
+        assert input_widget.text == "first"
 
         await pilot.press("down")
-        assert input_widget.value == "second"
+        assert input_widget.text == "second"
 
         await pilot.press("down")
-        assert input_widget.value == ""
+        assert input_widget.text == ""
 
     assert runner.inputs == ["first", "second"]
 

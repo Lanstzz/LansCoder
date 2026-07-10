@@ -52,7 +52,8 @@ ScrollBarCorner {
 }
 
 .composer {
-    height: 4;
+    height: auto;
+    max-height: 9;
     margin: 0 2 0 2;
     background: #0f1014;
     border-top: solid #626263;
@@ -86,8 +87,22 @@ ScrollBarCorner {
     color: #cfd1d6;
 }
 
-Input > .input--placeholder {
+#input > .text-area--placeholder {
     color: #808185;
+}
+
+.suggestions {
+    height: auto;
+    max-height: 5;
+    margin: 0;
+    padding: 0 1;
+    color: #808185;
+    background: #0f1014;
+    border-left: solid #303238;
+}
+
+.suggestions.hidden {
+    display: none;
 }
 
 .activity-line {

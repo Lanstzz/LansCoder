@@ -7,6 +7,7 @@ from pathlib import Path
 from firstcoder.agent.loop_limits import AgentLoopLimits
 from firstcoder.agent.session import AgentSession, create_project_permission_manager
 from firstcoder.app.commands import ContextCommandHandler
+from firstcoder.app.command_suggestions import builtin_command_suggestion_items, skill_suggestion_items
 from firstcoder.app.help_commands import HelpCommandHandler
 from firstcoder.app.model_commands import ModelCommandHandler, ModelState
 from firstcoder.app.permission_commands import PermissionCommandHandler
@@ -120,7 +121,8 @@ def create_firstcoder_app(
     )
     context_handler = ContextCommandHandler(session=current, context_manager=context_manager)
     permission_handler = PermissionCommandHandler(session=current)
-    skill_handler = SkillCommandHandler(catalog_provider=lambda: discover_all_skills(project_path))
+    skill_catalog_provider = lambda: discover_all_skills(project_path)
+    skill_handler = SkillCommandHandler(catalog_provider=skill_catalog_provider)
     chat_runner = AgentChatRunner(
         current_session=current,
         provider=resolved_provider,
@@ -154,6 +156,10 @@ def create_firstcoder_app(
             provider_model=resolved_provider.model,
             project_name=project_path.resolve().name,
         ),
+        suggestion_items_provider=lambda: [
+            *builtin_command_suggestion_items(),
+            *skill_suggestion_items(skill_catalog_provider()),
+        ],
     )
 
 
