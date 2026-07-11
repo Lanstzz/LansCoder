@@ -96,20 +96,6 @@ ScrollBarCorner {
     color: #808185;
 }
 
-.suggestions {
-    height: auto;
-    max-height: 5;
-    margin: 0;
-    padding: 0 1;
-    color: #808185;
-    background: #0f1014;
-    border-left: solid #303238;
-}
-
-.suggestions.hidden {
-    display: none;
-}
-
 .activity-line {
     height: 1;
     margin: 0 3;

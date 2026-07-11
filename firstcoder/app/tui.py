@@ -27,12 +27,6 @@ from textual.message import Message
 from textual.widgets import Markdown, Static, TextArea
 
 from firstcoder.app.commands import CommandResult
-from firstcoder.app.command_suggestions import (
-    CommandSuggestionItem,
-    CommandSuggestionState,
-    CommandSuggestionsView,
-    query_command_suggestions,
-)
 from firstcoder.app.activity_view import (
     activity_markup,
     post_tool_reasoning_text,
@@ -201,14 +195,12 @@ class FirstCoderApp(App[None]):
         chat_runner: ChatRunnerLike | None = None,
         current_session: CurrentSessionLike | None = None,
         config: FirstCoderTuiConfig | None = None,
-        suggestion_items_provider: Callable[[], list[CommandSuggestionItem]] | None = None,
     ) -> None:
         super().__init__()
         self.command_handler = command_handler
         self.chat_runner = chat_runner
         self.current_session = current_session
         self.config = config or FirstCoderTuiConfig()
-        self.suggestion_items_provider = suggestion_items_provider or (lambda: [])
         self._chat_busy = False
         self._chat_worker = None
         self._chat_turn_token = 0
@@ -241,7 +233,6 @@ class FirstCoderApp(App[None]):
         self._input_history: list[str] = []
         self._input_history_index: int | None = None
         self._picker: TuiPickerState | None = None
-        self._suggestions: CommandSuggestionState | None = None
         self._welcome_widget: Static | None = None
         self._welcome_particle_timer: Timer | None = None
         self._welcome_particle_frame = 0
@@ -263,7 +254,6 @@ class FirstCoderApp(App[None]):
                     soft_wrap=True,
                     compact=True,
                 )
-                yield CommandSuggestionsView(id="suggestions")
 
     def on_mount(self) -> None:
         self.title = self.config.title
@@ -315,19 +305,12 @@ class FirstCoderApp(App[None]):
 
     async def on_composer_text_area_submitted(self, event: ComposerTextArea.Submitted) -> None:
         event.stop()
-        if self._suggestions is not None:
-            self._accept_suggestion()
-            return
         if self._picker is not None:
             self._picker_select_index(self._picker.selected_index)
             return
         await self._submit_composer()
 
     def on_key(self, event: Key) -> None:
-        if self._suggestions is not None and self._handle_suggestion_key(event):
-            event.stop()
-            event.prevent_default()
-            return
         if self._picker is not None and self._handle_picker_key(event):
             event.stop()
             event.prevent_default()
@@ -350,11 +333,6 @@ class FirstCoderApp(App[None]):
         event.prevent_default()
         input_widget.load_text(recalled)
         input_widget.cursor_location = input_widget.document.end
-        self._refresh_suggestions()
-
-    def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        if getattr(event.text_area, "id", None) == "input":
-            self._refresh_suggestions()
 
     def _next_chat_turn_token(self) -> int:
         self._chat_turn_token += 1
@@ -442,50 +420,6 @@ class FirstCoderApp(App[None]):
             self._input_history_index += 1
             return self._input_history[self._input_history_index]
         return None
-
-    def _refresh_suggestions(self) -> None:
-        try:
-            text = self.query_one("#input", TextArea).text
-        except NoMatches:
-            return
-        self._suggestions = query_command_suggestions(text, self.suggestion_items_provider())
-        self._render_suggestions()
-
-    def _render_suggestions(self) -> None:
-        try:
-            widget = self.query_one("#suggestions", CommandSuggestionsView)
-        except NoMatches:
-            return
-        widget.show_state(self._suggestions)
-
-    def _handle_suggestion_key(self, event: Key) -> bool:
-        suggestions = self._suggestions
-        if suggestions is None:
-            return False
-        if event.key == "up":
-            suggestions.move(-1)
-            self._render_suggestions()
-            return True
-        if event.key == "down":
-            suggestions.move(1)
-            self._render_suggestions()
-            return True
-        if event.key == "escape":
-            self._suggestions = None
-            self._render_suggestions()
-            return True
-        return False
-
-    def _accept_suggestion(self) -> None:
-        suggestions = self._suggestions
-        if suggestions is None:
-            return
-        input_widget = self.query_one("#input", TextArea)
-        input_widget.load_text(suggestions.accept_selected())
-        input_widget.cursor_location = input_widget.document.end
-        input_widget.focus()
-        self._suggestions = None
-        self._render_suggestions()
 
     def _submit_chat_text(self, text: str) -> None:
         if self.chat_runner is None:
