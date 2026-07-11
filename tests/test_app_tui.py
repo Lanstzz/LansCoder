@@ -336,17 +336,17 @@ async def test_firstcoder_app_uses_custom_chrome_instead_of_textual_header_foote
     assert "main" in widget_ids
 
 
-def test_firstcoder_app_topbar_text_includes_session_id() -> None:
+def test_firstcoder_app_topbar_hides_session_id() -> None:
     app = FirstCoderApp(current_session=FakeSession())
 
     assert app._topbar_text() == (
         "[#7bba55]FirstCoder[/]   [#303238]·[/]   [#7bba55]idle · ready[/]   "
-        "[#303238]·[/]   [#6e6d72]sess_test[/]   "
         "[#303238]·[/]   [#6e6d72]standard[/]"
     )
+    assert "sess_test" not in app._topbar_text()
 
 
-def test_firstcoder_app_topbar_text_includes_provider_model_mode_and_cwd() -> None:
+def test_firstcoder_app_topbar_shows_a_green_provider_and_hides_session_id() -> None:
     app = FirstCoderApp(
         current_session=FakeSession(),
         config=FirstCoderTuiConfig(
@@ -358,8 +358,7 @@ def test_firstcoder_app_topbar_text_includes_provider_model_mode_and_cwd() -> No
 
     assert app._topbar_text() == (
         "[#7bba55]FirstCoder[/]   [#303238]·[/]   [#7bba55]idle · ready[/]   "
-        "[#303238]·[/]   [#6e6d72]sess_test[/]   "
-        "[#303238]·[/]   [#6e6d72]yurenapi/gpt-5.5[/]   "
+        "[#303238]·[/]   [#7bba55]yurenapi[/][#6e6d72]/gpt-5.5[/]   "
         "[#303238]·[/]   [#6e6d72]standard[/]   [#303238]·[/]   [#6e6d72]cwd FirstCoder[/]"
     )
 
@@ -485,9 +484,9 @@ def test_firstcoder_app_topbar_uses_spacious_two_sided_layout_when_width_is_know
     text = app._topbar_text(width=120)
 
     assert text.startswith("[#7bba55]FirstCoder[/]")
-    assert "   [#303238]·[/]   [#6e6d72]sess_test[/]" not in text
     assert "[#7bba55]idle · ready[/]" in text
-    assert "[#6e6d72]sess_test[/]" in text
+    assert "sess_test" not in text
+    assert "[#7bba55]yurenapi[/][#6e6d72]/gpt-5.5[/]" in text
     assert "[#6e6d72]cwd FirstCoder[/]" in text
     assert " " * 20 in text
 
@@ -501,7 +500,6 @@ def test_firstcoder_app_topbar_highlights_bypass_mode_and_truncates_long_session
 
     assert app._topbar_text() == (
         "[#7bba55]FirstCoder[/]   [#303238]·[/]   [#7bba55]idle · ready[/]   "
-        "[#303238]·[/]   [#6e6d72]sess_c8d401e2[/]   "
         "[#303238]·[/]   [#b28443]bypass[/]"
     )
 
@@ -527,7 +525,7 @@ def test_firstcoder_app_topbar_truncates_long_activity_before_metadata() -> None
 
     text = app._topbar_text(width=150)
 
-    assert "[#6e6d72]yurenapi/very-long-model-name[/]" in text
+    assert "[#7bba55]yurenapi[/][#6e6d72]/very-long-model-name[/]" in text
     assert "[#6e6d72]cwd FirstCoder[/]" in text
     assert "reading think tool result reading think tool result" not in text
     assert "thinking" in Text.from_markup(text).plain
@@ -548,14 +546,14 @@ def test_firstcoder_app_topbar_fits_narrow_width_with_long_activity_and_metadata
     plain = Text.from_markup(text).plain
 
     assert "\n" in plain
-    assert "sess_test" in plain
+    assert "sess_test" not in plain
     assert "yurenapi/very-long-model-name" in plain
     assert "cwd FirstCoder" in plain
 
     narrow_plain = Text.from_markup(app._topbar_text(width=60)).plain
 
     assert "\n" in narrow_plain
-    assert "sess_test" in narrow_plain
+    assert "sess_test" not in narrow_plain
     assert "yurenapi/very-long-model-name" in narrow_plain
     assert "cwd FirstCoder" in narrow_plain
 
@@ -573,7 +571,7 @@ def test_firstcoder_app_topbar_wraps_narrow_metadata_with_each_row_right_aligned
     plain_rows = Text.from_markup(app._topbar_text(width=60)).plain.splitlines()
 
     assert plain_rows[0].startswith("FirstCoder")
-    assert "sess_test" in plain_rows[0]
+    assert "sess_test" not in "\n".join(plain_rows)
     assert any("idle · ready" in row for row in plain_rows)
     assert any("yurenapi/very-long-model-name" in row for row in plain_rows)
     assert "cwd FirstCoder" in plain_rows[-1]

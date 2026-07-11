@@ -843,13 +843,17 @@ class FirstCoderApp(App[None]):
             session_id = self.current_session.session_id
         brand = "[#7bba55]FirstCoder[/]"
         status = activity_markup(self._activity_text)
-        metadata_values: list[tuple[str, str, int | None]] = [
-            ("#6e6d72", _short_session_id(session_id) if session_id else "no session", None)
-        ]
+        metadata_values: list[tuple[str | None, str, int | None]] = []
         if self.config.provider_name or self.config.provider_model:
             provider = self.config.provider_name or "provider"
             model = self.config.provider_model or "model"
-            metadata_values.append(("#6e6d72", f"{provider}/{model}", 18))
+            metadata_values.append(
+                (
+                    None,
+                    f"[#7bba55]{escape(provider)}[/][#6e6d72]/{escape(model)}[/]",
+                    18,
+                )
+            )
         mode = getattr(self.current_session, "mode", None) if self.current_session is not None else None
         if mode:
             mode_text = str(mode)
@@ -1399,15 +1403,15 @@ def _markup_width(markup: str) -> int:
     return len(Text.from_markup(markup).plain)
 
 
-def _metadata_markup(values: list[tuple[str, str, int | None]], *, separator: str) -> str:
-    return separator.join(f"[{color}]{escape(value)}[/]" for color, value, _ in values)
+def _metadata_markup(values: list[tuple[str | None, str, int | None]], *, separator: str) -> str:
+    return separator.join(value if color is None else f"[{color}]{escape(value)}[/]" for color, value, _ in values)
 
 
 def _responsive_topbar_markup(
     *,
     brand: str,
     status: str,
-    metadata_values: list[tuple[str, str, int | None]],
+    metadata_values: list[tuple[str | None, str, int | None]],
     width: int,
 ) -> str:
     """Wrap topbar metadata on narrow screens without losing any fields.
