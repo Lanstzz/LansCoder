@@ -140,14 +140,6 @@ Conversation flow:
 
 ![FirstCoder conversation flow](docs/images/tui-empty.png)
 
-Tool calls appear in the conversation flow:
-
-![FirstCoder tool calls](docs/images/tui-tools.png)
-
-Permission requests pause the agent until the user decides:
-
-![FirstCoder permission request](docs/images/tui-permission.png)
-
 ## Documentation
 
 - [Technical Docs Index](docs/README.md)
