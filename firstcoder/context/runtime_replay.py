@@ -40,6 +40,11 @@ def _apply_event(state: SessionRuntimeState, event: SessionEvent) -> None:
         state.record_compaction_event(_compaction_history_entry(event, compaction_event))
         return
 
+    if event.type == "compaction_skipped":
+        if event.payload.get("reason") == "skipped_no_effect":
+            state.last_no_effect_compaction_fingerprint = _optional_str(event.payload.get("input_fingerprint"))
+        return
+
     if event.type == "llm_compaction_completed":
         _apply_l4_compaction(state, event)
 

@@ -235,6 +235,22 @@ class SessionEventWriter:
             )
         )
 
+    def append_compaction_skipped(self, *, trigger: str, input_fingerprint: str, reason: str) -> None:
+        self.store.append_event(
+            SessionEvent(
+                id=new_event_id(),
+                session_id=self.session_id,
+                type="compaction_skipped",
+                payload={
+                    "event_version": CONTEXT_EVENT_SCHEMA_VERSION,
+                    "trigger": trigger,
+                    "input_fingerprint": input_fingerprint,
+                    "reason": reason,
+                    "created_at": utc_now_iso(),
+                },
+            )
+        )
+
     def append_task_boundary_observation(self, observation: TaskBoundaryObservation) -> None:
         event = TaskBoundaryService().to_event(session_id=self.session_id, observation=observation)
         self.store.append_event(event)

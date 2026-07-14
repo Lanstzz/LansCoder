@@ -28,6 +28,7 @@ class ContextCompactionConfig:
     max_tail_tokens: int = 28_000
     cold_turn_distance: int = 8
     cold_preview_chars: int = 160
+    reserved_output_tokens: int = 4_096
 
     @classmethod
     def from_token_budget(
@@ -78,9 +79,14 @@ class TriggerScope:
         return self.checkpoint_summary_tokens + _estimate_messages_tokens(self.tail_messages)
 
 
-def evaluate_context_triggers(view: SessionView, config: ContextCompactionConfig) -> ContextTriggerDecision:
+def evaluate_context_triggers(
+    view: SessionView,
+    config: ContextCompactionConfig,
+    *,
+    estimated_tokens_override: int | None = None,
+) -> ContextTriggerDecision:
     scope = _trigger_scope(view)
-    estimated_tokens = scope.estimated_tokens
+    estimated_tokens = estimated_tokens_override if estimated_tokens_override is not None else scope.estimated_tokens
     target_tokens = config.target_tokens
 
     if estimated_tokens >= config.auto_compact_threshold:

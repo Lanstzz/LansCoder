@@ -16,6 +16,7 @@ from firstcoder.context.models import AgentMessage, MessagePart, SessionView
 from firstcoder.context.runtime_state import SessionRuntimeState
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.context.triggers import ContextCompactionConfig, evaluate_context_triggers
+from firstcoder.context.writer import SessionEventWriter
 
 
 class FakePipeline:
@@ -155,6 +156,63 @@ def test_manager_skips_compact_when_under_threshold(tmp_path: Path) -> None:
     assert pipeline.calls == []
     assert l4.calls == []
     assert store.list_events("sess_test") == []
+
+
+def test_manager_skips_repeated_auto_noop_without_persisting_a_second_completion(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    view = _view(_message("msg_1", "x" * 80))
+    noop = _programmatic_result(view, before_tokens=20, after_tokens=20, stopped_at="not_reached")
+    noop.event.changed_parts = 0
+    noop.event.noop = True
+    manager = ContextWindowManager(
+        store=store,
+        pipeline=FakePipeline(noop),
+        l4_service=FakeL4(_l4_result()),
+        config=ContextCompactionConfig(auto_compact_threshold=1, target_tokens=10_000),
+    )
+
+    state = SessionRuntimeState(session_id="sess_test")
+    first = manager.compact_if_needed(
+        ContextCompactRequest(view=view, runtime_state=state, trigger=ContextWindowTrigger.AUTO)
+    )
+    second = manager.compact_if_needed(
+        ContextCompactRequest(view=view, runtime_state=state, trigger=ContextWindowTrigger.AUTO)
+    )
+
+    assert first.status == "skipped"
+    assert second.status == "skipped"
+    assert first.reason == second.reason == "skipped_no_effect"
+    assert len(manager.pipeline.calls) == 1
+    assert [event.type for event in store.list_events("sess_test")] == ["compaction_skipped"]
+
+
+def test_manager_reports_still_over_budget_after_successful_l4_checkpoint(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    writer = SessionEventWriter(store=store, session_id="sess_test")
+    message_id = writer.append_user_message("x" * 80)
+    view = store.rebuild_session_view("sess_test")
+    pipeline = FakePipeline(_programmatic_result(view, before_tokens=100, after_tokens=100, stopped_at="not_reached"))
+    manager = ContextWindowManager(
+        store=store,
+        pipeline=pipeline,
+        l4_service=WritingFakeL4(store, tail_start_message_id=message_id, covered_until_message_id=message_id),
+        config=ContextCompactionConfig(auto_compact_threshold=1, target_tokens=10),
+    )
+
+    result = manager.compact_if_needed(
+        ContextCompactRequest(
+            view=view,
+            runtime_state=SessionRuntimeState(session_id="sess_test"),
+            trigger=ContextWindowTrigger.AUTO,
+            estimate_tokens=lambda candidate: 100 if candidate.checkpoints else 1_000,
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.reason == "still_over_budget"
+    assert result.l4_event is not None
+    assert result.l4_event.status == "success"
+    assert result.final_failure_reason == "still_over_budget"
 
 
 def test_manager_runs_pipeline_when_task_hash_changed(tmp_path: Path) -> None:
@@ -394,11 +452,12 @@ def test_manager_uses_effective_tokens_after_programmatic_compaction(tmp_path: P
         )
     )
 
-    assert result.status == "success"
-    assert result.reason == "large_tool_result"
+    assert result.status == "skipped"
+    assert result.reason == "skipped_no_effect"
     assert result.l4_event is None
     assert l4.calls == []
     assert result.after_tokens <= 1_000
+    assert [event.type for event in store.list_events("sess_test")] == ["compaction_skipped"]
 
 
 def test_manager_returns_rebuilt_view_after_l4_writes_checkpoint(tmp_path: Path) -> None:
@@ -428,6 +487,7 @@ def test_manager_returns_rebuilt_view_after_l4_writes_checkpoint(tmp_path: Path)
             view=view,
             runtime_state=SessionRuntimeState(session_id="sess_test"),
             trigger=ContextWindowTrigger.AUTO,
+            estimate_tokens=lambda candidate: 100 if candidate.checkpoints else 1_000,
         )
     )
 

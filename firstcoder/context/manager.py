@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from collections.abc import Callable
 from typing import Protocol, Literal
 
 from firstcoder.context.compaction import CompactionPipeline, CompactionRequest, CompactionEvent, CompactionResult
 from firstcoder.context.fallback import CompactFallbackPolicy, FallbackStep
+from firstcoder.context.identity import stable_json_hash
 from firstcoder.context.llm_compact import LlmCompactRequest, LlmCompactService, LlmCompactEvent
 from firstcoder.context.models import SessionView
 from firstcoder.context.runtime_state import SessionRuntimeState, auto_compact_circuit_is_open
@@ -54,6 +56,7 @@ class ContextCompactRequest:
     mode: ContextCompactMode | str = ContextCompactMode.AUTO
     current_turn: int = 0
     target_tokens: int | None = None
+    estimate_tokens: Callable[[SessionView], int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,9 +115,10 @@ class ContextWindowManager:
 
         trigger = ContextWindowTrigger(request.trigger)
         mode = ContextCompactMode(request.mode)
-        trigger_decision = evaluate_context_triggers(request.view, self.config)
+        trigger_decision = self._trigger_decision(request.view, request)
         before_tokens = trigger_decision.estimated_tokens
         auto_failure_count_before = request.runtime_state.auto_compact_failure_count
+        input_fingerprint = _effective_context_fingerprint(request.view)
 
         if not self._should_compact(trigger=trigger, decision=trigger_decision):
             # AUTO 场景下多数调用都会走到这里。返回 skipped 是有意义的状态，方便
@@ -142,6 +146,18 @@ class ContextWindowManager:
                 after_tokens=before_tokens,
             )
 
+        if (
+            trigger == ContextWindowTrigger.AUTO
+            and request.runtime_state.last_no_effect_compaction_fingerprint == input_fingerprint
+        ):
+            return ContextCompactResult(
+                status="skipped",
+                reason="skipped_no_effect",
+                view=request.view,
+                before_tokens=before_tokens,
+                after_tokens=before_tokens,
+            )
+
         target_tokens = request.target_tokens or self.config.target_for_trigger(trigger.value)
         force_route_current_text = _force_route_current_text_for_trigger(trigger)
         required_levels: tuple[Literal["l1", "l2", "l3"], ...] = (
@@ -161,16 +177,37 @@ class ContextWindowManager:
                 force_old_task_compaction=trigger == ContextWindowTrigger.TASK_HASH_CHANGED,
             )
         )
+        after_programmatic = self._trigger_decision(programmatic.view, request)
+        after_tokens = after_programmatic.estimated_tokens
+
+        if (
+            trigger == ContextWindowTrigger.AUTO
+            and programmatic.event.noop
+            and after_tokens <= target_tokens
+        ):
+            request.runtime_state.last_no_effect_compaction_fingerprint = input_fingerprint
+            SessionEventWriter(store=self.store, session_id=request.view.session_id).append_compaction_skipped(
+                trigger=trigger.value,
+                input_fingerprint=input_fingerprint,
+                reason="skipped_no_effect",
+            )
+            return ContextCompactResult(
+                status="skipped",
+                reason="skipped_no_effect",
+                view=programmatic.view,
+                before_tokens=before_tokens,
+                after_tokens=after_tokens,
+                programmatic_event=programmatic.event,
+            )
+
         self._record_programmatic_event(
             session_id=request.view.session_id,
             trigger=trigger,
             target_tokens=target_tokens,
             event=programmatic.event,
         )
-        after_programmatic = evaluate_context_triggers(programmatic.view, self.config)
-        after_tokens = after_programmatic.estimated_tokens
 
-        if after_tokens <= target_tokens:
+        if after_tokens <= target_tokens and trigger != ContextWindowTrigger.PROMPT_TOO_LONG:
             # L1-L3 已经足够时，不需要调用 LLM。这里仍然写入 compaction_completed，
             # 这样 resume/debug 能看到本次压缩发生过什么。
             self._record_auto_success_if_needed(request=request, mode=mode)
@@ -286,7 +323,25 @@ class ContextWindowManager:
         rebuilt_view = self.store.rebuild_session_view(request.view.session_id)
         # checkpoint 写入后必须重新 rebuild，因为当前内存里的 programmatic.view 还不知道
         # 新 checkpoint 事件。后续 token 估算和 provider 投影都应基于重放后的视图。
-        after_l4 = evaluate_context_triggers(rebuilt_view, self.config)
+        after_l4 = self._trigger_decision(rebuilt_view, request)
+        if after_l4.estimated_tokens > target_tokens:
+            self._record_auto_failure_if_needed(
+                request=request,
+                mode=mode,
+                before_failure_count=auto_failure_count_before,
+                failure_reason="still_over_budget",
+            )
+            return ContextCompactResult(
+                status="failed",
+                reason="still_over_budget",
+                view=rebuilt_view,
+                before_tokens=before_tokens,
+                after_tokens=after_l4.estimated_tokens,
+                programmatic_event=programmatic.event,
+                l4_event=l4_result.event,
+                fallback_steps=fallback_steps,
+                final_failure_reason="still_over_budget",
+            )
         self._record_auto_success_if_needed(request=request, mode=mode)
 
         return ContextCompactResult(
@@ -312,7 +367,7 @@ class ContextWindowManager:
     ) -> ContextCompactResult | None:
         reason = l4_event.failure_reason or l4_event.status
         action = self.fallback_policy.action_for(reason)
-        before_tokens = evaluate_context_triggers(programmatic.view, self.config).estimated_tokens
+        before_tokens = self._trigger_decision(programmatic.view, request).estimated_tokens
 
         if action == "stronger_programmatic":
             stronger = self.pipeline.compact(
@@ -334,7 +389,7 @@ class ContextWindowManager:
                 target_tokens=target_tokens,
                 event=stronger.event,
             )
-            after_decision = evaluate_context_triggers(stronger.view, self.config)
+            after_decision = self._trigger_decision(stronger.view, request)
             status = "success" if after_decision.estimated_tokens <= target_tokens else "failed"
             step = FallbackStep(
                 step=1,
@@ -376,7 +431,7 @@ class ContextWindowManager:
                 )
             )
             rebuilt_view = self.store.rebuild_session_view(request.view.session_id)
-            after_retry = evaluate_context_triggers(rebuilt_view, self.config)
+            after_retry = self._trigger_decision(rebuilt_view, request)
             retry_status = "success" if retry.event.status == "success" else "failed"
             retry_step = FallbackStep(
                 step=2,
@@ -420,7 +475,7 @@ class ContextWindowManager:
                 )
             )
             rebuilt_view = self.store.rebuild_session_view(request.view.session_id)
-            after_retry = evaluate_context_triggers(rebuilt_view, self.config)
+            after_retry = self._trigger_decision(rebuilt_view, request)
             status = "success" if retry.event.status == "success" else "failed"
             step = FallbackStep(
                 step=1,
@@ -520,6 +575,10 @@ class ContextWindowManager:
             return True
         return decision.should_compact
 
+    def _trigger_decision(self, view: SessionView, request: ContextCompactRequest):
+        estimate = request.estimate_tokens(view) if request.estimate_tokens is not None else None
+        return evaluate_context_triggers(view, self.config, estimated_tokens_override=estimate)
+
     def _record_programmatic_event(
         self,
         *,
@@ -567,4 +626,14 @@ def _with_fallback(
         event,
         fallback_steps=fallback_steps,
         final_failure_reason=final_failure_reason,
+    )
+
+
+def _effective_context_fingerprint(view: SessionView) -> str:
+    return stable_json_hash(
+        {
+            "session_id": view.session_id,
+            "messages": [message.to_dict() for message in view.messages],
+        },
+        length=24,
     )

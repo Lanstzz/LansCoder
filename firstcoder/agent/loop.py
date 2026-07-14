@@ -26,6 +26,7 @@ from firstcoder.agent.verification import is_successful_verification_result
 from firstcoder.context.context_builder import ContextBuilder
 from firstcoder.context.manager import ContextCompactRequest, ContextWindowTrigger
 from firstcoder.context.system_prompt import PromptPrefixCache
+from firstcoder.context.token_budget import estimate_chat_request_tokens
 from firstcoder.context.task_boundary import TaskBoundaryService, observation_from_tool_result_data
 from firstcoder.permissions.types import PermissionDecisionKind, PermissionRequest
 from firstcoder.permissions.types import PermissionMode
@@ -1233,7 +1234,24 @@ class AgentLoop:
                 runtime_state=self.session.runtime_state,
                 trigger=trigger,
                 current_turn=self.session.current_turn,
+                estimate_tokens=self._estimate_provider_request_tokens,
             )
+        )
+
+    def _estimate_provider_request_tokens(self, view) -> int:
+        definitions = self._provider_tool_definitions()
+        system_prefix = self.session.build_system_prefix(
+            provider_name=self.provider.name,
+            provider_model=self.provider.model,
+            provider_capabilities=getattr(self.provider, "capabilities", None),
+        )
+        messages = self.context_builder.build_provider_messages(view, system_prefix=system_prefix)
+        config = getattr(self.context_manager, "config", None)
+        reserved_output_tokens = getattr(config, "reserved_output_tokens", 4_096)
+        return estimate_chat_request_tokens(
+            messages=messages,
+            tools=definitions,
+            reserved_output_tokens=reserved_output_tokens,
         )
 
     def _provider_tool_definitions(self):
