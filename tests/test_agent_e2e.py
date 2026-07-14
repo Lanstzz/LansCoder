@@ -223,8 +223,8 @@ def test_prompt_too_long_e2e_writes_l4_checkpoint_and_retries_with_summary(tmp_p
         store=store,
         config=ContextCompactionConfig(
             auto_compact_threshold=1_000_000,
-            target_tokens=1,
-            blocking_target_tokens=1,
+            target_tokens=100_000,
+            blocking_target_tokens=100_000,
         ),
         l4_service=LlmCompactService(
             store=store,
@@ -256,7 +256,7 @@ def _compact_manager(store: JsonlSessionStore, provider: ChatProvider, *, reason
     max_tail_messages = 2 if reason == "tail_message_count" else 1_000
     large_tool_result_tokens = 10 if reason == "large_tool_result" else 1_000_000
     max_turn_tool_result_tokens = 10 if reason == "turn_tool_results" else 1_000_000
-    target_tokens = 1_000 if reason == "large_tool_result" else 1
+    target_tokens = 10_000 if reason == "large_tool_result" else 1
     return ContextWindowManager(
         store=store,
         config=ContextCompactionConfig(
@@ -357,10 +357,10 @@ def test_auto_large_single_tool_result_e2e_writes_auto_compaction(tmp_path) -> N
     ).run_user_turn("调用大工具")
 
     assert response.content == "完成"
-    compact = _compact_events(store, "sess_large_tool")[0]
-    assert compact.payload["trigger"] == "auto"
-    assert compact.payload["reason"] == "already_within_budget"
-    assert compact.payload["event"]["noop"] is True
+    skipped = _events(store, "sess_large_tool", "compaction_skipped")
+    assert skipped[-1].payload["trigger"] == "auto"
+    assert skipped[-1].payload["reason"] == "skipped_no_effect"
+    assert _compact_events(store, "sess_large_tool") == []
     assert not _checkpoint_events(store, "sess_large_tool")
 
 

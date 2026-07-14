@@ -84,6 +84,7 @@ class SessionRuntimeState:
     last_auto_compact_failure_reason: str | None = None
     system_prompt_fingerprint: str | None = None
     last_compaction_input_fingerprint: str | None = None
+    last_no_effect_compaction_fingerprint: str | None = None
     recent_compaction_events: list[CompactionHistoryEntry] = field(default_factory=list)
 
     def observe_task_hash_candidate(

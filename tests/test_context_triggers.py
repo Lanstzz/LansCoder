@@ -3,9 +3,10 @@ from pathlib import Path
 from firstcoder.context.checkpoint import Checkpoint
 from firstcoder.context.manager import ContextCompactRequest, ContextWindowManager, ContextWindowTrigger
 from firstcoder.context.models import AgentMessage, MessagePart, SessionView
+from firstcoder.providers.types import ChatMessage, ToolDefinition
 from firstcoder.context.runtime_state import SessionRuntimeState
 from firstcoder.context.store import JsonlSessionStore
-from firstcoder.context.token_budget import TokenBudgetService
+from firstcoder.context.token_budget import TokenBudgetService, estimate_chat_request_tokens
 from firstcoder.context.triggers import ContextCompactionConfig, evaluate_context_triggers
 
 
@@ -52,6 +53,39 @@ def test_compaction_config_can_be_derived_from_token_budget_service() -> None:
     assert config.auto_compact_threshold == 738
     assert config.target_tokens == 630
     assert config.blocking_target_tokens == 630
+
+
+def test_request_token_estimate_includes_system_messages_tools_and_reserved_output() -> None:
+    estimate = estimate_chat_request_tokens(
+        messages=[
+            ChatMessage(role="system", content="system" * 40),
+            ChatMessage(role="user", content="user" * 40),
+        ],
+        tools=[
+            ToolDefinition(
+                name="view",
+                description="read a file" * 20,
+                parameters={"type": "object", "properties": {"path": {"type": "string"}}},
+            )
+        ],
+        reserved_output_tokens=50,
+    )
+
+    assert estimate >= 140
+
+
+def test_request_token_estimate_reserves_requested_output_space() -> None:
+    baseline = estimate_chat_request_tokens(
+        messages=[ChatMessage(role="user", content="hello")],
+        tools=[],
+    )
+    reserved = estimate_chat_request_tokens(
+        messages=[ChatMessage(role="user", content="hello")],
+        tools=[],
+        reserved_output_tokens=512,
+    )
+
+    assert reserved == baseline + 512
 
 
 def test_task_switch_target_defaults_lower_and_allows_explicit_override() -> None:
