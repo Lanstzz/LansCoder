@@ -126,6 +126,8 @@ export FIRSTCODER_API_KEY="your-api-key"
 项目:  ./firstcoder.toml
 ```
 
+> 给细心用户的小提示：某些 provider 与模型组合，会让 TUI 顶栏多一点个性。
+
 ## TUI
 
 FirstCoder 的 TUI 不是为了把 agent loop 藏起来，而是为了把它展示出来。你可以在一个界面里看到 session 状态、流式输出、工具调用、工具结果和权限请求。

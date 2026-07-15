@@ -128,9 +128,8 @@ project: ./firstcoder.toml
 
 Provider support is centered on the OpenAI Chat Completions-compatible path. The OpenAI-compatible 流式 adapter is the mainline streaming implementation and normalizes provider errors such as PROMPT_TOO_LONG. The Anthropic provider is still 实验性 and does not yet expose Anthropic 原生 thinking/cache/streaming. FirstCoder does not use the OpenAI Responses API yet, so native reasoning and 多模态 support are future provider work rather than current runtime behavior.
 
-> Easter egg: when the provider display name is exactly `Yuren`, the TUI gives
-> `gpt-5.6-terra`, `gpt-5.6-sol`, and `gpt-5.6-luna` their own animated topbar
-> colour themes: earth, sun, and moon respectively.
+> A small detail for observant users: some provider/model combinations give the
+> TUI topbar a little more character.
 
 ## TUI
 
