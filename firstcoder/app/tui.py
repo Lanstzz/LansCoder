@@ -65,7 +65,11 @@ from firstcoder.app.welcome import welcome_renderable
 
 
 _HIDDEN_TOOL_STATUS_NAMES = {"task_boundary"}
-_YUREN_GLOW_PALETTE = ("#b8ffdf", "#81e8bb", "#18cfcb", "#45e6df", "#5fb5ff")
+_YUREN_MODEL_GLOW_PALETTES = {
+    "gpt-5.6-terra": ("#b8ffdf", "#81e8bb", "#18cfcb", "#45e6df", "#5fb5ff"),
+    "gpt-5.6-sol": ("#ffb347", "#ff7a45", "#ff5c3d", "#e9422e", "#ffd166"),
+    "gpt-5.6-luna": ("#f4f6ff", "#c9d5ff", "#b9c8ff", "#a99ee8", "#d9e7ff"),
+}
 _PERMISSION_MODE_COLORS = {
     "conservative": "#5fb5ff",
     "standard": "#cfd1d6",
@@ -1046,7 +1050,7 @@ class FirstCoderApp(App[None]):
             self._start_welcome_particles()
 
     def _sync_provider_glow(self) -> None:
-        if self.config.provider_name == "Yuren":
+        if _yuren_model_glow_palette(self.config.provider_name, self.config.provider_model) is not None:
             self._start_provider_glow()
         else:
             self._stop_provider_glow()
@@ -1067,10 +1071,11 @@ class FirstCoderApp(App[None]):
         self._provider_glow_timer = None
 
     def _advance_provider_glow(self) -> None:
-        if self.config.provider_name != "Yuren":
+        palette = _yuren_model_glow_palette(self.config.provider_name, self.config.provider_model)
+        if palette is None:
             self._stop_provider_glow()
             return
-        self._provider_glow_frame = (self._provider_glow_frame + 1) % len(_YUREN_GLOW_PALETTE)
+        self._provider_glow_frame = (self._provider_glow_frame + 1) % len(palette)
         self._refresh_topbar()
 
     def _record_tool_activity(self, event) -> None:
@@ -1394,21 +1399,26 @@ def _metadata_markup(values: list[tuple[str | None, str, int | None]], *, separa
 
 def _provider_name_markup(provider: str, *, glow_frame: int = 0) -> str:
     """Render the provider-only part for ordinary, non-easter-egg labels."""
-    if provider != "Yuren":
-        return f"[#7bba55]{escape(provider)}[/]"
-    return _glow_markup(provider, glow_frame=glow_frame)
+    return f"[#7bba55]{escape(provider)}[/]"
 
 
 def _provider_model_markup(provider: str, model: str, *, glow_frame: int = 0) -> str:
-    """Apply the Yuren glow to the provider and model name as one colour band."""
-    if provider != "Yuren":
+    """Apply a model-specific Yuren glow to the provider and model name."""
+    palette = _yuren_model_glow_palette(provider, model)
+    if palette is None:
         return f"{_provider_name_markup(provider, glow_frame=glow_frame)}[#6e6d72]/{escape(model)}[/]"
-    return f"{_glow_markup(provider, glow_frame=glow_frame)}[#6e6d72]/[/]{_glow_markup(model, glow_frame=glow_frame + len(provider) + 1)}"
+    return f"{_glow_markup(provider, glow_frame=glow_frame, palette=palette)}[#6e6d72]/[/]{_glow_markup(model, glow_frame=glow_frame + len(provider) + 1, palette=palette)}"
 
 
-def _glow_markup(text: str, *, glow_frame: int) -> str:
+def _yuren_model_glow_palette(provider: str, model: str) -> tuple[str, ...] | None:
+    if provider != "Yuren":
+        return None
+    return _YUREN_MODEL_GLOW_PALETTES.get(model)
+
+
+def _glow_markup(text: str, *, glow_frame: int, palette: tuple[str, ...]) -> str:
     return "".join(
-        f"[{_YUREN_GLOW_PALETTE[(index + glow_frame) % len(_YUREN_GLOW_PALETTE)]}]"
+        f"[{palette[(index + glow_frame) % len(palette)]}]"
         f"{escape(character)}[/]"
         for index, character in enumerate(text)
     )
