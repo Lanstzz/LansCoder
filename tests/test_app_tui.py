@@ -378,14 +378,21 @@ def test_firstcoder_app_topbar_shows_a_green_provider_and_hides_session_id() -> 
     )
 
 
-def test_yuren_provider_and_model_use_one_moving_colour_band() -> None:
-    first = _provider_model_markup("Yuren", "gpt-5.6-terra", glow_frame=0)
-    next_frame = _provider_model_markup("Yuren", "gpt-5.6-terra", glow_frame=1)
+@pytest.mark.parametrize(
+    ("model", "colour"),
+    [
+        ("gpt-5.6-terra", "#18cfcb"),
+        ("gpt-5.6-sol", "#ff5c3d"),
+        ("gpt-5.6-luna", "#b9c8ff"),
+    ],
+)
+def test_supported_yuren_models_use_distinct_moving_colour_bands(model: str, colour: str) -> None:
+    first = _provider_model_markup("Yuren", model, glow_frame=0)
+    next_frame = _provider_model_markup("Yuren", model, glow_frame=1)
 
-    assert Text.from_markup(first).plain == "Yuren/gpt-5.6-terra"
+    assert Text.from_markup(first).plain == f"Yuren/{model}"
     assert first != next_frame
-    assert "[#18cfcb]" in first
-    assert "[#5fb5ff]" in first
+    assert f"[{colour}]" in first
     assert "[#6e6d72]/[/]" in first
 
 
@@ -409,6 +416,15 @@ async def test_yuren_provider_glow_animates_and_stops_when_the_app_unmounts() ->
 
     assert timer is not None
     assert app._provider_glow_timer is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_unsupported_yuren_model_does_not_start_provider_glow() -> None:
+    app = FirstCoderApp(config=FirstCoderTuiConfig(provider_name="Yuren", provider_model="other-model"))
+
+    async with app.run_test():
+        assert app._provider_glow_timer is None
 
 
 def test_observe_markdown_update_consumes_cancelled_update_result() -> None:
