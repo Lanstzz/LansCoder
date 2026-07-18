@@ -60,10 +60,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "answer cannot be safely discovered from the workspace or commands."
     ),
     "todo": (
-        "Track multi-step work. Create a complete 3-7 item plan once with "
-        "action='set' before implementation. For routine progress, prefer "
-        "action='update' to change statuses only and keep item contents/order "
-        "stable. Re-set the full plan only when the plan itself must change. "
+        "Track and plan multi-step work with a complete 3-7 item plan before implementation. "
+        "On every update, resend "
+        "the complete current list, changing statuses only and keeping contents/order "
+        "stable unless the plan itself must change. "
         "Keep exactly one item in_progress."
     ),
     "write": (

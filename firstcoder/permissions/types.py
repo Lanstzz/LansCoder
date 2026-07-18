@@ -28,7 +28,6 @@ class PermissionAction(StrEnum):
 class PermissionMode(StrEnum):
     """用户当前希望默认策略采取的保守程度。"""
 
-    CONSERVATIVE = "conservative"
     STANDARD = "standard"
     AGGRESSIVE = "aggressive"
     BYPASS = "bypass"
@@ -65,6 +64,7 @@ class PermissionConfirmationChoice(StrEnum):
     """用户在权限确认 UI 中可以选择的动作。"""
 
     DENY = "deny"
+    REJECT_WITH_FEEDBACK = "reject_with_feedback"
     ALLOW_ONCE = "allow_once"
     ALLOW_ALWAYS_SAME_SCOPE = "allow_always_same_scope"
 
@@ -104,4 +104,5 @@ class PermissionDecision:
     kind: PermissionDecisionKind
     persistence: PermissionPersistence = PermissionPersistence.ONCE
     reason: str = ""
+    feedback: str = ""
     grant: PermissionGrant | None = None

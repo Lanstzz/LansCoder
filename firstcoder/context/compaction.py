@@ -21,7 +21,7 @@ from firstcoder.context.content.json import JsonRouteCompressor
 from firstcoder.context.content.router import RouteCompactRouter, RouteContentType
 from firstcoder.context.content.search import SearchResultsRouteCompressor
 from firstcoder.context.identity import stable_json_hash
-from firstcoder.context.models import AgentMessage, MessagePart, SessionView, utc_now_iso
+from firstcoder.context.models import AgentMessage, MessagePart, SessionView, latest_user_message_id, utc_now_iso
 from firstcoder.context.token_budget import estimate_text_tokens
 from firstcoder.context.tool_lifecycle import (
     ToolResultLifecycle,
@@ -267,11 +267,11 @@ class CompactionPipeline:
 
         changed: list[dict[str, object]] = []
         tail_messages = _effective_tail_messages(view)
-        latest_user_message_id = _latest_user_message_id(tail_messages)
+        latest_user_id = latest_user_message_id(tail_messages)
         for message in tail_messages:
             if message.role not in {"user", "assistant"}:
                 continue
-            if message.id == latest_user_message_id:
+            if message.id == latest_user_id:
                 continue
             if message.role == "assistant" and any(part.kind == "tool_call" for part in message.parts):
                 continue
@@ -469,13 +469,6 @@ def _replace_if_smaller(parts: list[MessagePart], index: int, compacted: Message
         return False
     parts[index] = compacted
     return True
-
-
-def _latest_user_message_id(messages: list[AgentMessage]) -> str | None:
-    for message in reversed(messages):
-        if message.role == "user":
-            return message.id
-    return None
 
 
 def _is_cold_old_task_part(

@@ -46,6 +46,8 @@ def format_elapsed_time(elapsed_seconds: float) -> str:
 
 def tool_event_status(event) -> str | None:
     kind = str(getattr(event, "kind", "") or "")
+    if kind == "prewrite_review":
+        return "review"
     if kind == "started":
         return "running"
     if kind == "finished":
@@ -104,6 +106,8 @@ def todo_panel_text(todos: list[TuiTodoItem]) -> str:
             marker = "[✓]"
         elif item.status == "in_progress":
             marker = "[~]"
+        elif item.status == "cancelled":
+            marker = "[-]"
         lines.append(f"{marker} {item.content}")
     return "\n".join(lines)
 
@@ -112,6 +116,8 @@ def tool_status_text(event) -> str:
     tool_call = getattr(event, "tool_call", None)
     name = str(getattr(tool_call, "name", "") or "tool")
     kind = str(getattr(event, "kind", "") or "")
+    if kind == "prewrite_review":
+        return ""
     if kind == "started":
         arguments = compact_tool_arguments(getattr(tool_call, "arguments", None))
         suffix = f" {arguments}" if arguments else ""

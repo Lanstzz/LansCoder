@@ -19,6 +19,10 @@ Install Harbor only in the development virtual environment:
 Run one local smoke task using the active GPT-5.6-compatible configuration. The
 key remains a Harbor template and is resolved from the login shell at runtime:
 
+> The Yuren/GPT-5.6 values below are one local example, not a universal default.
+> Replace the model, base URL, key variable, and provider name with your own
+> provider configuration.
+
 ```sh
 zsh -lic '.venv/bin/harbor run \
   -d terminal-bench-sample@2.0 \

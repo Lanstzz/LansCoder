@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from collections.abc import Callable
-from typing import Literal, Protocol
+from typing import Literal
 
 import anyio
 
-from firstcoder.runtime.cancellation import AgentCancelledError, CancellationToken, cancellation_context
+from firstcoder.runtime.cancellation import AgentCancelledError, CancellationToken
 from firstcoder.agent.ports import ContextManagerLike
 from firstcoder.agent.loop_limits import AgentLoopLimits, AgentLoopStopReason
 from firstcoder.agent.session import AgentSession, PendingPermissionExecution
@@ -30,15 +31,20 @@ from firstcoder.context.manager import ContextCompactRequest, ContextWindowTrigg
 from firstcoder.context.system_prompt import PromptPrefixCache
 from firstcoder.context.token_budget import estimate_chat_request_tokens
 from firstcoder.context.task_boundary import TaskBoundaryService
-from firstcoder.permissions.types import PermissionDecisionKind, PermissionRequest
+from firstcoder.input.attachments import UserAttachment
+from firstcoder.permissions.types import PermissionDecision, PermissionDecisionKind, PermissionRequest
 from firstcoder.providers.base import ChatProvider
 from firstcoder.providers.errors import ProviderError, ProviderErrorKind
 from firstcoder.providers.types import ChatRequest, ChatResponse, ChatStreamEvent, ToolCall
 from firstcoder.skills.loader import SkillLoadError, SkillLoader
 from firstcoder.skills.router import SkillRouter
 from firstcoder.skills.session import append_skill_loaded, append_skill_required_file_loaded, append_skill_selected
-from firstcoder.tools.permission_results import make_permission_denied_result
-from firstcoder.tools.types import Tool, ToolResult, make_error_result
+from firstcoder.tools.permission_results import (
+    make_permission_denied_result,
+    make_prewrite_review_failed_result,
+    make_prewrite_review_stale_result,
+)
+from firstcoder.tools.types import Tool, ToolResult
 
 
 _DEFAULT_MAX_TOOL_ROUNDS = object()
@@ -120,7 +126,12 @@ class AgentLoop:
                 if tool.name not in self.session.tool_registry.names():
                     self.session.tool_registry.register(tool)
 
-    def run_user_turn(self, content: str) -> ChatResponse:
+    def run_user_turn(
+        self,
+        content: str,
+        *,
+        attachments: list[UserAttachment] | None = None,
+    ) -> ChatResponse:
         """非交互兼容入口。
 
         旧调用方只认识 `ChatResponse`。如果底层因为权限确认或 ask_user 暂停，这里会把
@@ -128,7 +139,7 @@ class AgentLoop:
         `run_user_turn_interactive()` 和 `resume_with_user_input()`。
         """
 
-        result = self.run_user_turn_interactive(content)
+        result = self.run_user_turn_interactive(content, attachments=attachments)
         if result.response is not None:
             return result.response
         pending = result.pending_input
@@ -141,7 +152,12 @@ class AgentLoop:
             raw={"pending_input": pending},
         )
 
-    def run_user_turn_interactive(self, content: str) -> AgentTurnResult:
+    def run_user_turn_interactive(
+        self,
+        content: str,
+        *,
+        attachments: list[UserAttachment] | None = None,
+    ) -> AgentTurnResult:
         """执行一轮会话，并在工具请求用户输入时暂停。
 
         旧的 `run_user_turn()` 保持返回 `ChatResponse`，方便现有测试和非交互入口
@@ -160,7 +176,7 @@ class AgentLoop:
         self._begin_turn()
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
-        message_id = self.session.append_user_message(content)
+        message_id = self.session.append_user_message(content, attachments=attachments)
         if self._initialize_active_task_if_missing(message_id) is None:
             self._classify_task_boundary(message_id)
         # 用户消息写入后先给 context manager 一个机会。通常不会压缩；但当上下文已经接近
@@ -197,7 +213,12 @@ class AgentLoop:
         self._check_cancelled()
         return await self._run_tool_loop_interactive_async(self._stream_once_with_recovery)
 
-    async def run_user_turn_streaming(self, content: str) -> ChatResponse:
+    async def run_user_turn_streaming(
+        self,
+        content: str,
+        *,
+        attachments: list[UserAttachment] | None = None,
+    ) -> ChatResponse:
         """使用 provider 内部 stream event 协议执行一轮会话。
 
         文本 delta 可以被上层即时展示，但工具调用仍保持原子语义：只有 stream 完成并
@@ -219,7 +240,7 @@ class AgentLoop:
         self._begin_turn()
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
-        message_id = self.session.append_user_message(content)
+        message_id = self.session.append_user_message(content, attachments=attachments)
         if self._initialize_active_task_if_missing(message_id) is None:
             await self._classify_task_boundary_async(message_id)
         self._auto_compact()
@@ -239,14 +260,19 @@ class AgentLoop:
             raw={"pending_input": pending},
         )
 
-    def run_user_turn_streaming_sync(self, content: str) -> ChatResponse:
+    def run_user_turn_streaming_sync(
+        self,
+        content: str,
+        *,
+        attachments: list[UserAttachment] | None = None,
+    ) -> ChatResponse:
         """同步入口，仅用于测试或没有运行中 event loop 的 CLI 场景。
 
         Textual 这类已经运行 asyncio event loop 的 UI 后续应该直接 await
         `run_user_turn_streaming()` 或放到 worker 中执行，不能调用这个包装方法。
         """
 
-        return asyncio.run(self.run_user_turn_streaming(content))
+        return asyncio.run(self.run_user_turn_streaming(content, attachments=attachments))
 
     def _initialize_active_task_if_missing(self, basis_message_id: str):
         service = TaskBoundaryService(known_message_ids=self.session.known_message_ids)
@@ -287,68 +313,31 @@ class AgentLoop:
                 self._tag_message_parts_with_task_hash(message_id, active_hash)
 
     def _append_permission_resume_result(self, request_id: str, answer: str) -> AgentTurnResult | None:
-        pending = self.session.pending_permission_execution
-        if pending is None or pending.request_id != request_id:
-            return AgentTurnResult(
-                status=AgentTurnStatus.COMPLETED,
-                response=ChatResponse(
-                    provider=self.provider.name,
-                    model=self.provider.model,
-                    content="没有找到可恢复的权限确认请求。",
-                    finish_reason="error",
-                ),
-            )
-        if self.session.permission_manager is None:
-            return AgentTurnResult(
-                status=AgentTurnStatus.COMPLETED,
-                response=ChatResponse(
-                    provider=self.provider.name,
-                    model=self.provider.model,
-                    content="当前会话没有权限管理器，无法恢复权限确认。",
-                    finish_reason="error",
-                ),
-            )
-
-        decision = self.session.permission_manager.resolve_confirmation(pending.permission_request, answer)
-        if decision.kind == PermissionDecisionKind.DENY:
-            # 拒绝也必须写成 tool_result。provider 协议要求每个 assistant tool_call 都有
-            # 对应的 role=tool 消息，否则下一次请求会因为消息序列不合法而失败。
-            result = make_permission_denied_result(
-                tool_name=pending.tool_call.name,
-                request=pending.permission_request,
-                decision=decision,
-            )
-            self._emit_tool_event(
-                "denied",
-                pending.tool_call,
-                result=result,
-                permission_request=pending.permission_request,
-            )
-        else:
-            # 用户同意后执行原始 pending tool_call。这里绕过再次权限检查，避免同一个
-            # 确认请求被重复拦截；授权是否长期有效由 PermissionManager/GrantStore 决定。
-            self._emit_tool_event(
-                "started",
-                pending.tool_call,
-                permission_request=pending.permission_request,
-            )
-            self._check_cancelled()
-            with cancellation_context(self.cancellation_token):
-                result = self.session.execute_tool_call_after_permission_confirmation(pending.tool_call)
-            self._emit_tool_event(
-                "finished",
-                pending.tool_call,
-                result=result,
-                permission_request=pending.permission_request,
-            )
-
-        self.session.pending_permission_execution = None
-        self.session.append_tool_result(tool_call=pending.tool_call, result=result)
-        self._emit_settlements("skipped", self.tool_settlement.append_skipped(pending.skipped_tool_calls))
-        self._auto_compact()
+        pending = self._pending_permission_for_resume(request_id)
+        if isinstance(pending, AgentTurnResult):
+            return pending
+        result = self._prepare_permission_resume(pending, answer)
+        if result is None:
+            result = self._execute_resumed_permission_tool_call(pending)
+            self._emit_finished_permission_resume(pending, result)
+        self._finish_permission_resume(pending, result)
         return None
 
     async def _append_permission_resume_result_async(self, request_id: str, answer: str) -> AgentTurnResult | None:
+        pending = self._pending_permission_for_resume(request_id)
+        if isinstance(pending, AgentTurnResult):
+            return pending
+        result = self._prepare_permission_resume(pending, answer)
+        if result is None:
+            result = await anyio.to_thread.run_sync(self._execute_resumed_permission_tool_call, pending)
+            self._emit_finished_permission_resume(pending, result)
+        self._finish_permission_resume(pending, result)
+        return None
+
+    def _pending_permission_for_resume(
+        self,
+        request_id: str,
+    ) -> PendingPermissionExecution | AgentTurnResult:
         pending = self.session.pending_permission_execution
         if pending is None or pending.request_id != request_id:
             return AgentTurnResult(
@@ -370,43 +359,101 @@ class AgentLoop:
                     finish_reason="error",
                 ),
             )
+        return pending
 
-        decision = self.session.permission_manager.resolve_confirmation(pending.permission_request, answer)
-        if decision.kind == PermissionDecisionKind.DENY:
-            result = make_permission_denied_result(
-                tool_name=pending.tool_call.name,
-                request=pending.permission_request,
-                decision=decision,
-            )
+    def _prepare_permission_resume(
+        self,
+        pending: PendingPermissionExecution,
+        answer: str,
+    ) -> ToolResult | None:
+        result = self._blocked_permission_resume_result(pending, answer)
+        if result is not None:
             self._emit_tool_event(
                 "denied",
                 pending.tool_call,
                 result=result,
                 permission_request=pending.permission_request,
             )
-        else:
-            self._emit_tool_event(
-                "started",
-                pending.tool_call,
-                permission_request=pending.permission_request,
-            )
-            self._check_cancelled()
-            result = await anyio.to_thread.run_sync(
-                self.tool_executor.execute_after_permission_with_cancellation_context,
-                pending.tool_call,
-            )
-            self._emit_tool_event(
-                "finished",
-                pending.tool_call,
-                result=result,
-                permission_request=pending.permission_request,
-            )
+            return result
+        self._emit_tool_event(
+            "started",
+            pending.tool_call,
+            permission_request=pending.permission_request,
+        )
+        self._check_cancelled()
+        return None
 
+    def _execute_resumed_permission_tool_call(self, pending: PendingPermissionExecution) -> ToolResult:
+        # 用户同意后使用 session 保存的原始 tool_call，不能相信 UI 回传的参数。
+        return self.tool_executor.execute_after_permission_with_cancellation_context(pending.tool_call)
+
+    def _emit_finished_permission_resume(
+        self,
+        pending: PendingPermissionExecution,
+        result: ToolResult,
+    ) -> None:
+        self._emit_tool_event(
+            "finished",
+            pending.tool_call,
+            result=result,
+            permission_request=pending.permission_request,
+        )
+
+    def _finish_permission_resume(self, pending: PendingPermissionExecution, result: ToolResult) -> None:
         self.session.pending_permission_execution = None
         self.session.append_tool_result(tool_call=pending.tool_call, result=result)
         self._emit_settlements("skipped", self.tool_settlement.append_skipped(pending.skipped_tool_calls))
         self._auto_compact()
-        return None
+
+    def _resolve_pending_confirmation(
+        self,
+        pending: PendingPermissionExecution,
+        answer: str,
+    ):
+        if not pending.review_only:
+            return self.session.permission_manager.resolve_confirmation(pending.permission_request, answer)
+        normalized = answer.strip().lower()
+        if normalized in {"allow_once", "allow", "once", "2"}:
+            current = self.session.preflight_tool_call_permission(pending.tool_call)
+            if current is not None and current.decision.kind == PermissionDecisionKind.DENY:
+                return current.decision
+            return PermissionDecision(kind=PermissionDecisionKind.ALLOW, reason="用户批准应用已预览的修改。")
+        if normalized in {"deny", "no", "1"} or normalized.startswith(("reject:", "reject_with_feedback:")):
+            return self.session.permission_manager.resolve_confirmation(pending.permission_request, answer)
+        return PermissionDecision(
+            kind=PermissionDecisionKind.DENY,
+            reason=f"未知写前预览选择：{answer}",
+        )
+
+    def _blocked_permission_resume_result(
+        self,
+        pending: PendingPermissionExecution,
+        answer: str,
+    ) -> ToolResult | None:
+        decision = self._resolve_pending_confirmation(pending, answer)
+        if decision.kind == PermissionDecisionKind.DENY:
+            return make_permission_denied_result(
+                tool_name=pending.tool_call.name,
+                request=pending.permission_request,
+                decision=decision,
+            )
+        if pending.prewrite_review is None:
+            return None
+        if not pending.prewrite_review.ok:
+            return make_prewrite_review_failed_result(
+                tool_name=pending.tool_call.name,
+                request=pending.permission_request,
+                error=pending.prewrite_review.error or "未知错误",
+            )
+        if pending.prewrite_review.is_current(
+            self.session.permission_manager.policy.project_root,
+            access=self.session.sandbox_access,
+        ):
+            return None
+        return make_prewrite_review_stale_result(
+            tool_name=pending.tool_call.name,
+            request=pending.permission_request,
+        )
 
     def _complete_once(self, *, tool_choice="auto") -> ChatResponse:
         """构造一次 provider 请求并获得模型响应。
@@ -425,10 +472,7 @@ class AgentLoop:
             provider_model=self.provider.model,
             provider_capabilities=getattr(self.provider, "capabilities", None),
         )
-        messages = self.context_builder.build_provider_messages(
-            self.session.rebuild_view(),
-            system_prefix=system_prefix,
-        )
+        messages = self._build_provider_messages(self.session.rebuild_view(), system_prefix=system_prefix)
         self._check_provider_call_limit()
         self._check_turn_timeout()
         self._check_cancelled()
@@ -519,10 +563,7 @@ class AgentLoop:
             provider_model=self.provider.model,
             provider_capabilities=getattr(self.provider, "capabilities", None),
         )
-        messages = self.context_builder.build_provider_messages(
-            self.session.rebuild_view(),
-            system_prefix=system_prefix,
-        )
+        messages = self._build_provider_messages(self.session.rebuild_view(), system_prefix=system_prefix)
         final_response: ChatResponse | None = None
         self._check_provider_call_limit()
         self._check_turn_timeout()
@@ -600,7 +641,12 @@ class AgentLoop:
             self.session.append_assistant_response(response)
             self._auto_compact()
             return AgentTurnResult(status=AgentTurnStatus.COMPLETED, response=response)
-        response = self._run_todo_self_check_if_needed(response, complete_once)
+        response, pending_input = self._run_todo_self_check_if_needed(response, complete_once)
+        if pending_input is not None:
+            return AgentTurnResult(
+                status=AgentTurnStatus.WAITING_FOR_USER_INPUT,
+                pending_input=pending_input,
+            )
 
         # 没有工具调用时，这条 response 就是最终 assistant 回复。命中轮次上限时也会写入
         # 一条纯文本说明，避免保存未执行的 tool_call。
@@ -632,7 +678,12 @@ class AgentLoop:
             self.session.append_assistant_response(response)
             self._auto_compact()
             return AgentTurnResult(status=AgentTurnStatus.COMPLETED, response=response)
-        response = await self._run_todo_self_check_if_needed_async(response, complete_once)
+        response, pending_input = await self._run_todo_self_check_if_needed_async(response, complete_once)
+        if pending_input is not None:
+            return AgentTurnResult(
+                status=AgentTurnStatus.WAITING_FOR_USER_INPUT,
+                pending_input=pending_input,
+            )
 
         self.session.append_assistant_response(response)
         self._auto_compact()
@@ -655,6 +706,7 @@ class AgentLoop:
             execution = self.tool_executor.execute_interactive(response.tool_calls)
             if execution.pending_input is not None:
                 return response, execution.pending_input
+            self._auto_compact()
             if execution.task_hash_changed:
                 self._compact_after_task_hash_changed()
 
@@ -673,23 +725,29 @@ class AgentLoop:
             response = self._drop_unsupported_tool_calls(complete_once())
         return response, None
 
-    def _run_todo_self_check_if_needed(self, response: ChatResponse, complete_once) -> ChatResponse:
+    def _run_todo_self_check_if_needed(
+        self,
+        response: ChatResponse,
+        complete_once,
+    ) -> tuple[ChatResponse, UserInputRequest | None]:
         prompt = self.todo_policy.self_check_prompt()
         if not prompt:
-            return response
+            return response, None
         self.session.append_user_message(prompt)
         response = self._drop_unsupported_tool_calls(complete_once())
-        response, _ = self._continue_tool_loop_from_response(response, complete_once, 0)
-        return response
+        return self._continue_tool_loop_from_response(response, complete_once, 0)
 
-    async def _run_todo_self_check_if_needed_async(self, response: ChatResponse, complete_once) -> ChatResponse:
+    async def _run_todo_self_check_if_needed_async(
+        self,
+        response: ChatResponse,
+        complete_once,
+    ) -> tuple[ChatResponse, UserInputRequest | None]:
         prompt = self.todo_policy.self_check_prompt()
         if not prompt:
-            return response
+            return response, None
         self.session.append_user_message(prompt)
         response = self._drop_unsupported_tool_calls(await complete_once())
-        response, _ = await self._continue_tool_loop_from_response_async(response, complete_once, 0)
-        return response
+        return await self._continue_tool_loop_from_response_async(response, complete_once, 0)
 
     async def _continue_tool_loop_from_response_async(
         self,
@@ -706,6 +764,7 @@ class AgentLoop:
             execution = await self.tool_executor.execute_interactive_async(response.tool_calls)
             if execution.pending_input is not None:
                 return response, execution.pending_input
+            self._auto_compact()
             if execution.task_hash_changed:
                 self._compact_after_task_hash_changed()
 
@@ -722,11 +781,6 @@ class AgentLoop:
             response = self._drop_unsupported_tool_calls(await complete_once())
         return response, None
 
-    def _execute_tool_calls(self, tool_calls: list[ToolCall]) -> bool:
-        """兼容旧入口：执行工具调用并返回是否发生 task hash 变化。"""
-
-        return self.tool_executor.execute(tool_calls)
-
     def _append_interrupted_tool_results(self) -> None:
         self._emit_settlements("interrupted", self.tool_settlement.append_interrupted_tail())
 
@@ -739,11 +793,20 @@ class AgentLoop:
 
     def _emit_tool_event(
         self,
-        kind: Literal["started", "finished", "permission_requested", "denied", "skipped", "interrupted"],
+        kind: Literal[
+            "prewrite_review",
+            "started",
+            "finished",
+            "permission_requested",
+            "denied",
+            "skipped",
+            "interrupted",
+        ],
         tool_call: ToolCall,
         *,
         result: ToolResult | None = None,
         permission_request: PermissionRequest | None = None,
+        prewrite_review: dict[str, object] | None = None,
     ) -> None:
         if self.tool_event_handler is None:
             return
@@ -753,6 +816,7 @@ class AgentLoop:
                 tool_call=tool_call,
                 result=result,
                 permission_request=permission_request,
+                prewrite_review=prewrite_review,
             )
         )
 
@@ -793,7 +857,7 @@ class AgentLoop:
             provider_model=self.provider.model,
             provider_capabilities=getattr(self.provider, "capabilities", None),
         )
-        messages = self.context_builder.build_provider_messages(view, system_prefix=system_prefix)
+        messages = self._build_provider_messages(view, system_prefix=system_prefix)
         config = getattr(self.context_manager, "config", None)
         reserved_output_tokens = getattr(config, "reserved_output_tokens", 4_096)
         return estimate_chat_request_tokens(
@@ -801,6 +865,20 @@ class AgentLoop:
             tools=definitions,
             reserved_output_tokens=reserved_output_tokens,
         )
+
+    def _build_provider_messages(self, view, *, system_prefix):
+        """Project context while retaining compatibility with extension builders."""
+
+        build = self.context_builder.build_provider_messages
+        parameters = inspect.signature(build).parameters.values()
+        accepts_store_root = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD or parameter.name == "store_root"
+            for parameter in parameters
+        )
+        kwargs = {"system_prefix": system_prefix}
+        if accepts_store_root:
+            kwargs["store_root"] = self.session.store.root
+        return build(view, **kwargs)
 
     def _provider_tool_definitions(self):
         """根据 provider 能力决定是否向模型暴露工具 schema。"""

@@ -1,257 +1,92 @@
-"""`todo` 工具。
-
-为模型提供任务清单管理能力，帮助跟踪多步骤 coding 任务的进度。
-每个 `create_todo_tool()` 调用创建独立的内存 store，适合单个 agent 会话内使用。
-
-当前是骨架阶段实现：状态保存在内存中，会话结束后丢失。
-后续可以接入重新设计后的会话持久化层。
-"""
+"""无状态的 Session Todo 完整列表工具。"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
 from firstcoder.providers.types import ToolDefinition
 from firstcoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
-from firstcoder.utils.schema import object_schema, property_schema
+from firstcoder.utils.schema import object_schema
 
 
-@dataclass
-class TodoItem:
-    """单个任务项。"""
-
-    id: str
-    content: str
-    status: str = "pending"
-
-
-class TodoStore:
-    """内存中的任务清单存储。"""
-
-    def __init__(self) -> None:
-        self._todos: dict[str, TodoItem] = {}
-        self._counter = 0
-
-    def add(self, content: str) -> TodoItem:
-        """添加新任务。"""
-
-        self._counter += 1
-        item = TodoItem(id=f"todo_{self._counter}", content=content)
-        self._todos[item.id] = item
-        return item
-
-    def replace_all(self, todos: list[dict[str, Any]]) -> list[TodoItem]:
-        """用一组任务替换当前清单。"""
-
-        self._todos.clear()
-        self._counter = 0
-        items: list[TodoItem] = []
-        for todo in todos:
-            content = str(todo.get("content") or "").strip()
-            status = _normalize_status(todo.get("status"))
-            self._counter += 1
-            item = TodoItem(id=f"todo_{self._counter}", content=content, status=status)
-            self._todos[item.id] = item
-            items.append(item)
-        return items
-
-    def update(self, todo_id: str, content: str | None = None, status: str | None = None) -> TodoItem | None:
-        """更新任务内容或状态。"""
-
-        item = self._todos.get(todo_id)
-        if item is None:
-            return None
-        if content is not None:
-            item.content = content
-        if status is not None:
-            item.status = status
-        return item
-
-    def delete(self, todo_id: str) -> bool:
-        """删除任务。"""
-
-        if todo_id not in self._todos:
-            return False
-        del self._todos[todo_id]
-        return True
-
-    def list_all(self) -> list[TodoItem]:
-        """返回所有任务，按添加顺序。"""
-
-        return list(self._todos.values())
-
-    def clear(self) -> None:
-        """清空所有任务。"""
-
-        self._todos.clear()
-
-
-VALID_STATUSES = {"pending", "in_progress", "completed"}
+VALID_STATUSES = ("pending", "in_progress", "completed", "cancelled")
+VALID_PRIORITIES = ("high", "medium", "low")
 LEGACY_STATUS_ALIASES = {"done": "completed"}
 
 
-def _normalize_status(status: object | None) -> str:
-    value = str(status or "pending")
-    return LEGACY_STATUS_ALIASES.get(value, value)
-
-
-def _status_emoji(status: str) -> str:
-    """状态对应的展示符号。"""
-
-    if _normalize_status(status) == "completed":
-        return "[✓]"
-    if status == "in_progress":
-        return "[~]"
-    return "[ ]"
-
-
 def create_todo_tool() -> Tool:
-    """创建任务清单管理工具。"""
+    """创建只负责验证和规范化完整列表的 Todo 工具。"""
 
-    store = TodoStore()
-
-    def todo(
-        action: str,
-        content: str | None = None,
-        todo_id: str | None = None,
-        status: str | None = None,
-        todos: list[dict[str, Any]] | None = None,
-    ) -> ToolResult:
-        """管理会话内任务清单；支持 set/add/update/delete/list/clear。"""
-
-        if action == "set":
-            if not todos:
-                return make_error_result("todo", "set 操作需要提供 todos")
-            invalid = _first_invalid_todo(todos)
-            if invalid:
-                return make_error_result("todo", invalid)
-            items = store.replace_all(todos)
-            return _format_result("已设置任务清单", items)
-
-        if action == "add":
-            if not content:
-                return make_error_result("todo", "content 不能为空")
-            if status is not None and _normalize_status(status) not in VALID_STATUSES:
-                return make_error_result("todo", f"未知状态：{status}")
-            item = store.add(content)
-            if status is not None:
-                item.status = _normalize_status(status)
-            return _format_result("已添加任务", [item])
-
-        if action == "update":
-            if not todo_id:
-                return make_error_result("todo", "update 操作需要提供 todo_id")
-            if status is not None and _normalize_status(status) not in VALID_STATUSES:
-                return make_error_result("todo", f"未知状态：{status}")
-            item = store.update(todo_id, content=content, status=_normalize_status(status) if status is not None else None)
-            if item is None:
-                return make_error_result("todo", f"任务不存在：{todo_id}")
-            return _format_result("已更新任务", list(store.list_all()))
-
-        if action == "delete":
-            if not todo_id:
-                return make_error_result("todo", "delete 操作需要提供 todo_id")
-            if not store.delete(todo_id):
-                return make_error_result("todo", f"任务不存在：{todo_id}")
-            return _format_result("已删除任务", list(store.list_all()))
-
-        if action == "list":
-            items = store.list_all()
-            return _format_result("任务清单" if items else "暂无任务", items)
-
-        if action == "clear":
-            store.clear()
-            return _format_result("已清空任务清单", [])
-
-        return make_error_result("todo", f"未知操作：{action}")
+    def todo(todos: list[dict[str, Any]]) -> ToolResult:
+        normalized, error = _normalize_todos(todos)
+        if error is not None:
+            return make_error_result("todo", error)
+        return _format_result(normalized)
 
     return Tool(
         definition=ToolDefinition(
             name="todo",
             description=(
-                "Track multi-step work. For coding tasks with multiple phases, first call "
-                "action='set' with a complete 3-7 item plan before implementation. Good "
-                "items are concrete, verifiable actions such as inspect, reproduce, "
-                "implement, test, and summarize; avoid vague items like 'fix issue'. "
-                "After the plan exists, prefer action='update' to mark statuses "
-                "(pending/in_progress/completed). Keep existing item contents and order "
-                "stable; do not rewrite, rephrase, split, merge, or reorder items for "
-                "routine progress. Use action='set' again only when the plan itself must "
-                "change. Keep exactly one item in_progress while actively working. Mark "
-                "items completed immediately after finishing and verifying them; do not "
-                "batch completion updates at the end. Before a final answer, ensure no "
-                "item remains pending or in_progress unless you clearly explain the blocker."
+                "Track multi-step work by submitting the complete current list on every call. "
+                "For substantial coding tasks, use a concise 3-7 item plan with exactly one "
+                "in_progress item while work is active. Preserve item content and order during "
+                "routine status updates; only add, remove, rewrite, or reorder items when the plan "
+                "itself changes. Before a final answer, complete or cancel every remaining item, "
+                "or clearly explain the blocker. An empty list clears the session Todo state."
             ),
             parameters=object_schema(
                 {
-                    "action": property_schema(
-                        "string",
-                        enum=["set", "add", "update", "delete", "list", "clear"],
-                        description=(
-                            "set creates or replaces the whole plan (initial plan or real plan "
-                            "changes only); update changes one existing item and is preferred "
-                            "for routine status changes; add creates one item; delete removes "
-                            "one item; list shows the plan; clear removes all items. Prefer "
-                            "update over set when only statuses change."
-                        ),
-                    ),
-                    "content": property_schema("string", description="Todo text for add or update."),
-                    "todo_id": property_schema(
-                        "string",
-                        description="Existing id such as todo_1. Required for update and delete.",
-                    ),
-                    "status": property_schema(
-                        "string",
-                        enum=["pending", "in_progress", "completed"],
-                        description="Use exactly one in_progress item while work is underway.",
-                    ),
                     "todos": {
                         "type": "array",
-                        "description": (
-                            "Complete plan payload for action='set' only. Use 3-7 short, "
-                            "concrete, verifiable items when creating or restructuring the "
-                            "plan. Do not use set merely to flip statuses; keep item wording "
-                            "stable across progress updates."
-                        ),
+                        "description": "The complete current Todo list, in display and execution order.",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "content": {"type": "string"},
-                                "status": {
-                                    "type": "string",
-                                    "enum": ["pending", "in_progress", "completed"],
-                                },
+                                "content": {"type": "string", "description": "Short, concrete, verifiable task."},
+                                "status": {"type": "string", "enum": list(VALID_STATUSES)},
+                                "priority": {"type": "string", "enum": list(VALID_PRIORITIES)},
                             },
-                            "required": ["content"],
+                            "required": ["content", "status", "priority"],
+                            "additionalProperties": False,
                         },
-                    },
+                    }
                 },
-                required=["action"],
+                required=["todos"],
             ),
         ),
         executor=todo,
     )
 
 
-def _first_invalid_todo(todos: list[dict[str, Any]]) -> str | None:
-    for index, todo in enumerate(todos, start=1):
-        if not str(todo.get("content") or "").strip():
-            return f"todos[{index}] 缺少 content"
-        status = _normalize_status(todo.get("status"))
+def _normalize_todos(todos: object) -> tuple[list[dict[str, str]], str | None]:
+    if not isinstance(todos, list):
+        return [], "todos 必须是数组"
+
+    normalized: list[dict[str, str]] = []
+    for index, item in enumerate(todos, start=1):
+        if not isinstance(item, dict):
+            return [], f"todos[{index}] 必须是对象"
+        content = str(item.get("content") or "").strip()
+        if not content:
+            return [], f"todos[{index}] 缺少 content"
+        status = str(item.get("status") or "pending")
+        status = LEGACY_STATUS_ALIASES.get(status, status)
         if status not in VALID_STATUSES:
-            return f"todos[{index}] 未知状态：{status}"
-    return None
+            return [], f"todos[{index}] 未知状态：{status}"
+        priority = str(item.get("priority") or "medium")
+        if priority not in VALID_PRIORITIES:
+            return [], f"todos[{index}] 未知优先级：{priority}"
+        normalized.append({"content": content, "status": status, "priority": priority})
+    return normalized, None
 
 
-def _format_result(message: str, items: list[TodoItem]) -> ToolResult:
-    """把任务列表格式化为文本结果。"""
-
-    lines: list[str] = [message]
-    data: list[dict[str, Any]] = []
-    for item in items:
-        lines.append(f"{_status_emoji(item.status)} {item.id}: {item.content}")
-        data.append({"id": item.id, "content": item.content, "status": item.status})
-
-    content = "\n".join(lines) if items else message
-    return make_text_result("todo", content, todos=data, count=len(items))
+def _format_result(todos: list[dict[str, str]]) -> ToolResult:
+    markers = {
+        "pending": "[ ]",
+        "in_progress": "[~]",
+        "completed": "[✓]",
+        "cancelled": "[-]",
+    }
+    lines = ["已更新任务清单"]
+    lines.extend(f"{markers[item['status']]} {item['content']}" for item in todos)
+    return make_text_result("todo", "\n".join(lines), todos=todos, count=len(todos))

@@ -23,7 +23,7 @@ def test_help_command_lists_current_slash_commands() -> None:
         "/compact status": "Show compaction status.",
         "/compact": "Compact context now.",
         "/mode": "Show permission mode.",
-        "/mode <conservative|standard|aggressive|bypass>": "Change permission mode.",
+        "/mode <standard|aggressive|bypass>": "Change permission mode.",
     }
     for command, description in expected.items():
         assert f"{command.ljust(48)} {description}" in result.output

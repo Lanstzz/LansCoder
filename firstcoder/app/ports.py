@@ -8,6 +8,7 @@ from firstcoder.context.manager import ContextCompactRequest, ContextCompactResu
 
 if TYPE_CHECKING:
     from firstcoder.app.commands import CommandResult
+    from firstcoder.input.attachments import UserAttachment
 
 
 class CommandHandlerLike(Protocol):
@@ -18,7 +19,12 @@ class CommandHandlerLike(Protocol):
 class ChatRunnerLike(Protocol):
     last_pending_input: object | None
 
-    def run_user_turn(self, content: str) -> Any:
+    def run_user_turn(
+        self,
+        content: str,
+        *,
+        attachments: list[UserAttachment] | None = None,
+    ) -> Any:
         ...
 
     def resume_with_user_input(self, request_id: str, answer: str) -> Any:

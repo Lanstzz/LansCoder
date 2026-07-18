@@ -198,6 +198,18 @@ def test_manager_resolves_deny_and_allow_once_without_grant(tmp_path) -> None:
     assert manager.grants.list() == []
 
 
+def test_manager_resolves_reject_with_feedback_without_grant(tmp_path) -> None:
+    manager = PermissionManager(policy=DefaultPermissionPolicy(tmp_path))
+    request = PermissionRequest(id="perm_write", action=PermissionAction.WRITE_PATH, target="README.md")
+
+    decision = manager.resolve_confirmation(request, "reject_with_feedback: 请保留原来的标题")
+
+    assert decision.kind == PermissionDecisionKind.DENY
+    assert decision.reason == "用户拒绝了权限请求：请保留原来的标题"
+    assert decision.feedback == "请保留原来的标题"
+    assert manager.grants.list() == []
+
+
 def test_manager_resolves_allow_always_and_adds_same_scope_grant(tmp_path) -> None:
     manager = PermissionManager(policy=DefaultPermissionPolicy(tmp_path))
     request = PermissionRequest(id="perm_shell", action=PermissionAction.EXECUTE_SHELL, target="pytest tests")

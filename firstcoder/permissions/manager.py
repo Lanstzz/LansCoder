@@ -85,15 +85,48 @@ class PermissionManager:
             },
         )
 
+    def build_prewrite_review_confirmation(self, request: PermissionRequest) -> UserInputRequest:
+        """Build a one-operation review gate without changing saved permission grants."""
+
+        request = self.normalize_request(request)
+        return UserInputRequest(
+            id=request.id,
+            kind="permission_confirmation",
+            question=_question_for_request(request),
+            options=[
+                UserInputOption(id=PermissionConfirmationChoice.DENY.value, label="Deny"),
+                UserInputOption(id=PermissionConfirmationChoice.ALLOW_ONCE.value, label="Apply reviewed change"),
+            ],
+            payload={
+                "request_type": "prewrite_review_confirmation",
+                "permission_request_id": request.id,
+                "action": request.action.value,
+                "target": request.target,
+                "reason": "应用已预览的本地文件修改。",
+                "allow_always": False,
+            },
+        )
+
     def resolve_confirmation(self, request: PermissionRequest, choice: str) -> PermissionDecision:
         """解析用户选择，并在 allow always 时写入内存 grant。"""
 
         request = self.normalize_request(request)
-        normalized = _normalize_choice(choice)
+        normalized, feedback = _normalize_choice(choice)
         if normalized == PermissionConfirmationChoice.DENY:
             return PermissionDecision(
                 kind=PermissionDecisionKind.DENY,
                 reason="用户拒绝了权限请求。",
+            )
+        if normalized == PermissionConfirmationChoice.REJECT_WITH_FEEDBACK:
+            if not feedback:
+                return PermissionDecision(
+                    kind=PermissionDecisionKind.DENY,
+                    reason="用户拒绝了权限请求。",
+                )
+            return PermissionDecision(
+                kind=PermissionDecisionKind.DENY,
+                reason=f"用户拒绝了权限请求：{feedback}",
+                feedback=feedback,
             )
         if normalized == PermissionConfirmationChoice.ALLOW_ONCE:
             guard = self._confirmation_guard(request)
@@ -176,17 +209,11 @@ class _PermissionScope:
 def default_scope_for_request(request: PermissionRequest, *, project_root: Path | None = None) -> _PermissionScope:
     """为 allow always 生成第一版保守 scope。"""
 
-    if request.action == PermissionAction.READ_PATH:
-        return _PermissionScope(
-            scope_type=PermissionScopeType.EXACT_PATH,
-            scope_value=_path_scope_value(request, project_root=project_root),
-        )
-    if request.action == PermissionAction.WRITE_PATH:
-        return _PermissionScope(
-            scope_type=PermissionScopeType.EXACT_PATH,
-            scope_value=_path_scope_value(request, project_root=project_root),
-        )
-    if request.action == PermissionAction.DELETE_PATH:
+    if request.action in {
+        PermissionAction.READ_PATH,
+        PermissionAction.WRITE_PATH,
+        PermissionAction.DELETE_PATH,
+    }:
         return _PermissionScope(
             scope_type=PermissionScopeType.EXACT_PATH,
             scope_value=_path_scope_value(request, project_root=project_root),
@@ -250,16 +277,21 @@ def _allow_always_enabled(request: PermissionRequest) -> bool:
     return bool(request.metadata.get("allow_always", True))
 
 
-def _normalize_choice(choice: str) -> PermissionConfirmationChoice | None:
+def _normalize_choice(choice: str) -> tuple[PermissionConfirmationChoice | None, str]:
     normalized = choice.strip().lower()
+    for prefix in ("reject_with_feedback:", "reject:"):
+        if normalized.startswith(prefix):
+            feedback = choice.strip()[len(prefix) :].strip()
+            return PermissionConfirmationChoice.REJECT_WITH_FEEDBACK, feedback
     numeric = {
         "1": PermissionConfirmationChoice.DENY,
         "2": PermissionConfirmationChoice.ALLOW_ONCE,
         "3": PermissionConfirmationChoice.ALLOW_ALWAYS_SAME_SCOPE,
+        "4": PermissionConfirmationChoice.REJECT_WITH_FEEDBACK,
     }
     if normalized in numeric:
-        return numeric[normalized]
+        return numeric[normalized], ""
     for item in PermissionConfirmationChoice:
         if normalized == item.value:
-            return item
-    return None
+            return item, ""
+    return None, ""

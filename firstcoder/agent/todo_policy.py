@@ -47,7 +47,7 @@ class TodoPolicy:
         self._last_stale_reminder_count = stale_count
         lines = [
             "Todo progress reminder: several tools have run since the todo list was last updated.",
-            "If progress changed, update only item statuses with action='update'. Keep existing item contents and order stable.",
+            "If progress changed, call todo with the complete current list and update only the relevant statuses.",
             "Do not rewrite, rephrase, split, merge, or reorder the plan unless the plan itself is wrong. Continue if the current in_progress item is still accurate.",
         ]
         for item in unfinished:
@@ -68,34 +68,31 @@ class TodoPolicy:
         return "\n".join(
             [
                 "Todo planning reminder: this has become multi-step work, but no todo plan exists yet.",
-                "Call todo once with action='set' and a complete 3-7 item plan before continuing implementation. Use concrete, verifiable items and keep exactly one in_progress. After that, prefer action='update' for status changes instead of rewriting the plan.",
+                "Call todo with a complete 3-7 item plan before continuing implementation. Use concrete, verifiable items and keep exactly one in_progress. Submit the complete current list on every later update.",
             ]
         )
 
     def latest_unfinished_todos(self) -> list[dict[str, object]]:
         view = self.session.rebuild_view()
-        latest: list[dict[str, object]] = []
-        for message in reversed(view.messages):
-            for part in reversed(message.parts):
-                if part.kind != "tool_result":
-                    continue
-                if part.metadata.get("tool_name") != "todo":
-                    continue
-                todos = part.metadata.get("data", {}).get("todos") if isinstance(part.metadata.get("data"), dict) else None
-                if isinstance(todos, list):
-                    latest = [item for item in todos if isinstance(item, dict)]
-                    break
-            if latest:
-                break
-        return [item for item in latest if item.get("status") in {"pending", "in_progress"}]
+        if not self._view_has_active_task_todos(view):
+            return []
+        return [
+            item
+            for item in view.todos
+            if isinstance(item, dict) and item.get("status") in {"pending", "in_progress"}
+        ]
 
     def has_todo_result(self) -> bool:
         view = self.session.rebuild_view()
-        for message in view.messages:
-            for part in message.parts:
-                if part.kind == "tool_result" and part.metadata.get("tool_name") == "todo":
-                    return True
-        return False
+        return self._view_has_active_task_todos(view)
+
+    def _view_has_active_task_todos(self, view) -> bool:
+        if not view.todo_initialized:
+            return False
+        active_task_hash = self.session.runtime_state.active_task_hash
+        if view.todo_task_hash is not None and active_task_hash is not None:
+            return view.todo_task_hash == active_task_hash
+        return True
 
     def non_todo_tool_results_since_latest_todo(self) -> int:
         view = self.session.rebuild_view()

@@ -286,6 +286,20 @@ def test_run_repl_accepts_human_permission_aliases(capsys):
     assert "3. Allow always for same scope" in capsys.readouterr().out
 
 
+def test_run_repl_accepts_permission_rejection_feedback(capsys):
+    runner = FakeChatRunner(
+        replies=[
+            FakeResponse("need permission", finish_reason="waiting_for_user_input"),
+            FakeResponse("done"),
+        ],
+        pending_after_turn=FakePending(id="perm_1", kind="permission_confirmation", question="Allow?"),
+    )
+
+    run_repl(runner, ["write file", "reject: keep the title"])
+
+    assert runner.resumes == [("perm_1", "reject_with_feedback: keep the title")]
+
+
 def test_run_repl_renders_and_accepts_pending_permission_options(capsys):
     runner = FakeChatRunner(
         replies=[

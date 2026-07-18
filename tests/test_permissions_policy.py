@@ -103,7 +103,7 @@ def test_aggressive_does_not_auto_allow_delete(tmp_path) -> None:
 def test_sensitive_env_is_denied_in_every_mode(tmp_path) -> None:
     policy = DefaultPermissionPolicy(tmp_path)
 
-    for mode in (PermissionMode.CONSERVATIVE, PermissionMode.STANDARD, PermissionMode.AGGRESSIVE):
+    for mode in (PermissionMode.STANDARD, PermissionMode.AGGRESSIVE):
         decision = policy.decide(
             _request(PermissionAction.READ_ENV, "OPENAI_API_KEY"),
             mode=mode,
@@ -261,6 +261,6 @@ def test_mcp_tool_requires_confirmation_except_bypass(tmp_path) -> None:
     policy = DefaultPermissionPolicy(tmp_path)
     request = _request(PermissionAction.MCP_TOOL, "lark/calendar_list")
 
-    for mode in (PermissionMode.CONSERVATIVE, PermissionMode.STANDARD, PermissionMode.AGGRESSIVE):
+    for mode in (PermissionMode.STANDARD, PermissionMode.AGGRESSIVE):
         assert policy.decide(request, mode=mode).kind == PermissionDecisionKind.ASK
     assert policy.decide(request, mode=PermissionMode.BYPASS).kind == PermissionDecisionKind.ALLOW

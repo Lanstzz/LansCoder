@@ -1,6 +1,8 @@
+import pytest
+
 from firstcoder.context.context_builder import ContextBuilder
 from firstcoder.context.models import AgentMessage, MessagePart, SessionView
-from firstcoder.context.tool_sequence import validate_tool_call_sequence
+from firstcoder.context.tool_sequence import InvalidToolCallSequenceError, validate_tool_call_sequence
 from firstcoder.context.system_prompt import SystemPromptBuilder, SystemPromptInputs
 from firstcoder.providers.types import ChatMessage
 
@@ -279,3 +281,115 @@ def test_context_builder_projects_one_trim_marker_and_preserves_latest_user_and_
     assert "latest user requirement" in projected[3].content
     assert sum(message.content == "[Earlier dialogue trimmed]" for message in projected) == 1
     validate_tool_call_sequence(view.messages)
+
+
+def test_context_builder_collapses_identical_adjacent_duplicate_tool_call_before_result() -> None:
+    arguments = {"path": "app.py", "old": "old", "new": "new"}
+    view = SessionView(
+        session_id="sess_duplicate_call",
+        messages=[
+            AgentMessage(
+                id="msg_first",
+                session_id="sess_duplicate_call",
+                role="assistant",
+                parts=[
+                    MessagePart(
+                        id="part_first",
+                        message_id="msg_first",
+                        kind="tool_call",
+                        content="",
+                        metadata={
+                            "tool_call_id": "call_duplicate",
+                            "tool_name": "edit",
+                            "arguments": arguments,
+                            "prewrite_review_only": True,
+                        },
+                    )
+                ],
+            ),
+            AgentMessage(
+                id="msg_second",
+                session_id="sess_duplicate_call",
+                role="assistant",
+                parts=[
+                    MessagePart(
+                        id="part_second",
+                        message_id="msg_second",
+                        kind="tool_call",
+                        content="",
+                        metadata={
+                            "tool_call_id": "call_duplicate",
+                            "tool_name": "edit",
+                            "arguments": arguments,
+                        },
+                    )
+                ],
+            ),
+            AgentMessage(
+                id="msg_result",
+                session_id="sess_duplicate_call",
+                role="tool",
+                parts=[
+                    MessagePart(
+                        id="part_result",
+                        message_id="msg_result",
+                        kind="tool_result",
+                        content="edited",
+                        metadata={"tool_call_id": "call_duplicate", "tool_name": "edit"},
+                    )
+                ],
+            ),
+        ],
+    )
+
+    projected = ContextBuilder().build_provider_messages(view)
+
+    assert [message.role for message in projected] == ["assistant", "tool"]
+    assert projected[0].tool_calls[0].id == "call_duplicate"
+    assert projected[1].tool_call_id == "call_duplicate"
+
+
+def test_context_builder_does_not_collapse_duplicate_id_when_arguments_differ() -> None:
+    messages = []
+    for suffix, new_value in (("first", "one"), ("second", "two")):
+        messages.append(
+            AgentMessage(
+                id=f"msg_{suffix}",
+                session_id="sess_conflicting_duplicate",
+                role="assistant",
+                parts=[
+                    MessagePart(
+                        id=f"part_{suffix}",
+                        message_id=f"msg_{suffix}",
+                        kind="tool_call",
+                        content="",
+                        metadata={
+                            "tool_call_id": "call_same_id",
+                            "tool_name": "edit",
+                            "arguments": {"path": "app.py", "old": "old", "new": new_value},
+                        },
+                    )
+                ],
+            )
+        )
+    messages.append(
+        AgentMessage(
+            id="msg_result",
+            session_id="sess_conflicting_duplicate",
+            role="tool",
+            parts=[
+                MessagePart(
+                    id="part_result",
+                    message_id="msg_result",
+                    kind="tool_result",
+                    content="edited",
+                    metadata={"tool_call_id": "call_same_id", "tool_name": "edit"},
+                )
+            ],
+        )
+    )
+
+    with pytest.raises(InvalidToolCallSequenceError, match="missing matching tool result"):
+        ContextBuilder().build_provider_messages(
+            SessionView(session_id="sess_conflicting_duplicate", messages=messages)
+        )

@@ -71,6 +71,17 @@ class ProviderDiagnostics:
 
 
 @dataclass(slots=True)
+class ContentPart:
+    """Provider-agnostic rich content within one chat message."""
+
+    type: Literal["text", "image"]
+    text: str | None = None
+    media_type: str | None = None
+    data_base64: str | None = None
+    filename: str | None = None
+
+
+@dataclass(slots=True)
 class ChatMessage:
     """agent 内部使用的统一消息结构。
 
@@ -80,6 +91,7 @@ class ChatMessage:
 
     role: MessageRole
     content: str
+    content_parts: list[ContentPart] | None = None
     name: str | None = None
     tool_call_id: str | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)

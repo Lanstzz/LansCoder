@@ -39,6 +39,10 @@ The task prompt permits local validation but prohibits edits to tests, fixtures,
 and benchmark/verifier files, so the official hidden patches remain applicable
 when they are replayed in the isolated verifier worktree.
 
+The benchmark session uses bypass permissions and explicitly disables
+`require_prewrite_review`: ChainSWE is non-interactive, so it cannot wait for
+the normal TUI's trusted diff Apply confirmation.
+
 ## Provider defaults and overrides
 
 The defaults mirror the current local GPT-5.6 configuration:

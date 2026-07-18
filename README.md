@@ -42,7 +42,7 @@ Compared with larger projects like OpenCode, FirstCoder is intentionally smaller
 | Dimension | FirstCoder | Larger projects like OpenCode |
 | --- | --- | --- |
 | Primary goal | Make agent internals readable and teachable | Deliver a broader production-style coding-agent platform |
-| Codebase shape | Roughly 23k lines of Python under `firstcoder/` (~170 files) | Roughly 575k lines of TS/JS across a much larger multi-surface codebase |
+| Codebase shape | Roughly 25k lines of Python under `firstcoder/` (174 files) | Roughly 575k lines of TS/JS across a much larger multi-surface codebase |
 | Engineering tradeoff | Drops some extra platform surface area to stay inspectable | Accepts more complexity to support a broader product surface |
 | Best fit | Learning, modification, interview prep, portfolio projects, and local experimentation | Users who want a larger, more full-surface coding-agent environment |
 
@@ -56,7 +56,7 @@ Compared with more tutorial-first or lightweight learning repos, FirstCoder also
 | --- | --- | --- |
 | Learning value | Readable subsystem boundaries and explicit docs | Often optimized for a single tutorial path or demo flow |
 | Practical surface | Real TUI, tools, permissions, sessions, provider adapters | Often focused on a narrower loop or a simpler proof of concept |
-| Verification | 80+ test files and multiple benchmark entry points | Often lighter on testing and benchmark integration |
+| Verification | 108 test modules and multiple benchmark entry points | Often lighter on testing and benchmark integration |
 | Extension path | Easier to adapt into a portfolio or resume project | Often better for following along than for long-term extension |
 
 In this repo, the learning goal is important, but it is paired with enough runtime structure, tests, and benchmark hooks to make the project useful after the first read-through.
@@ -99,7 +99,7 @@ firstcoder --interactive
 
 - Local Python coding agent
 - Textual TUI that exposes agent activity instead of hiding it
-- Tool calling with permission checks before risky actions
+- Tool calling with highlighted diffs before direct file mutations
 - Session persistence, resume flow, and context compaction
 - Skills, provider adapters, and clean modules for study and modification
 
@@ -126,7 +126,7 @@ global:  ~/.config/firstcoder/config.toml
 project: ./firstcoder.toml
 ```
 
-Provider support is centered on the OpenAI Chat Completions-compatible path and a native Anthropic Messages API adapter. Both paths implement the same internal complete/streaming contracts (text deltas, tool-call accumulation, forced `tool_choice`, usage, and `PROMPT_TOO_LONG`-style error classification). Anthropic-only extras such as prompt caching remain optional future work. FirstCoder does not use the OpenAI Responses API yet, so native multimodal support is still future provider work rather than current runtime behavior.
+Provider support is centered on the OpenAI Chat Completions-compatible path and a native Anthropic Messages API adapter. Both paths implement the same internal complete/streaming contracts (text deltas, tool-call accumulation, forced `tool_choice`, usage, and `PROMPT_TOO_LONG`-style error classification). The TUI's native multimodal input can stage pasted file paths and clipboard images; images and small text files then travel through the session/context pipeline to providers that support vision. Model and provider vision capability still matters. Anthropic-only extras such as prompt caching remain optional future work. FirstCoder does not use the OpenAI Responses API yet.
 
 > A small detail for observant users: some provider/model combinations give the
 > TUI topbar a little more character.
@@ -134,6 +134,8 @@ Provider support is centered on the OpenAI Chat Completions-compatible path and 
 ## TUI
 
 FirstCoder's TUI is designed to expose the agent loop instead of hiding it. You can see session state, streamed assistant output, tool calls, tool results, and permission prompts in one place.
+
+Before `write`, `edit`, `apply_patch`, or `delete` changes local files, FirstCoder builds a trusted unified diff with red removals, green additions, per-file statistics, and bounded expansion controls. In standard mode it accompanies the normal permission confirmation; an existing grant or aggressive mode still requires a review-only Apply confirmation. Approve the reviewed operation, deny it, or reply with `reject: <feedback>` so the model can revise the proposed change. FirstCoder rechecks reviewed file snapshots immediately before dispatch and blocks stale operations, reducing accidental overwrites from concurrent changes; this is a guard, not a filesystem-level atomic transaction. In bypass mode the review is shown as a non-blocking event and the operation proceeds immediately; non-interactive benchmark adapters explicitly disable that event. Shell commands follow the permission policy for the active mode because arbitrary command effects cannot be precomputed safely.
 
 Ready state:
 
@@ -149,6 +151,7 @@ Conversation flow:
 - [Chinese Docs Index](docs/README.zh-CN.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Codebase Reading Guide](docs/CODEBASE_READING_GUIDE.md)
+- [Multimodal Input Design](docs/MULTIMODAL_INPUT_DESIGN.md)
 - [MCP Client Configuration](docs/MCP.md)
 
 ## Development

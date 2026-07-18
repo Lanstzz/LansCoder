@@ -9,8 +9,6 @@ complete / astream、tools、forced tool_choice、usage、错误归类、半截 
 from __future__ import annotations
 
 import asyncio
-import queue
-import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -20,6 +18,12 @@ from firstcoder.providers.errors import (
     ProviderError,
     ProviderErrorKind,
     classify_provider_exception,
+)
+from firstcoder.providers.streaming import (
+    STREAM_ENDED,
+    StreamFailure,
+    read_field as _read_field,
+    start_sync_stream_worker,
 )
 from firstcoder.providers.tool_adapters import to_anthropic_tool
 from firstcoder.providers.types import (
@@ -36,14 +40,6 @@ from firstcoder.providers.types import (
     ToolChoiceFunction,
 )
 from firstcoder.utils.json_utils import loads_json_object
-
-
-def _read_field(value: Any, name: str, default: Any = None) -> Any:
-    """同时兼容 Anthropic SDK 对象和测试 dict 的字段读取。"""
-
-    if isinstance(value, dict):
-        return value.get(name, default)
-    return getattr(value, name, default)
 
 
 class AnthropicProvider(ChatProvider):
@@ -168,13 +164,16 @@ class AnthropicProvider(ChatProvider):
 
         yield ChatStreamEvent(kind="message_started")
 
-        stream_queue, _stop_stream = _start_stream_worker(stream)
+        stream_queue, stop_stream = start_sync_stream_worker(
+            stream,
+            thread_name="firstcoder-anthropic-stream",
+        )
         try:
             while True:
                 item = await asyncio.to_thread(stream_queue.get)
-                if item is _STREAM_ENDED:
+                if item is STREAM_ENDED:
                     break
-                if isinstance(item, _StreamFailure):
+                if isinstance(item, StreamFailure):
                     raise ProviderError(
                         classify_provider_exception(item.error),
                         str(item.error),
@@ -275,7 +274,7 @@ class AnthropicProvider(ChatProvider):
                     yield ChatStreamEvent(kind="error", diagnostics=diagnostics)
                     raise ProviderError(classify_provider_exception(Exception(message)), message)
         finally:
-            pass
+            await asyncio.to_thread(stop_stream)
 
         finish_reason = _normalize_stop_reason(raw_finish_reason)
         diagnostics.raw_finish_reason = raw_finish_reason
@@ -289,9 +288,6 @@ class AnthropicProvider(ChatProvider):
             )
         elif tool_accumulators:
             tool_calls = _complete_stream_tool_calls(tool_accumulators, diagnostics=diagnostics)
-            if diagnostics.warnings and tool_accumulators and not tool_calls:
-                # 参数坏了：已在 helper 写入 warning
-                pass
 
         for tool_call in tool_calls:
             yield ChatStreamEvent(
@@ -429,7 +425,25 @@ class AnthropicProvider(ChatProvider):
                     )
                 converted.append({"role": "assistant", "content": content})
                 continue
-            converted.append({"role": message.role, "content": message.content})
+            if message.content_parts is not None:
+                content = []
+                for part in message.content_parts:
+                    if part.type == "text" and part.text is not None:
+                        content.append({"type": "text", "text": part.text})
+                    elif part.type == "image" and part.media_type and part.data_base64:
+                        content.append(
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": part.media_type,
+                                    "data": part.data_base64,
+                                },
+                            }
+                        )
+                converted.append({"role": message.role, "content": content or message.content})
+            else:
+                converted.append({"role": message.role, "content": message.content})
         return converted
 
     @staticmethod
@@ -566,38 +580,6 @@ class _StreamToolCallAccumulator:
     name: str = ""
     arguments_text: str = ""
     saw_arguments: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class _StreamFailure:
-    error: BaseException
-
-
-_STREAM_ENDED = object()
-
-
-def _start_stream_worker(stream: Any) -> tuple[queue.Queue[Any], threading.Event]:
-    """用单一后台线程拥有同步 stream iterator。"""
-
-    stream_queue: queue.Queue[Any] = queue.Queue()
-    stop_event = threading.Event()
-
-    def worker() -> None:
-        try:
-            for chunk in stream:
-                if stop_event.is_set():
-                    break
-                stream_queue.put(chunk)
-        except BaseException as exc:
-            stream_queue.put(_StreamFailure(exc))
-        finally:
-            close = getattr(stream, "close", None)
-            if callable(close):
-                close()
-            stream_queue.put(_STREAM_ENDED)
-
-    threading.Thread(target=worker, name="firstcoder-anthropic-stream", daemon=True).start()
-    return stream_queue, stop_event
 
 
 def _complete_stream_tool_calls(

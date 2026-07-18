@@ -12,7 +12,7 @@ from firstcoder.permissions.types import PermissionDecision, PermissionDecisionK
 from firstcoder.providers.types import ToolDefinition
 from firstcoder.tools.permission_results import make_permission_confirmation_result, make_permission_denied_result
 from firstcoder.tools.registry import ToolRegistry
-from firstcoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result
+from firstcoder.tools.types import Tool, ToolPermissionSpec, ToolResult
 
 
 class PermissionAwareToolRegistry:

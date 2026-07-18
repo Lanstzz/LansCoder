@@ -64,6 +64,7 @@ Package boundaries and dependency rules live in [ARCHITECTURE.md](ARCHITECTURE.m
 | `ChatStreamEvent` | provider | runner/TUI | normalized text, reasoning, and tool-call deltas |
 | `ToolExecutionEvent` | agent loop | runner/TUI | local work is separate from model streaming |
 | `UserInputRequest` | `firstcoder.runtime.user_input` (permissions / `ask_user`) | interactive UI | explicit pause/resume contract shared outside `agent/` |
+| `UserAttachment` | composer/paste handler | runner/session | a staged path or clipboard image sent with a user turn |
 
 ## User-Facing Modes
 
@@ -90,6 +91,15 @@ where every CLI option wins.
 and a pending input prompt. It buffers streaming text before flushing it so a
 token stream does not cause a widget update per token.
 
+When a path or `file://` URI is pasted into the composer, `input.attachments`
+resolves an existing file and stages it instead of inserting the path as prompt
+text. A paste with no file path may stage an image copied to the OS clipboard.
+The composer shows attachment chips, sends `text + attachments` to the runner,
+then clears the staged list after a successful chat submission. Image-only
+submissions receive a small default instruction. Session code—not the widget—
+copies the bytes into the session attachment directory before the event is
+written.
+
 Internal control-plane tools listed in
 `firstcoder.tools.hidden.HIDDEN_TOOL_STATUS_NAMES` (currently `task_boundary`)
 should stay out of noisy human activity streams even though they remain
@@ -99,6 +109,13 @@ There are two event lanes:
 
 - provider events: reasoning/text/tool-call deltas and final response;
 - local events: tool started, finished, skipped, denied, or permission asked.
+
+`prewrite_review` is also a local event. It renders a bounded trusted diff card
+for direct file mutations. The review's Apply/deny/reject reply belongs to the
+same pending-input path as permission confirmation; `review all`, `review
+<path>`, and `review clear` only change local card expansion state. Todo items
+are replayed from session `todo_updated` events, so a resumed TUI restores the
+latest list instead of treating it as a transient widget.
 
 Keeping them distinct lets the UI say “a shell command is running” even while
 the provider has produced no further text. Do not represent a local tool run as
@@ -117,7 +134,8 @@ state as a shortcut.
 
 ```sh
 .venv/bin/python -m firstcoder --help
-.venv/bin/python -m pytest tests/test_cli.py tests/test_app_factory.py tests/test_app_runtime.py -q
+.venv/bin/python -m pytest tests/test_cli.py tests/test_app_tui.py \
+  tests/test_multimodal_input.py tests/test_prewrite_review.py tests/test_review_view.py -q
 ```
 
 To inspect startup without credentials, read the fake-provider cases in
@@ -132,6 +150,8 @@ that `task_boundary` is session-injected before the first provider request.
 | new session still displays old history | `CurrentSessionState` and session command callback |
 | text appears only at the end | provider streaming capability and runner's streaming choice |
 | approval cannot continue | pending `UserInputRequest` and `aresume_with_user_input` path |
+| pasted image/path did not appear | composer focus, `resolve_paste_attachments`, and the attachment size limit |
+| review says snapshot expired | external file changed after preview; ask the model to regenerate the mutation |
 | command is listed but does nothing | matching command handler and router registration |
 
 ## Extension Rules

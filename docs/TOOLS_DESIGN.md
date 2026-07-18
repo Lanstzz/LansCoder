@@ -75,6 +75,13 @@ normalizes failures. `PermissionAwareToolRegistry.execute` first derives a
 decision. `ASK` returns a structured signal instead of executing; `AgentLoop`
 stores the original call and resumes it after user input.
 
+Before a supported direct mutation reaches the executor, `ToolExecutor` also
+uses `tools.review.build_prewrite_review` to construct a trusted diff and file
+snapshots. This is control-plane behavior, not a model-visible tool. It covers
+`write`, `edit`, `apply_patch`, and `delete`; it deliberately excludes `shell`,
+whose effect cannot be safely precomputed. A resumed Apply validates snapshots
+again and always executes the locally retained original `ToolCall`.
+
 The agent loop guarantees legal conversation ordering:
 
 ```text
@@ -86,13 +93,16 @@ invent a tool result in UI code or remove one during context compaction.
 
 ## Special Tools
 
-- `todo` persists the visible plan protocol used by the UI.
+- `todo` replaces the complete visible plan. A successful call appends a
+  `todo_updated` snapshot, so `SessionView.todos`, resume/fork, and the TUI
+  share one durable fact model.
 - `think` records internal structured reasoning without mutating the workspace.
 - `task_boundary` reports whether a user message begins a task; hashes are
   generated program-side, not accepted from the model.
 - `retrieve_archive` reads bounded archived output only from the current
   session.
-- `web_search` prefers Parallel MCP and may fall back to Exa when configured.
+- `web_search` uses a hosted Parallel MCP endpoint and may fall back to Exa
+  when configured. It is built in, not a server from the user's MCP config.
 
 These are runtime participants, not merely convenience commands. Treat a
 change to their output schema as a compatibility change for context and tests.
@@ -115,7 +125,8 @@ DTO is needed both below and above the loop, put it in `runtime/`.
 
 ```sh
 .venv/bin/python -m pytest tests/test_tools.py tests/test_schema.py \
-  tests/test_introspection.py tests/test_permission_registry.py -q
+  tests/test_introspection.py tests/test_execution_tools.py \
+  tests/test_permission_registry.py tests/test_prewrite_review.py -q
 ```
 
 ## Failure Diagnosis

@@ -16,6 +16,7 @@ from firstcoder.agent.session import AgentSession
 from firstcoder.context.manager import ContextCompactResult, ContextWindowTrigger
 from firstcoder.context.runtime_replay import replay_runtime_state
 from firstcoder.context.store import JsonlSessionStore
+from firstcoder.input.attachments import attach_path
 from firstcoder.permissions.types import PermissionMode
 from firstcoder.providers.base import ChatProvider
 from firstcoder.providers.errors import ProviderError, ProviderErrorKind
@@ -33,6 +34,8 @@ from firstcoder.tools.task_boundary import create_task_boundary_tool
 from firstcoder.tools.ask_user import create_ask_user_tool
 from firstcoder.tools.todo import create_todo_tool
 from firstcoder.tools.write import create_write_tool
+from firstcoder.tools.edit import create_edit_tool
+from firstcoder.tools.shell import create_shell_tool
 from firstcoder.tools.types import Tool, ToolResult
 
 
@@ -539,6 +542,28 @@ def test_agent_loop_appends_user_and_assistant_messages(tmp_path) -> None:
     assert view.messages[1].parts[0].metadata["turn_id"] == 1
 
 
+def test_agent_loop_projects_image_attachment_into_provider_request(tmp_path) -> None:
+    image = tmp_path / "image.png"
+    image.write_bytes(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    )
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    session = AgentSession.create(store=store, session_id="sess_image_request")
+    provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="收到图片")])
+
+    AgentLoop(session=session, provider=provider).run_user_turn(
+        "描述图片",
+        attachments=[attach_path(image)],
+    )
+
+    request = provider.requests[0]
+    user_message = next(message for message in request.messages if message.role == "user")
+    assert user_message.content_parts is not None
+    image_part = next(part for part in user_message.content_parts if part.type == "image")
+    assert image_part.media_type == "image/png"
+    assert image_part.data_base64
+
+
 def test_agent_loop_builds_context_with_system_prefix_without_storing_it(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test", agents_md="AGENTS 规则")
@@ -667,7 +692,7 @@ def test_agent_loop_runs_bypass_allowed_tool_calls_in_parallel(tmp_path) -> None
         store=store,
         session_id="sess_parallel_bypass",
         project_root=tmp_path,
-        tools=[_slow_named_tool("write", delay=0.2), _slow_named_tool("shell", delay=0.2)],
+        tools=[_slow_named_tool("shell", delay=0.2), _slow_named_tool("python_exec", delay=0.2)],
     )
     session.set_permission_mode(PermissionMode.BYPASS)
     provider = FakeProvider(
@@ -677,8 +702,8 @@ def test_agent_loop_runs_bypass_allowed_tool_calls_in_parallel(tmp_path) -> None
                 model="fake-model",
                 content="",
                 tool_calls=[
-                    ToolCall(id="call_write", name="write", arguments={"text": "first"}),
-                    ToolCall(id="call_shell", name="shell", arguments={"text": "second"}),
+                    ToolCall(id="call_shell", name="shell", arguments={"text": "first"}),
+                    ToolCall(id="call_python", name="python_exec", arguments={"text": "second"}),
                 ],
                 finish_reason="tool_calls",
             ),
@@ -702,10 +727,10 @@ def test_agent_loop_runs_bypass_allowed_tool_calls_in_parallel(tmp_path) -> None
     view = store.rebuild_session_view("sess_parallel_bypass")
     tool_messages = [message for message in view.messages if message.role == "tool"]
     assert [message.parts[0].metadata["tool_call_id"] for message in tool_messages] == [
-        "call_write",
         "call_shell",
+        "call_python",
     ]
-    assert [message.parts[0].content for message in tool_messages] == ["write:first", "shell:second"]
+    assert [message.parts[0].content for message in tool_messages] == ["shell:first", "python_exec:second"]
 
 
 def test_agent_loop_streaming_runs_readonly_tool_calls_in_parallel(tmp_path) -> None:
@@ -1352,6 +1377,32 @@ def test_task_boundary_tool_result_append_preserves_stable_window_metadata(tmp_p
     assert event.payload["created_at"] == result.data["created_at"]
 
 
+def test_agent_session_persists_successful_todo_result_as_native_state_event(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_todo_state", tools=[create_todo_tool()])
+    session.runtime_state.active_task_hash = "task_current"
+    tool_call = ToolCall(
+        id="call_todo",
+        name="todo",
+        arguments={
+            "todos": [
+                {"content": "读代码", "status": "in_progress", "priority": "high"},
+            ]
+        },
+    )
+
+    result = session.execute_tool_call(tool_call)
+    session.append_tool_result(tool_call=tool_call, result=result)
+
+    events = store.list_events("sess_todo_state")
+    todo_event = next(event for event in events if event.type == "todo_updated")
+    assert todo_event.payload == {
+        "todos": [{"content": "读代码", "status": "in_progress", "priority": "high"}],
+        "task_hash": "task_current",
+    }
+    assert session.rebuild_view().todos == todo_event.payload["todos"]
+
+
 def test_agent_loop_does_not_persist_unexecuted_tool_calls_after_round_limit(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
@@ -1500,10 +1551,9 @@ def test_agent_loop_runs_todo_self_check_before_final_answer(tmp_path) -> None:
                         id="call_todo_set",
                         name="todo",
                         arguments={
-                            "action": "set",
                             "todos": [
-                                {"content": "读代码", "status": "done"},
-                                {"content": "跑测试", "status": "pending"},
+                                {"content": "读代码", "status": "completed", "priority": "medium"},
+                                {"content": "跑测试", "status": "pending", "priority": "medium"},
                             ],
                         },
                     )
@@ -1547,10 +1597,9 @@ def test_agent_loop_skips_todo_self_check_when_all_todos_done(tmp_path) -> None:
                         id="call_todo_set",
                         name="todo",
                         arguments={
-                            "action": "set",
                             "todos": [
-                                {"content": "读代码", "status": "done"},
-                                {"content": "跑测试", "status": "done"},
+                                {"content": "读代码", "status": "completed", "priority": "medium"},
+                                {"content": "跑测试", "status": "completed", "priority": "medium"},
                             ],
                         },
                     )
@@ -1590,10 +1639,9 @@ def test_agent_loop_skips_todo_self_check_when_all_todos_completed(tmp_path) -> 
                         id="call_todo_set",
                         name="todo",
                         arguments={
-                            "action": "set",
                             "todos": [
-                                {"content": "读代码", "status": "completed"},
-                                {"content": "跑测试", "status": "completed"},
+                                {"content": "读代码", "status": "completed", "priority": "medium"},
+                                {"content": "跑测试", "status": "completed", "priority": "medium"},
                             ],
                         },
                     )
@@ -1633,8 +1681,7 @@ def test_agent_loop_executes_tool_calls_after_todo_self_check(tmp_path) -> None:
                         id="call_todo_set",
                         name="todo",
                         arguments={
-                            "action": "set",
-                            "todos": [{"content": "跑测试", "status": "pending"}],
+                            "todos": [{"content": "跑测试", "status": "pending", "priority": "medium"}],
                         },
                     )
                 ],
@@ -1656,7 +1703,9 @@ def test_agent_loop_executes_tool_calls_after_todo_self_check(tmp_path) -> None:
                     ToolCall(
                         id="call_todo_done",
                         name="todo",
-                        arguments={"action": "update", "todo_id": "todo_1", "status": "done"},
+                        arguments={
+                            "todos": [{"content": "跑测试", "status": "completed", "priority": "medium"}]
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -1682,6 +1731,147 @@ def test_agent_loop_executes_tool_calls_after_todo_self_check(tmp_path) -> None:
     assert tool_result_ids == ["call_todo_set", "call_echo", "call_todo_done"]
 
 
+def test_agent_loop_propagates_prewrite_review_from_todo_self_check_without_duplicate_call(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    session = AgentSession.from_project(
+        store=store,
+        session_id="sess_todo_review_pause",
+        project_root=tmp_path,
+        tools=[create_todo_tool(), create_write_tool(tmp_path)],
+    )
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_todo_set",
+                        name="todo",
+                        arguments={
+                            "todos": [{"content": "写文件", "status": "pending", "priority": "medium"}],
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="我完成了"),
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_write_from_self_check",
+                        name="write",
+                        arguments={"path": "README.md", "content": "hello"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_todo_done_after_write",
+                        name="todo",
+                        arguments={
+                            "todos": [{"content": "写文件", "status": "completed", "priority": "medium"}]
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="写入完成"),
+        ]
+    )
+
+    loop = AgentLoop(session=session, provider=provider)
+    result = loop.run_user_turn_interactive("完成任务")
+
+    assert result.status == AgentTurnStatus.WAITING_FOR_USER_INPUT
+    assert result.pending_input is not None
+    assert result.pending_input.payload["pending_tool_call"]["id"] == "call_write_from_self_check"
+    call_ids = [
+        part.metadata["tool_call_id"]
+        for message in store.rebuild_session_view("sess_todo_review_pause").messages
+        for part in message.parts
+        if part.kind == "tool_call"
+    ]
+    assert call_ids.count("call_write_from_self_check") == 1
+
+    resumed = loop.resume_with_user_input(result.pending_input.id, "allow_once")
+
+    assert resumed.status == AgentTurnStatus.COMPLETED
+    assert resumed.response is not None
+    assert resumed.response.content == "写入完成"
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "hello"
+    assert [message.role for message in store.rebuild_session_view("sess_todo_review_pause").messages][-3:] == [
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+
+
+def test_agent_loop_streaming_propagates_prewrite_review_from_todo_self_check_without_duplicate_call(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    session = AgentSession.from_project(
+        store=store,
+        session_id="sess_stream_todo_review_pause",
+        project_root=tmp_path,
+        tools=[create_todo_tool(), create_write_tool(tmp_path)],
+    )
+    provider = StreamingProvider(
+        [
+            ChatResponse(
+                provider="fake-stream",
+                model="fake-stream-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_todo_set",
+                        name="todo",
+                        arguments={
+                            "todos": [{"content": "写文件", "status": "pending", "priority": "medium"}],
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake-stream", model="fake-stream-model", content="我完成了"),
+            ChatResponse(
+                provider="fake-stream",
+                model="fake-stream-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_stream_write_from_self_check",
+                        name="write",
+                        arguments={"path": "README.md", "content": "hello"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+        ]
+    )
+
+    response = AgentLoop(session=session, provider=provider).run_user_turn_streaming_sync("完成任务")
+
+    assert response.finish_reason == AgentTurnStatus.WAITING_FOR_USER_INPUT.value
+    pending = response.raw["pending_input"]
+    assert pending.payload["pending_tool_call"]["id"] == "call_stream_write_from_self_check"
+    call_ids = [
+        part.metadata["tool_call_id"]
+        for message in store.rebuild_session_view("sess_stream_todo_review_pause").messages
+        for part in message.parts
+        if part.kind == "tool_call"
+    ]
+    assert call_ids.count("call_stream_write_from_self_check") == 1
+
+
 def test_agent_loop_reminds_model_when_todo_is_stale_during_tool_loop(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
@@ -1700,7 +1890,9 @@ def test_agent_loop_reminds_model_when_todo_is_stale_during_tool_loop(tmp_path) 
                     ToolCall(
                         id="call_todo_set",
                         name="todo",
-                        arguments={"action": "set", "todos": [{"content": "跑测试", "status": "in_progress"}]},
+                        arguments={
+                            "todos": [{"content": "跑测试", "status": "in_progress", "priority": "medium"}]
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -1734,7 +1926,9 @@ def test_agent_loop_reminds_model_when_todo_is_stale_during_tool_loop(tmp_path) 
                     ToolCall(
                         id="call_todo_done",
                         name="todo",
-                        arguments={"action": "update", "todo_id": "todo_1", "status": "done"},
+                        arguments={
+                            "todos": [{"content": "跑测试", "status": "completed", "priority": "medium"}]
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -1789,11 +1983,10 @@ def test_agent_loop_reminds_model_to_create_todo_for_multi_step_tool_work(tmp_pa
                         id="call_todo_set",
                         name="todo",
                         arguments={
-                            "action": "set",
                             "todos": [
-                                {"content": "Inspect current behavior", "status": "completed"},
-                                {"content": "Implement fix", "status": "in_progress"},
-                                {"content": "Run focused tests", "status": "pending"},
+                                {"content": "Inspect current behavior", "status": "completed", "priority": "medium"},
+                                {"content": "Implement fix", "status": "in_progress", "priority": "medium"},
+                                {"content": "Run focused tests", "status": "pending", "priority": "medium"},
                             ],
                         },
                     )
@@ -1879,7 +2072,9 @@ def test_agent_loop_resets_todo_stale_reminder_after_todo_update(tmp_path) -> No
                     ToolCall(
                         id="call_todo_set",
                         name="todo",
-                        arguments={"action": "set", "todos": [{"content": "跑测试", "status": "in_progress"}]},
+                        arguments={
+                            "todos": [{"content": "跑测试", "status": "in_progress", "priority": "medium"}]
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -1899,7 +2094,9 @@ def test_agent_loop_resets_todo_stale_reminder_after_todo_update(tmp_path) -> No
                     ToolCall(
                         id="call_todo_keep",
                         name="todo",
-                        arguments={"action": "update", "todo_id": "todo_1", "status": "in_progress"},
+                        arguments={
+                            "todos": [{"content": "跑测试", "status": "in_progress", "priority": "medium"}]
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -1933,7 +2130,9 @@ def test_agent_loop_resets_todo_stale_reminder_after_todo_update(tmp_path) -> No
                     ToolCall(
                         id="call_todo_done",
                         name="todo",
-                        arguments={"action": "update", "todo_id": "todo_1", "status": "done"},
+                        arguments={
+                            "todos": [{"content": "跑测试", "status": "completed", "priority": "medium"}]
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -2373,12 +2572,221 @@ def test_agent_loop_permission_pause_does_not_append_confirmation_tool_result(tm
     assert result.status == AgentTurnStatus.WAITING_FOR_USER_INPUT
     assert result.pending_input is not None
     assert result.pending_input.kind == "permission_confirmation"
+    review = result.pending_input.payload["prewrite_review"]
+    assert review["summary"]["created_files"] == 1
+    assert review["summary"]["added_lines"] == 1
+    assert review["files"][0]["path"] == "README.md"
+    assert review["files"][0]["operation"] == "create"
+    assert "+hello" in review["files"][0]["diff"]
     assert session.pending_permission_execution is not None
+    assert session.pending_permission_execution.prewrite_review is not None
     assert session.pending_permission_execution.tool_call.id == "call_write"
     assert not (tmp_path / "README.md").exists()
     view = store.rebuild_session_view("sess_perm_pause")
     assert [message.role for message in view.messages] == ["user", "assistant"]
     assert view.messages[1].parts[0].metadata["tool_call_id"] == "call_write"
+
+
+def test_agent_loop_bypass_mode_emits_prewrite_review_and_executes_without_confirmation(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    session = AgentSession.from_project(
+        store=store,
+        session_id="sess_review_bypass",
+        project_root=tmp_path,
+        tools=[create_write_tool(tmp_path)],
+    )
+    session.set_permission_mode(PermissionMode.BYPASS)
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_write",
+                        name="write",
+                        arguments={"path": "README.md", "content": "hello"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="写好了"),
+        ]
+    )
+
+    events: list[ToolExecutionEvent] = []
+    result = AgentLoop(
+        session=session,
+        provider=provider,
+        tool_event_handler=events.append,
+    ).run_user_turn_interactive("写 README")
+
+    assert result.status == AgentTurnStatus.COMPLETED
+    assert result.pending_input is None
+    assert result.response is not None
+    assert result.response.content == "写好了"
+    assert session.pending_permission_execution is None
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "hello"
+    assert [event.kind for event in events] == ["prewrite_review", "started", "finished"]
+    assert events[0].prewrite_review is not None
+    assert events[0].prewrite_review["files"][0]["path"] == "README.md"
+    assert "+hello" in events[0].prewrite_review["files"][0]["diff"]
+
+
+def test_agent_loop_streaming_bypass_mode_emits_prewrite_review_without_confirmation(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    session = AgentSession.from_project(
+        store=store,
+        session_id="sess_stream_review_bypass",
+        project_root=tmp_path,
+        tools=[create_write_tool(tmp_path)],
+    )
+    session.set_permission_mode(PermissionMode.BYPASS)
+    provider = StreamingProvider(
+        [
+            ChatResponse(
+                provider="fake-stream",
+                model="fake-stream-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_write",
+                        name="write",
+                        arguments={"path": "README.md", "content": "hello"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake-stream", model="fake-stream-model", content="写好了"),
+        ]
+    )
+
+    events: list[ToolExecutionEvent] = []
+    response = AgentLoop(
+        session=session,
+        provider=provider,
+        tool_event_handler=events.append,
+    ).run_user_turn_streaming_sync("写 README")
+
+    assert response.content == "写好了"
+    assert session.pending_permission_execution is None
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "hello"
+    assert [event.kind for event in events] == ["prewrite_review", "started", "finished"]
+    assert events[0].prewrite_review is not None
+    assert "+hello" in events[0].prewrite_review["files"][0]["diff"]
+
+
+def test_agent_loop_bypass_mode_blocks_mutation_when_prewrite_review_fails(tmp_path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("old\nold\n", encoding="utf-8")
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    session = AgentSession.from_project(
+        store=store,
+        session_id="sess_review_failed_bypass",
+        project_root=tmp_path,
+        tools=[create_edit_tool(tmp_path)],
+    )
+    session.set_permission_mode(PermissionMode.BYPASS)
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_edit",
+                        name="edit",
+                        arguments={"path": "app.py", "old": "old", "new": "new"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="无法安全预览"),
+        ]
+    )
+
+    result = AgentLoop(session=session, provider=provider).run_user_turn_interactive("修改 app.py")
+
+    assert result.status == AgentTurnStatus.COMPLETED
+    assert result.pending_input is None
+    assert target.read_text(encoding="utf-8") == "old\nold\n"
+    tool_part = store.rebuild_session_view("sess_review_failed_bypass").messages[2].parts[0]
+    assert tool_part.metadata["ok"] is False
+    assert tool_part.metadata["data"]["request_type"] == "prewrite_review_failed"
+
+
+def test_agent_loop_shell_permission_does_not_claim_precomputed_diff(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    session = AgentSession.from_project(
+        store=store,
+        session_id="sess_shell_no_review",
+        project_root=tmp_path,
+        tools=[create_shell_tool(tmp_path)],
+    )
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(id="call_shell", name="shell", arguments={"command": "echo hello"})
+                ],
+                finish_reason="tool_calls",
+            )
+        ]
+    )
+
+    result = AgentLoop(session=session, provider=provider).run_user_turn_interactive("运行命令")
+
+    assert result.status == AgentTurnStatus.WAITING_FOR_USER_INPUT
+    assert result.pending_input is not None
+    assert "prewrite_review" not in result.pending_input.payload
+
+
+def test_agent_loop_blocks_mutation_when_prewrite_review_cannot_be_built(tmp_path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("old\nold\n", encoding="utf-8")
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    session = AgentSession.from_project(
+        store=store,
+        session_id="sess_review_failed",
+        project_root=tmp_path,
+        tools=[create_edit_tool(tmp_path)],
+    )
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_edit",
+                        name="edit",
+                        arguments={"path": "app.py", "old": "old", "new": "new"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="需要更精确的修改范围"),
+        ]
+    )
+
+    result = AgentLoop(session=session, provider=provider).run_user_turn_interactive("修改 app.py")
+
+    assert result.status == AgentTurnStatus.COMPLETED
+    assert result.pending_input is None
+    assert result.response is not None
+    assert result.response.content == "需要更精确的修改范围"
+    assert target.read_text(encoding="utf-8") == "old\nold\n"
+    view = store.rebuild_session_view("sess_review_failed")
+    tool_part = view.messages[2].parts[0]
+    assert tool_part.metadata["ok"] is False
+    assert tool_part.metadata["data"]["request_type"] == "prewrite_review_failed"
+    assert "匹配内容出现 2 次" in tool_part.content
 
 
 def test_agent_loop_permission_deny_appends_denied_result_and_continues(tmp_path) -> None:
@@ -2427,6 +2835,47 @@ def test_agent_loop_permission_deny_appends_denied_result_and_continues(tmp_path
     assert provider.requests[1].messages[-1].tool_call_id == "call_write"
 
 
+def test_agent_loop_permission_reject_with_feedback_returns_feedback_to_model(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    session = AgentSession.from_project(
+        store=store,
+        session_id="sess_perm_feedback",
+        project_root=tmp_path,
+        tools=[create_write_tool(tmp_path)],
+    )
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_write",
+                        name="write",
+                        arguments={"path": "README.md", "content": "hello"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="我会按反馈重新修改"),
+        ]
+    )
+    loop = AgentLoop(session=session, provider=provider)
+
+    pending = loop.run_user_turn_interactive("写 README").pending_input
+    assert pending is not None
+    result = loop.resume_with_user_input(pending.id, "reject_with_feedback: 请保留原标题")
+
+    assert result.response is not None
+    assert result.response.content == "我会按反馈重新修改"
+    assert not (tmp_path / "README.md").exists()
+    view = store.rebuild_session_view("sess_perm_feedback")
+    tool_part = view.messages[2].parts[0]
+    assert tool_part.metadata["data"]["permission_feedback"] == "请保留原标题"
+    assert "请保留原标题" in provider.requests[1].messages[-1].content
+
+
 def test_agent_loop_permission_allow_once_executes_without_grant(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path / ".firstcoder")
     session = AgentSession.from_project(
@@ -2467,6 +2916,48 @@ def test_agent_loop_permission_allow_once_executes_without_grant(tmp_path) -> No
     view = store.rebuild_session_view("sess_perm_once")
     assert [message.role for message in view.messages] == ["user", "assistant", "tool", "assistant"]
     assert view.messages[2].parts[0].metadata["ok"] is True
+
+
+def test_agent_loop_permission_allow_once_rejects_stale_prewrite_review(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    session = AgentSession.from_project(
+        store=store,
+        session_id="sess_perm_stale_review",
+        project_root=tmp_path,
+        tools=[create_write_tool(tmp_path)],
+    )
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_write",
+                        name="write",
+                        arguments={"path": "README.md", "content": "approved preview"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="预览已过期，未写入"),
+        ]
+    )
+    loop = AgentLoop(session=session, provider=provider)
+
+    pending = loop.run_user_turn_interactive("写 README").pending_input
+    assert pending is not None
+    (tmp_path / "README.md").write_text("external change", encoding="utf-8")
+    result = loop.resume_with_user_input(pending.id, "allow_once")
+
+    assert result.response is not None
+    assert result.response.content == "预览已过期，未写入"
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "external change"
+    view = store.rebuild_session_view("sess_perm_stale_review")
+    tool_part = view.messages[2].parts[0]
+    assert tool_part.metadata["ok"] is False
+    assert tool_part.metadata["data"]["request_type"] == "prewrite_review_stale"
 
 
 def test_agent_loop_permission_allow_always_adds_grant_and_executes(tmp_path) -> None:
@@ -2673,3 +3164,41 @@ def test_agent_loop_permission_resume_uses_local_pending_not_ui_payload(tmp_path
     view = store.rebuild_session_view("sess_perm_payload")
     tool_part = view.messages[2].parts[0]
     assert tool_part.metadata["tool_call_id"] == "call_write"
+
+
+def test_agent_loop_permission_resume_ignores_nested_ui_argument_tampering(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    session = AgentSession.from_project(
+        store=store,
+        session_id="sess_perm_nested_payload",
+        project_root=tmp_path,
+        tools=[create_write_tool(tmp_path)],
+    )
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_write",
+                        name="write",
+                        arguments={"path": "README.md", "content": "safe"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="写好了"),
+        ]
+    )
+    loop = AgentLoop(session=session, provider=provider)
+
+    pending = loop.run_user_turn_interactive("写 README").pending_input
+    assert pending is not None
+    pending.payload["pending_tool_call"]["arguments"]["path"] = "pwned.txt"
+    pending.payload["pending_tool_call"]["arguments"]["content"] = "tampered"
+    loop.resume_with_user_input(pending.id, "allow_once")
+
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "safe"
+    assert not (tmp_path / "pwned.txt").exists()

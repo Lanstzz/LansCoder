@@ -103,8 +103,6 @@ def _grant_matches(grant: PermissionGrant, request: PermissionRequest) -> bool:
         if request.action in {PermissionAction.EXECUTE_SHELL, PermissionAction.GIT_OPERATION}:
             if _has_shell_control_operator(request.target):
                 return False
-        if request.action == PermissionAction.EXECUTE_SHELL and _has_shell_control_operator(request.target):
-            return False
         return _command_matches_prefix(request.target, grant.scope_value)
     if grant.scope_type == PermissionScopeType.HOST:
         return _host_from_target(request.target) == grant.scope_value.lower()

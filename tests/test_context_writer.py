@@ -104,3 +104,39 @@ def test_writer_appends_task_boundary_observation_event(tmp_path) -> None:
     assert event.type == "task_boundary_observed"
     assert event.payload["active_task_hash"] == observation.candidate_hash
     assert event.payload["triggered_compaction"] is True
+
+
+def test_writer_appends_todo_updated_event_and_store_replays_latest_state(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    writer = SessionEventWriter(store=store, session_id="sess_test")
+    initial = [
+        {"content": "读代码", "status": "in_progress", "priority": "high"},
+        {"content": "跑测试", "status": "pending", "priority": "medium"},
+    ]
+    latest = [
+        {"content": "读代码", "status": "completed", "priority": "high"},
+        {"content": "跑测试", "status": "in_progress", "priority": "medium"},
+    ]
+
+    writer.append_todo_updated(initial, task_hash="task_a")
+    writer.append_todo_updated(latest, task_hash="task_a")
+
+    events = store.list_events("sess_test")
+    view = store.rebuild_session_view("sess_test")
+    assert [event.type for event in events] == ["todo_updated", "todo_updated"]
+    assert events[-1].payload == {"todos": latest, "task_hash": "task_a"}
+    assert view.todos == latest
+    assert view.todo_initialized is True
+    assert view.todo_task_hash == "task_a"
+
+
+def test_todo_updated_state_is_isolated_by_session(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    todos_a = [{"content": "会话 A", "status": "pending", "priority": "high"}]
+    todos_b = [{"content": "会话 B", "status": "completed", "priority": "low"}]
+
+    SessionEventWriter(store=store, session_id="sess_a").append_todo_updated(todos_a, task_hash="task_a")
+    SessionEventWriter(store=store, session_id="sess_b").append_todo_updated(todos_b, task_hash="task_b")
+
+    assert store.rebuild_session_view("sess_a").todos == todos_a
+    assert store.rebuild_session_view("sess_b").todos == todos_b

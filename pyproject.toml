@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "firstcoder"
-version = "0.1.4"
+version = "0.1.5"
 description = "A local Python coding agent with a Textual TUI."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,3 +31,6 @@ include = ["firstcoder*"]
 
 [tool.setuptools.package-data]
 firstcoder = ["context/prompts/*.md", "app/*.tcss"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

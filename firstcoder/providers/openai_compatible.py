@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import queue
-import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -16,6 +14,12 @@ from firstcoder.providers.errors import (
     ProviderErrorKind,
     classify_provider_error,
     classify_provider_exception,
+)
+from firstcoder.providers.streaming import (
+    STREAM_ENDED,
+    StreamFailure,
+    read_field as _read_field,
+    start_sync_stream_worker,
 )
 from firstcoder.providers.tool_adapters import to_openai_tool
 from firstcoder.providers.types import (
@@ -31,18 +35,6 @@ from firstcoder.providers.types import (
     ToolChoiceFunction,
     ToolCall,
 )
-
-
-def _read_field(value: Any, name: str, default: Any = None) -> Any:
-    """同时兼容 SDK 对象和普通 dict 的字段读取。
-
-    OpenAI SDK 返回的是带属性访问能力的对象；测试里常常用 dict 或简单假对象。
-    统一通过这个函数读取字段，可以让解析逻辑更容易测试。
-    """
-
-    if isinstance(value, dict):
-        return value.get(name, default)
-    return getattr(value, name, default)
 
 
 def _read_reasoning_delta(delta: Any) -> str:
@@ -189,13 +181,16 @@ class OpenAICompatibleProvider(ChatProvider):
 
         # OpenAI Python SDK 的 stream iterator 是同步对象；Agent/UI 这边是 async 消费。
         # 用后台线程顺序读取 chunk，再通过 Queue 桥接到 async loop，避免阻塞 Textual。
-        stream_queue, stop_stream = _start_stream_worker(stream)
+        stream_queue, stop_stream = start_sync_stream_worker(
+            stream,
+            thread_name="firstcoder-openai-stream",
+        )
         try:
             while True:
                 item = await asyncio.to_thread(stream_queue.get)
-                if item is _STREAM_ENDED:
+                if item is STREAM_ENDED:
                     break
-                if isinstance(item, _StreamFailure):
+                if isinstance(item, StreamFailure):
                     message = str(item.error)
                     raise ProviderError(classify_provider_exception(item.error), message) from item.error
 
@@ -236,8 +231,7 @@ class OpenAICompatibleProvider(ChatProvider):
                 ):
                     yield event
         finally:
-            stop_stream.set()
-            await asyncio.to_thread(_close_stream, stream)
+            await asyncio.to_thread(stop_stream)
 
         finish_reason = _normalize_finish_reason(raw_finish_reason)
         diagnostics.raw_finish_reason = raw_finish_reason
@@ -313,9 +307,24 @@ class OpenAICompatibleProvider(ChatProvider):
     def _to_openai_message(message: ChatMessage) -> dict[str, Any]:
         """把内部消息转换为 OpenAI-compatible 消息。"""
 
+        content: str | list[dict[str, Any]] = message.content
+        if message.content_parts is not None:
+            content = []
+            for part in message.content_parts:
+                if part.type == "text" and part.text is not None:
+                    content.append({"type": "text", "text": part.text})
+                elif part.type == "image" and part.media_type and part.data_base64:
+                    content.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{part.media_type};base64,{part.data_base64}",
+                            },
+                        }
+                    )
         data: dict[str, Any] = {
             "role": message.role,
-            "content": message.content,
+            "content": content,
         }
         if message.tool_calls:
             data["tool_calls"] = [
@@ -417,46 +426,6 @@ class _StreamToolCallAccumulator:
     name: str = ""
     arguments_text: str = ""
     saw_arguments: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class _StreamFailure:
-    error: BaseException
-
-
-_STREAM_ENDED = object()
-
-
-def _start_stream_worker(stream: Any) -> tuple[queue.Queue[Any], threading.Event]:
-    """用单一后台线程拥有同步 stream iterator。
-
-    OpenAI SDK 的同步 streaming iterator 可能持有底层 HTTP 连接。让同一个线程顺序
-    消费它，可以避免每次 `next()` 被调度到不同线程造成的隐性连接生命周期问题。
-    """
-
-    stream_queue: queue.Queue[Any] = queue.Queue()
-    stop_event = threading.Event()
-
-    def worker() -> None:
-        try:
-            for chunk in stream:
-                if stop_event.is_set():
-                    break
-                stream_queue.put(chunk)
-        except BaseException as exc:
-            stream_queue.put(_StreamFailure(exc))
-        finally:
-            _close_stream(stream)
-            stream_queue.put(_STREAM_ENDED)
-
-    threading.Thread(target=worker, name="firstcoder-openai-stream", daemon=True).start()
-    return stream_queue, stop_event
-
-
-def _close_stream(stream: Any) -> None:
-    close = getattr(stream, "close", None)
-    if callable(close):
-        close()
 
 
 def _parse_stream_error(chunk: Any) -> ProviderError | None:

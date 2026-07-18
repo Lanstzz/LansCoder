@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 
@@ -600,6 +601,41 @@ class _FakeAnthropicTextStreamMessages:
 class _FakeAnthropicTextStreamClient:
     def __init__(self):
         self.messages = _FakeAnthropicTextStreamMessages()
+
+
+class _ClosableAnthropicStream:
+    def __init__(self):
+        self.close_count = 0
+        self._closed = threading.Event()
+        self._yielded = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if not self._yielded:
+            self._yielded = True
+            return _Object(type="content_block_delta", index=0, delta=_Object(type="text_delta", text="x"))
+        self._closed.wait()
+        raise StopIteration
+
+    def close(self):
+        self.close_count += 1
+        self._closed.set()
+
+
+class _ClosableAnthropicStreamMessages:
+    def __init__(self):
+        self.stream = _ClosableAnthropicStream()
+
+    def create(self, **params):
+        assert params.get("stream") is True
+        return self.stream
+
+
+class _ClosableAnthropicStreamClient:
+    def __init__(self):
+        self.messages = _ClosableAnthropicStreamMessages()
 
 
 class _FakeAnthropicThinkingStreamMessages:
@@ -1386,6 +1422,20 @@ def test_anthropic_provider_streams_text_deltas_and_final_response():
     assert events[-1].response.usage is not None
     assert events[-1].response.usage.input_tokens == 3
     assert events[-1].response.usage.output_tokens == 2
+
+
+def test_anthropic_provider_closes_stream_when_consumer_stops_early():
+    async def consume_one_event():
+        client = _ClosableAnthropicStreamClient()
+        provider = AnthropicProvider(model="claude-test", api_key="test-key", client=client)
+        events = provider.astream(ChatRequest(messages=[ChatMessage(role="user", content="hi")]))
+        await anext(events)
+        await anext(events)
+        await events.aclose()
+        return client.messages.stream
+
+    stream = asyncio.run(consume_one_event())
+    assert stream.close_count == 1
 
 
 def test_anthropic_provider_streams_reasoning_and_tool_calls():

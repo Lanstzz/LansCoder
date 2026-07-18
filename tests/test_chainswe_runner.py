@@ -402,7 +402,10 @@ def test_firstcoder_chain_agent_uses_bypass_no_network_tools_and_swe_limits(tmp_
     second = agent.run_task(build_task_prompt("Second public issue."))
 
     assert agent.app.current_session.session is initial_session
-    assert provider.calls == 2
+    # The fake's visible "done" response is invalid classifier JSON. Each later
+    # turn therefore uses all three hidden classifier retries, falls back to
+    # ``uncertain``, then makes one visible agent request.
+    assert provider.calls == 8
     assert first.response == second.response == "done"
 
 

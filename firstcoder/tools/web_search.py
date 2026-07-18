@@ -109,29 +109,10 @@ def _run_parallel_search(query: str, num_results: int, timeout: int) -> ToolResu
     except (error.URLError, error.HTTPError):
         return None
     text = raw.decode("utf-8", errors="replace")
-    result = _parse_parallel_response(text)
+    result = parse_mcp_search_response(text)
     if not result:
         return None
     return make_text_result("web_search", result, provider="parallel", query=query)
-
-
-def _parse_parallel_response(body: str) -> str | None:
-    """从 Parallel MCP 的 JSON-RPC 响应中提取文本结果。"""
-    trimmed = body.strip()
-    if not trimmed.startswith("{"):
-        return None
-    try:
-        data = loads_json(trimmed)
-    except ValueError:
-        return None
-    result = data.get("result") if isinstance(data, dict) else None
-    content = result.get("content") if isinstance(result, dict) else None
-    if not isinstance(content, list):
-        return None
-    for item in content:
-        if isinstance(item, dict) and isinstance(item.get("text"), str) and item["text"]:
-            return item["text"]
-    return None
 
 
 def _normalize_livecrawl(value: str) -> str:

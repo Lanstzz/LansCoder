@@ -27,6 +27,7 @@ ContextBuilder + session registry
 | 类型 | 作用 |
 | --- | --- |
 | `ChatMessage` | 规范化 system/user/assistant/tool message |
+| `ContentPart` | 一条消息内厂商无关的文本或图片内容 |
 | `ToolDefinition` / `ToolCall` | 发送的定义 / 返回的调用 |
 | `ChatRequest` | adapter 的完整输入，含厂商无关工具定义 |
 | `ChatResponse` | 完整标准结果和 finish reason |
@@ -56,6 +57,8 @@ ContextBuilder + session registry
 
 原始 stream chunk 在 adapter 内聚合，直到 tool call 完整；上层拿到的是稳定的 `ChatStreamEvent`，不是 SDK 的一坨原始对象。
 
+`ChatMessage.content_parts` 存在时，文本仍是 text content，图片会变成 OpenAI-compatible 的 `image_url` content，其 URL 是 `data:` URL。base64 由 `ContextBuilder` 在构造请求时从 session 附件目录读取，绝不写进 JSONL。实际 provider/model 仍必须支持视觉；adapter 会编码，不代表任意配置的模型都会看图。
+
 ## Anthropic 路径：与 OpenAI-compatible 契约对齐
 
 `AnthropicProvider` 与 OpenAI-compatible 主线共享同一套内部契约：非流式 `complete`、
@@ -64,6 +67,13 @@ forced `tool_choice`、并行工具开关、usage，以及错误归类。system 
 Anthropic 独立 `system` 字段，schema 走 `input_schema`。连续的 `tool` 消息会合并成
 同一条 user 里的 `tool_result` 列表。prompt cache 等 Anthropic 专有增强仍是可选项，
 不是 agent loop 对齐的最低门槛。
+
+富文本/图片消息会映射为 Anthropic content block。图片使用
+`{"type": "image", "source": {"type": "base64", ...}}`，数据源仍是与 OpenAI-compatible 路径共用的 provider-neutral `ContentPart`。
+
+## 多模态范围
+
+FirstCoder 通过既有 Chat Completions-compatible 与 Anthropic Messages 路径支持图片附件和小型文本文件附件；尚未实现 OpenAI Responses API。输入、存储和安全边界见[多模态输入设计](MULTIMODAL_INPUT_DESIGN.zh-CN.md)，不要把 provider 专用 base64 复制进 session 日志。
 
 
 ## 错误与恢复契约
@@ -74,7 +84,7 @@ adapter 将失败归类为 `ProviderErrorKind`（如 unsupported、prompt-too-lo
 
 ```sh
 .venv/bin/python -m pytest tests/test_providers.py tests/test_provider_errors.py \
-  tests/test_readme_provider_docs.py -q
+  tests/test_multimodal_input.py tests/test_readme_provider_docs.py -q
 ```
 
 新增 adapter 时，用 fake client 断言出站 wire 参数、规范化 tool response、承诺了就测 streaming、错误归类。核心测试不要依赖真实 API key。

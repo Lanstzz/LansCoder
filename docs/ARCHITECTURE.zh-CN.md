@@ -55,12 +55,13 @@ FirstCoder 是**本地 coding agent**：模型提议动作；Python 在策略下
 
 ## 3. 包地图
 
-规模会浮动，只作方位感。撰写时 `firstcoder/` 大约 23k 行 Python、约 170 个文件；最大的几块是 `context/`、`app/`、`tools/`、`agent/`。
+规模会浮动，只作方位感。撰写时 `firstcoder/` 大约 25k 行 Python、174 个文件；最大的几块是 `context/`、`app/`、`tools/`、`agent/`。
 
 | 包 | 职责 | 先读 | 不该拥有 |
 | --- | --- | --- | --- |
 | `runtime/` | 共享取消与结构化用户输入请求 | `cancellation.py`、`user_input.py` | 循环策略、工具、UI |
 | `app/` | 组合根、TUI、斜杠命令、UI 侧 ports | `factory.py`、`runtime.py`、`ports.py`、`tui.py` | 厂商协议翻译 |
+| `input/` | 附件发现、剪贴板读取与会话暂存 | `attachments.py`、`clipboard.py` | provider 协议编码或 widget 状态 |
 | `agent/` | 单轮编排与会话运行时对象 | `loop.py`、`session.py`、`loop_limits.py` | 具体 shell/HTTP 工作 |
 | `context/` | 追加写事实、投影、L1–L4 压缩 | `store.py`、`writer.py`、`context_builder.py`、`manager.py` | widget、厂商 SDK |
 | `session/` | 目录/索引/new/resume/fork/share | `bootstrap.py`、`catalog.py`、`resume.py` | 模型补全 |
@@ -81,6 +82,7 @@ cli / app
   ├── providers.factory  ──► ChatProvider
   ├── context.manager    ──► 压缩决策
   └── AgentChatRunner    ──► agent.loop.AgentLoop
+                                ├── input 附件 → session store
                                 ├── context.writer / builder
                                 ├── providers.complete|astream
                                 ├── tools（+ PermissionAwareToolRegistry）
@@ -158,7 +160,7 @@ providers / config
 这是系统的脊柱。记住*形状*，不必背每个 helper 名。
 
 ```text
-用户在 TUI / CLI 提交文本
+用户在 TUI / CLI 提交文本和可选的已暂存附件
   │
   ▼
 firstcoder/cli.py
@@ -171,8 +173,8 @@ app.runtime.AgentChatRunner.run_user_turn / resume_with_user_input
   │
   ▼
 agent.loop.AgentLoop
-  1. 通过 session writer 追加用户消息（持久事实）
-  2. 可选 task-boundary 分类
+  1. 把附件复制到 session 存储，再经 session writer 追加用户消息/元数据（持久事实）
+  2. 初始化首个任务，或运行隐藏的 task-boundary 分类
   3. 压缩触发：
        _auto_compact
        _compact_for_prompt_too_long
@@ -183,6 +185,7 @@ agent.loop.AgentLoop
   6. 对每个 tool_call：
        session 工具注册表（+ 权限 preflight）
        ASK：以 UserInputRequest(kind=permission_confirmation) 暂停
+       直接改文件：先生成可信 prewrite diff；standard 走权限确认，已允许/aggressive 走仅 review 的 Apply
        allow：执行；追加 tool result 事实
   7. 按 AgentLoopLimits 与内容 settle / verify / stop
   │
@@ -195,7 +198,9 @@ runtime 事件 → AgentChatRunner → TUI 转写 / 活动流 / 权限 UI
 | 持久（进程退出仍在） | 进程内（重建或丢失） |
 | --- | --- |
 | `.firstcoder/sessions/<id>.jsonl` 事实 | `SessionRuntimeState` |
+| `.firstcoder/attachments/<session-id>/` 暂存的附件字节 | composer 里的待发送附件 chip |
 | 权限 grants 文件（`permissions.json`） | pending permission 的原始 tool_call |
+| 回放到 `SessionView.todos` 的 `todo_updated` 快照 | 当前 review 卡片的展开状态 |
 | 磁盘上的 skill 文件 | prompt prefix cache |
 | MCP 服务器配置 | 存活的 MCP 连接 |
 
@@ -206,6 +211,8 @@ Resume 通过回放 JSONL 尽量重建。跨重启不能丢的东西必须是事
 | 对象 | 包 | 角色 |
 | --- | --- | --- |
 | `ChatRequest` / `ChatResponse` | `providers.types` | 内部模型 I/O |
+| `UserAttachment` / `PreparedAttachment` | `input.attachments` | composer 输入和 session 安全的附件元数据 |
+| `ContentPart` | `providers.types` | 厂商无关的文本/图片内容投影 |
 | `Tool` / `ToolCall` / `ToolResult` | `tools.types` | schema + 执行结果 |
 | `PermissionRequest` / decision | `permissions` | allow / ask / deny |
 | `UserInputRequest` | `runtime.user_input` | 等人（权限或 ask_user） |
@@ -340,6 +347,8 @@ JSONL 事件
 
 `ask_user` 使用同一套 `UserInputRequest`，`kind="ask_user"`。
 
+对 `write`、`edit`、`apply_patch`、`delete`，`ToolExecutor` 会在执行前构造可信 `PrewriteReview`。standard 模式下 diff 是普通权限暂停的一部分；已有 `ALLOW`（含 aggressive 或匹配 grant）仍会变成只用于 review 的 Apply 暂停。bypass 会发出非阻塞 diff 事件后立即继续；非交互 benchmark adapter 可显式关闭它。resume 会重验保存的快照，UI 也不能提供真正要执行的调用 payload。
+
 关键安全规则：pending 的原始 `tool_call` 必须来自**本地会话状态**，不能信任模型回放、用户看不见的 payload。
 
 隐藏工具（`tools.hidden`）被调用时仍会执行；只是不出现在嘈杂的人机活动流里。
@@ -358,6 +367,8 @@ Skill 被发现并路由进 prompt 面；它们不是第二套工具注册表。
 深读：[PROVIDERS_DESIGN.zh-CN.md](PROVIDERS_DESIGN.zh-CN.md)、
 [SKILL_SYSTEM_DESIGN.zh-CN.md](SKILL_SYSTEM_DESIGN.zh-CN.md)、
 [MCP.zh-CN.md](MCP.zh-CN.md)。
+
+`ContextBuilder` 还会在构造请求时把已持久化的图片附件投影为 `ContentPart`。它只读取能解析到 session store 内的路径；JSONL 只保存相对路径和元数据，不落图片 base64。
 
 ---
 
@@ -440,6 +451,7 @@ rg -n "HIDDEN_TOOL_STATUS_NAMES" firstcoder tests
 | 工具 | [TOOLS_DESIGN.zh-CN.md](TOOLS_DESIGN.zh-CN.md) |
 | 权限 | [PERMISSIONS_DESIGN.zh-CN.md](PERMISSIONS_DESIGN.zh-CN.md) |
 | Provider | [PROVIDERS_DESIGN.zh-CN.md](PROVIDERS_DESIGN.zh-CN.md) |
+| 多模态附件链路 | [MULTIMODAL_INPUT_DESIGN.zh-CN.md](MULTIMODAL_INPUT_DESIGN.zh-CN.md) |
 | Skill | [SKILL_SYSTEM_DESIGN.zh-CN.md](SKILL_SYSTEM_DESIGN.zh-CN.md) |
 | MCP | [MCP.zh-CN.md](MCP.zh-CN.md) |
 | 技术文档总索引 | [README.zh-CN.md](README.zh-CN.md) |

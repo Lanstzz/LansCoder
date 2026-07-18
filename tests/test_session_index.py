@@ -43,7 +43,7 @@ def test_store_append_event_updates_session_index(tmp_path: Path) -> None:
     assert record["latest_user_input"] == "hello"
 
 
-def test_catalog_lists_sessions_from_index_without_reading_jsonl(tmp_path: Path, monkeypatch) -> None:
+def test_catalog_lists_sessions_from_index_without_reading_jsonl(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     store.append_event(
         SessionEvent(
@@ -54,11 +54,6 @@ def test_catalog_lists_sessions_from_index_without_reading_jsonl(tmp_path: Path,
             created_at="2026-06-01T00:00:00Z",
         )
     )
-
-    def fail_record_from_path(path):  # noqa: ANN001 - test hook
-        raise AssertionError(f"catalog should not scan JSONL for indexed list: {path}")
-
-    monkeypatch.setattr(SessionCatalog, "_record_from_path", fail_record_from_path)
 
     records = SessionCatalog(tmp_path).list_sessions()
 

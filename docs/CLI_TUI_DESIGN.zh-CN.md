@@ -48,6 +48,7 @@ UI/CLI 应依赖 `firstcoder.app.ports`（`ChatRunnerLike`、`CommandHandlerLike
 | `ChatStreamEvent` | provider | runner/TUI | 规范化的文本、reasoning、tool-call 增量 |
 | `ToolExecutionEvent` | agent loop | runner/TUI | 本地执行和模型流是两条事件线 |
 | `UserInputRequest` | `firstcoder.runtime.user_input`（permission / `ask_user`） | 交互 UI | 跨包共享的暂停/恢复契约（tools 不得为此 import agent） |
+| `UserAttachment` | composer/paste handler | runner/session | 随一轮用户输入发送的已暂存路径或剪贴板图片 |
 
 ## 用户可见模式
 
@@ -68,12 +69,16 @@ UI/CLI 应依赖 `firstcoder.app.ports`（`ChatRunnerLike`、`CommandHandlerLike
 
 `app/tui.py` 的 `FirstCoderApp` 渲染 `app/tui_state.py` 的 transcript 型状态：对话条目、工具活动、todo、provider/session 状态和 pending input。它会先缓冲 token，再批量刷新，避免一个 token 刷一次 widget。
 
+往 composer 粘贴路径或 `file://` URI 时，`input.attachments` 会解析存在的文件并暂存，而不是把路径当作 prompt 文本插入。粘贴内容没有文件路径时，可能暂存操作系统剪贴板中的图片。composer 会显示附件 chip，将 `文本 + 附件` 交给 runner，并在成功提交聊天后清空暂存列表；纯图片提交会补一条简短默认指令。复制字节到 session 附件目录发生在 session 代码中，不在 widget 内，也早于事件写入。
+
 列在 `firstcoder.tools.hidden.HIDDEN_TOOL_STATUS_NAMES` 的内部控制面工具（当前是 `task_boundary`）仍可被 agent 调用，但不应刷进人机活动流。
 
 运行时有两条事件线：
 
 - provider event：reasoning/text/tool-call 增量和最终 response；
 - local event：工具 started、finished、skipped、denied、permission asked。
+
+`prewrite_review` 也是 local event：它会为直接文件修改渲染有界、可信的 diff 卡片。review 的 Apply/拒绝/`reject` 反馈与权限确认走同一条 pending-input 路径；`review all`、`review <path>`、`review clear` 只改变本地卡片展开状态。todo 来自 session 的 `todo_updated` 事件回放，因此恢复的 TUI 会显示最新清单，而不是把它视为临时 widget 状态。
 
 分开后，模型没有新文本时 UI 仍可准确显示“shell 正在执行”。不要把本地工具运行伪造成 assistant 的一句话。
 
@@ -85,7 +90,8 @@ Slash command 经 `CompositeCommandHandler` 拼装。主要类别：session（`/
 
 ```sh
 .venv/bin/python -m firstcoder --help
-.venv/bin/python -m pytest tests/test_cli.py tests/test_app_factory.py tests/test_app_runtime.py -q
+.venv/bin/python -m pytest tests/test_cli.py tests/test_app_tui.py \
+  tests/test_multimodal_input.py tests/test_prewrite_review.py tests/test_review_view.py -q
 ```
 
 没有凭证时，直接读 `tests/test_app_factory.py` 的 fake-provider case：它展示真实对象图，并验证首个 provider 请求前 `task_boundary` 已被按 session 注入。
@@ -98,6 +104,8 @@ Slash command 经 `CompositeCommandHandler` 拼装。主要类别：session（`/
 | 新 session 还显示旧历史 | `CurrentSessionState` 和 session command 的回调 |
 | 文字只在结束时出现 | provider streaming capability 与 runner 的 streaming 选择 |
 | 确认后无法继续 | pending `UserInputRequest` 与 `aresume_with_user_input` |
+| 粘贴图片/路径没有出现 | composer 焦点、`resolve_paste_attachments` 与附件大小限制 |
+| review 提示快照已过期 | 预览后文件被外部修改；请模型重新生成这次修改 |
 | help 有命令但无行为 | 对应 handler 是否注册进 router |
 
 ## 扩展规则

@@ -11,6 +11,7 @@ from firstcoder.providers.types import ChatRequest, ChatResponse, ToolCall
 from firstcoder.session.errors import SessionCorruptError, SessionEmptyError, SessionNotFoundError
 from firstcoder.session.resume import ResumeService
 from firstcoder.tools.write import create_write_tool
+from firstcoder.permissions.types import PermissionMode
 
 
 class FakeProvider(ChatProvider):
@@ -46,6 +47,22 @@ def test_resume_service_resumes_existing_session_and_reads_agents_md(tmp_path: P
     assert result.session.agents_md == "项目规则"
     assert result.session.turn_counter == 1
     assert result.session.current_turn == 1
+
+
+def test_resume_service_restores_session_todo_state(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    writer = SessionEventWriter(store=store, session_id="sess_todos")
+    writer.append_session_created(title="todo demo")
+    writer.append_todo_updated(
+        [{"content": "恢复任务", "status": "in_progress", "priority": "high"}],
+        task_hash="task_current",
+    )
+
+    result = ResumeService(store=store, project_root=tmp_path).resume("sess_todos")
+
+    assert result.session.rebuild_view().todos == [
+        {"content": "恢复任务", "status": "in_progress", "priority": "high"}
+    ]
 
 
 def test_resume_service_rediscovers_current_project_skill_catalog(tmp_path: Path, monkeypatch) -> None:
@@ -154,6 +171,14 @@ def test_resume_service_restores_pending_permission_confirmation(tmp_path: Path)
 
     assert result.session.pending_permission_execution is not None
     assert result.session.pending_permission_execution.tool_call.id == "call_write"
+    assert result.session.pending_permission_execution.prewrite_review is not None
+    restored_review = result.session.pending_permission_execution.prewrite_review
+    assert restored_review.ok is True
+    assert restored_review.files[0].path == "README.md"
+    assert "+hello" in restored_review.files[0].diff
+    restored_input = result.session.pending_permission_input_request()
+    assert restored_input is not None
+    assert "+hello" in restored_input.payload["prewrite_review"]["files"][0]["diff"]
 
 
 def test_resume_service_restores_pending_permission_even_after_grant_exists(tmp_path: Path) -> None:
@@ -198,6 +223,49 @@ def test_resume_service_restores_pending_permission_even_after_grant_exists(tmp_
 
     assert result.session.pending_permission_execution is not None
     assert result.session.pending_permission_execution.request_id == pending.pending_input.id
+
+
+def test_resume_service_has_no_pending_review_after_bypass_write(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    original = AgentSession.from_project(
+        store=store,
+        session_id="sess_bypass_write",
+        project_root=tmp_path,
+        tools=[create_write_tool(tmp_path)],
+    )
+    original.set_permission_mode(PermissionMode.BYPASS)
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_write",
+                        name="write",
+                        arguments={"path": "README.md", "content": "hello"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="写好了"),
+        ]
+    )
+
+    completed = AgentLoop(session=original, provider=provider).run_user_turn_interactive("写 README")
+    assert completed.pending_input is None
+    assert original.pending_permission_execution is None
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "hello"
+
+    result = ResumeService(
+        store=store,
+        project_root=tmp_path,
+        data_root=tmp_path / ".firstcoder",
+        tools=[create_write_tool(tmp_path)],
+    ).resume("sess_bypass_write")
+
+    assert result.session.pending_permission_execution is None
 
 
 def test_resume_service_rejects_missing_session(tmp_path: Path) -> None:

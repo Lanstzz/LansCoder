@@ -54,12 +54,6 @@ class SessionCatalog:
             return False
         return (self.sessions_dir / f"{session_id}.jsonl").exists()
 
-    @staticmethod
-    @staticmethod
-    def _record_from_path(path: Path) -> SessionRecord:
-        return record_from_path(path)
-
-
 def record_from_path(path: Path) -> SessionRecord:
     session_id = path.stem
     try:
@@ -223,11 +217,5 @@ def _preview(value: str | None) -> str | None:
         return normalized
     return normalized[: PREVIEW_CHARS - 1] + "..."
 
-
-
 def session_sort_key(record: SessionRecord) -> tuple[str, str]:
     return (record.updated_at or "", record.session_id)
-
-
-# Compatibility alias for older call sites/tests (monkeypatch target).
-_record_from_path = record_from_path

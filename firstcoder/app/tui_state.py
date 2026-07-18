@@ -49,9 +49,9 @@ class TuiToolActivity:
 
 @dataclass(slots=True)
 class TuiTodoItem:
-    id: str
     content: str
     status: str = "pending"
+    priority: str = "medium"
 
 
 @dataclass(slots=True)
@@ -93,9 +93,9 @@ class TuiTranscript:
     def update_todos(self, todos: list[dict[str, object]]) -> list[TuiTodoItem]:
         self.todos = [
             TuiTodoItem(
-                id=str(item.get("id") or ""),
                 content=str(item.get("content") or ""),
                 status=str(item.get("status") or "pending"),
+                priority=str(item.get("priority") or "medium"),
             )
             for item in todos
             if str(item.get("content") or "")

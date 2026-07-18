@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from firstcoder.app.activity_view import tool_event_status
 from firstcoder.app.tui_state import TuiEntryKind, TuiTranscriptEntry
 
 

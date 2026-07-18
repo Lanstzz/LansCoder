@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 from rich.text import Text
+from textual import events
 from textual.widgets import Markdown
 from textual.widgets import TextArea
 
@@ -12,7 +13,7 @@ from firstcoder.agent.user_input import UserInputOption, UserInputRequest
 from firstcoder.app.router import CompositeCommandHandler
 from firstcoder.app.runtime import CurrentSessionState
 from firstcoder.app.session_commands import SessionCommandHandler
-from firstcoder.app.tui import FirstCoderApp, FirstCoderTuiConfig
+from firstcoder.app.tui import ComposerTextArea, FirstCoderApp, FirstCoderTuiConfig
 from firstcoder.app.tui import FirstCoderMarkdown
 from firstcoder.app.tui import _entry_renderable
 from firstcoder.app.tui import _provider_name_markup
@@ -31,6 +32,7 @@ from firstcoder.context.runtime_state import SessionRuntimeState
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.context.writer import SessionEventWriter
 from firstcoder.agent.session import AgentSession
+from firstcoder.input.attachments import UserAttachment
 from firstcoder.session.catalog import SessionCatalog
 from firstcoder.session.new import NewSessionService
 from firstcoder.session.resume import ResumeService
@@ -121,6 +123,58 @@ class FakeTopbar(FakeActivity):
 
 class FakeTodoPanel(FakeActivity):
     pass
+
+
+def test_stage_paste_attachments_adds_clipboard_attachment(monkeypatch, tmp_path) -> None:
+    image = tmp_path / "clipboard.png"
+    image.write_bytes(b"image")
+    attachment = UserAttachment(
+        kind="image",
+        path=image,
+        filename="clipboard.png",
+        media_type="image/png",
+        size_bytes=image.stat().st_size,
+        source="clipboard",
+    )
+    app = FirstCoderApp()
+    messages: list[str] = []
+    monkeypatch.setattr("firstcoder.app.tui.resolve_paste_attachments", lambda text: [attachment])
+    monkeypatch.setattr(app, "_write_line", lambda text, **kwargs: messages.append(text))
+
+    assert app._stage_paste_attachments(None) is True
+    assert app._staged_attachments == [attachment]
+    assert messages == ["Attached: 🖼 clipboard.png (5B)"]
+
+
+def test_stage_paste_attachments_does_not_add_duplicates(monkeypatch, tmp_path) -> None:
+    image = tmp_path / "clipboard.png"
+    image.write_bytes(b"image")
+    attachment = UserAttachment("image", image, "clipboard.png", "image/png", 5, "clipboard")
+    app = FirstCoderApp()
+    app._staged_attachments.append(attachment)
+    monkeypatch.setattr("firstcoder.app.tui.resolve_paste_attachments", lambda text: [attachment])
+
+    assert app._stage_paste_attachments(None) is True
+    assert app._staged_attachments == [attachment]
+
+
+def test_stage_paste_attachments_reports_attachment_errors(monkeypatch) -> None:
+    app = FirstCoderApp()
+    messages: list[tuple[str, TuiEntryKind]] = []
+    monkeypatch.setattr(
+        "firstcoder.app.tui.resolve_paste_attachments",
+        lambda text: (_ for _ in ()).throw(ValueError("Image exceeds 20MB limit: clipboard.png")),
+    )
+    monkeypatch.setattr(
+        app,
+        "_write_line",
+        lambda text, *, kind: messages.append((text, kind)),
+    )
+
+    assert app._stage_paste_attachments(None) is True
+    assert messages == [
+        ("Could not attach pasted image: Image exceeds 20MB limit: clipboard.png", TuiEntryKind.ERROR)
+    ]
 
 
 def test_skill_picker_item_renderer_keeps_name_path_and_description_separate() -> None:
@@ -340,7 +394,6 @@ async def test_firstcoder_app_uses_custom_chrome_instead_of_textual_header_foote
 @pytest.mark.parametrize(
     ("mode", "color"),
     [
-        ("conservative", "#5fb5ff"),
         ("standard", "#cfd1d6"),
         ("aggressive", "#f6b73c"),
         ("bypass", "#ff6b5f"),
@@ -702,8 +755,8 @@ def test_tui_transcript_updates_persistent_todos_from_tool_data() -> None:
     )
 
     assert transcript.todos == [
-        TuiTodoItem(id="todo_1", content="读代码", status="done"),
-        TuiTodoItem(id="todo_2", content="跑测试", status="in_progress"),
+        TuiTodoItem(content="读代码", status="done"),
+        TuiTodoItem(content="跑测试", status="in_progress"),
     ]
 
 
@@ -724,10 +777,17 @@ def test_firstcoder_app_records_rendered_messages_in_transcript(monkeypatch) -> 
 class FakeChatRunner:
     def __init__(self) -> None:
         self.inputs = []
+        self.attachments: list[list[UserAttachment] | None] = []
         self.last_display_lines = []
 
-    def run_user_turn(self, content: str) -> ChatResponse:
+    def run_user_turn(
+        self,
+        content: str,
+        *,
+        attachments: list[UserAttachment] | None = None,
+    ) -> ChatResponse:
         self.inputs.append(content)
+        self.attachments.append(attachments)
         return ChatResponse(provider="fake", model="fake", content=f"reply:{content}")
 
 
@@ -739,8 +799,14 @@ class FakeDisplayChatRunner(FakeChatRunner):
 
 
 class FakeAsyncChatRunner(FakeChatRunner):
-    async def arun_user_turn(self, content: str) -> ChatResponse:
+    async def arun_user_turn(
+        self,
+        content: str,
+        *,
+        attachments: list[UserAttachment] | None = None,
+    ) -> ChatResponse:
         self.inputs.append(content)
+        self.attachments.append(attachments)
         self.last_display_lines = ["async reply"]
         return ChatResponse(provider="fake", model="fake", content="async reply")
 
@@ -864,6 +930,20 @@ class FakePermissionWaitingRunner(FakeChatRunner):
                 "action": "write_path",
                 "target": "README.md",
                 "reason": "写入文件需要用户确认。",
+                "prewrite_review": {
+                    "tool_name": "edit",
+                    "files": [
+                        {
+                            "path": "README.md",
+                            "operation": "modify",
+                            "diff": "--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new",
+                            "added_lines": 1,
+                            "removed_lines": 1,
+                        }
+                    ],
+                    "summary": {"added_lines": 1, "removed_lines": 1},
+                    "error": None,
+                },
             },
         )
 
@@ -934,6 +1014,108 @@ async def test_firstcoder_app_runs_plain_chat_when_only_chat_runner_is_configure
         await pilot.press("enter")
 
     assert runner.inputs == ["hello"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_firstcoder_app_sends_staged_paste_attachment_and_clears_it(tmp_path, monkeypatch) -> None:
+    image = tmp_path / "image.png"
+    image.write_bytes(b"image")
+    attachment = UserAttachment(
+        kind="image",
+        path=image,
+        filename="image.png",
+        media_type="image/png",
+        size_bytes=image.stat().st_size,
+        source="paste",
+    )
+    monkeypatch.setattr("firstcoder.app.tui.resolve_paste_attachments", lambda text: [attachment])
+    runner = FakeChatRunner()
+    app = FirstCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        app._staged_attachments = [attachment]
+        await pilot.press(*"describe")
+        await pilot.press("enter")
+
+    assert runner.inputs == ["describe"]
+    assert runner.attachments == [[attachment]]
+    assert app._staged_attachments == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_firstcoder_app_pasting_a_file_path_stages_attachment_without_inserting_path(tmp_path) -> None:
+    video = tmp_path / "sample.mp4"
+    video.write_bytes(b"video")
+    runner = FakeChatRunner()
+    app = FirstCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        input_widget = app.query_one("#input", TextArea)
+        await input_widget._on_paste(events.Paste(str(video)))
+        await pilot.pause()
+
+        assert input_widget.text == ""
+        assert app._staged_attachments[0].path == video
+        await pilot.click("#input")
+        await pilot.press("enter")
+
+    assert runner.inputs == ["请分析这些附件。"]
+    assert runner.attachments[0][0].path == video
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_firstcoder_app_pasting_plain_text_keeps_text_in_composer(monkeypatch) -> None:
+    monkeypatch.setattr("firstcoder.app.tui.resolve_paste_attachments", lambda text: [])
+    app = FirstCoderApp()
+
+    async with app.run_test():
+        input_widget = app.query_one("#input", TextArea)
+        await input_widget._on_paste(events.Paste("explain this"))
+        assert input_widget.text == "explain this"
+
+    assert app._staged_attachments == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+@pytest.mark.parametrize("paste_key", ["ctrl+v", "super+v", "f8"])
+async def test_firstcoder_app_paste_shortcut_stages_clipboard_image_while_composer_is_focused(
+    tmp_path, monkeypatch, paste_key
+) -> None:
+    image = tmp_path / "clipboard.png"
+    image.write_bytes(b"image")
+    attachment = UserAttachment("image", image, "clipboard.png", "image/png", 5, "clipboard")
+    monkeypatch.setattr("firstcoder.app.tui.resolve_paste_attachments", lambda text: [attachment])
+    app = FirstCoderApp()
+
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        await pilot.press(paste_key)
+        input_widget = app.query_one("#input", ComposerTextArea)
+
+    assert input_widget.text == ""
+    assert app._staged_attachments == [attachment]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+@pytest.mark.parametrize("paste_key", ["ctrl+v", "super+v", "f8"])
+async def test_firstcoder_app_paste_shortcut_reports_missing_clipboard_image_while_composer_is_focused(
+    monkeypatch, paste_key
+) -> None:
+    monkeypatch.setattr("firstcoder.app.tui.resolve_paste_attachments", lambda text: [])
+    app = FirstCoderApp()
+
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        await pilot.press(paste_key)
+        await pilot.pause()
+
+        assert "No clipboard image found" in _static_output_text(app)
 
 
 @pytest.mark.anyio
@@ -1593,7 +1775,6 @@ def test_firstcoder_app_stream_event_handler_schedules_ui_updates_on_app_thread(
     scheduled: list[object] = []
 
     monkeypatch.setattr(app, "_append_stream_text", lambda text: calls.append(("text", text)))
-    monkeypatch.setattr(app, "_append_stream_line", lambda label, text, include_label: calls.append((label, text)))
     monkeypatch.setattr(app, "_call_ui_thread", lambda callback, *args, **kwargs: scheduled.append((callback, args, kwargs)))
 
     previous_handler = app._install_stream_event_handler()
@@ -1918,7 +2099,7 @@ def test_firstcoder_app_updates_persistent_todo_panel_for_todo_events(monkeypatc
     runner.tool_event_handler(
         ToolExecutionEvent(
             kind="finished",
-            tool_call=ToolCall(id="call_todo", name="todo", arguments={"action": "set"}),
+            tool_call=ToolCall(id="call_todo", name="todo", arguments={"todos": []}),
             result=ToolResult(
                 name="todo",
                 ok=True,
@@ -1935,10 +2116,41 @@ def test_firstcoder_app_updates_persistent_todo_panel_for_todo_events(monkeypatc
     app._restore_tool_event_handler(previous_handler)
 
     assert app.transcript.todos == [
-        TuiTodoItem(id="todo_1", content="读代码", status="completed"),
-        TuiTodoItem(id="todo_2", content="跑测试", status="in_progress"),
+        TuiTodoItem(content="读代码", status="completed"),
+        TuiTodoItem(content="跑测试", status="in_progress"),
     ]
     assert todo_panel.updates[-1] == "Todo\n[✓] 读代码\n[~] 跑测试"
+
+
+def test_firstcoder_app_replays_todos_from_current_session_view(monkeypatch) -> None:
+    output = FakeOutput()
+    todo_panel = FakeTodoPanel()
+    view = SessionView(
+        session_id="sess_todo_replay",
+        todos=[
+            {"content": "恢复代码", "status": "completed", "priority": "high"},
+            {"content": "恢复测试", "status": "in_progress", "priority": "medium"},
+        ],
+        todo_initialized=True,
+        todo_task_hash="task_current",
+    )
+    session = FakeSession()
+    monkeypatch.setattr(session, "rebuild_view", lambda: view)
+    app = FirstCoderApp(current_session=session)
+
+    def query_one(selector, *args, **kwargs):
+        if selector == "#todo-panel":
+            return todo_panel
+        return output
+
+    monkeypatch.setattr(app, "query_one", query_one)
+    app._replay_current_session()
+
+    assert app.transcript.todos == [
+        TuiTodoItem(content="恢复代码", status="completed", priority="high"),
+        TuiTodoItem(content="恢复测试", status="in_progress", priority="medium"),
+    ]
+    assert todo_panel.updates[-1] == "Todo\n[✓] 恢复代码\n[~] 恢复测试"
 
 
 @pytest.mark.anyio
@@ -2062,6 +2274,48 @@ def test_permission_requested_tool_event_uses_permission_style() -> None:
     )
 
 
+def test_firstcoder_app_renders_bypass_prewrite_review_without_permission_prompt(monkeypatch) -> None:
+    runner = FakeToolEventAsyncChatRunner()
+    output = FakeOutput()
+    activity = FakeActivity()
+    app = FirstCoderApp(chat_runner=runner)
+
+    def query_one(selector, *args, **kwargs):
+        if selector == "#activity":
+            return activity
+        return output
+
+    monkeypatch.setattr(app, "query_one", query_one)
+    previous_handler = app._install_tool_event_handler()
+    runner.tool_event_handler(
+        ToolExecutionEvent(
+            kind="prewrite_review",
+            tool_call=ToolCall(id="call_write", name="write", arguments={}),
+            prewrite_review={
+                "tool_name": "write",
+                "summary": {"created_files": 1, "modified_files": 0, "deleted_files": 0, "added_lines": 1, "removed_lines": 0},
+                "files": [
+                    {
+                        "path": "README.md",
+                        "operation": "create",
+                        "diff": "--- /dev/null\n+++ b/README.md\n@@ -0,0 +1 @@\n+hello",
+                        "added_lines": 1,
+                        "removed_lines": 0,
+                    }
+                ],
+            },
+        )
+    )
+    app._restore_tool_event_handler(previous_handler)
+
+    rendered = "\n".join(output.lines)
+    assert "README.md" in rendered
+    assert "+hello" in rendered
+    assert "允许" not in rendered
+    assert "permission" not in rendered.lower()
+    assert app._activity_text != "waiting · permission"
+
+
 def test_tool_skipped_has_stable_gray_tool_class() -> None:
     assert (
         entry_classes(
@@ -2156,6 +2410,9 @@ def test_firstcoder_app_displays_pending_permission_prompt_immediately(monkeypat
     )
     assert "permission requested  write_path README.md" in rendered
     assert "写入文件需要用户确认。" in rendered
+    assert "Review before writing · 1 file · +1 -1" in rendered
+    assert "-old" in rendered
+    assert "+new" in rendered
     assert "[1] deny" in rendered
     assert "[2] allow once" in rendered
     assert "[3] allow always" in rendered
@@ -2211,6 +2468,22 @@ async def test_firstcoder_app_routes_permission_answer_to_resume() -> None:
 
     assert runner.inputs == []
     assert runner.resumes == [("perm_write", "allow_once")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_firstcoder_app_routes_permission_rejection_feedback_to_resume() -> None:
+    runner = FakePermissionResumeRunner()
+    app = FirstCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        await pilot.press(*"reject: 请保留原标题")
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert runner.inputs == []
+    assert runner.resumes == [("perm_write", "reject_with_feedback: 请保留原标题")]
 
 
 @pytest.mark.anyio

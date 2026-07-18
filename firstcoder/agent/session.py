@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -25,13 +26,16 @@ from firstcoder.context.writer import SessionEventWriter
 from firstcoder.permissions.grants import FilePermissionGrantStore, PermissionGrantStore
 from firstcoder.permissions.manager import PermissionManager
 from firstcoder.permissions.policy import DefaultPermissionPolicy
-from firstcoder.permissions.types import PermissionMode
+from firstcoder.permissions.types import PermissionDecisionKind, PermissionMode
 from firstcoder.providers.types import ChatResponse, ProviderCapabilities, ToolCall
+from firstcoder.runtime.user_input import UserInputRequest
 from firstcoder.permissions.types import PermissionDecision, PermissionRequest
 from firstcoder.tools.permission_registry import PermissionAwareToolRegistry
+from firstcoder.tools.review import PrewriteReview, build_prewrite_review, supports_prewrite_review
 from firstcoder.tools.session_registry import ToolRegistryLike, create_session_tool_registry
 from firstcoder.tools.types import Tool, ToolResult, make_error_result
 from firstcoder.context.models import AgentMessage, MessagePart
+from firstcoder.input.attachments import UserAttachment, prepare_attachments_for_session
 from firstcoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
 from firstcoder.skills.discovery import discover_all_skills
 from firstcoder.skills.models import LoadedSkill, SkillCatalog
@@ -52,6 +56,8 @@ class PendingPermissionExecution:
     request_id: str
     tool_call: ToolCall
     permission_request: PermissionRequest
+    prewrite_review: PrewriteReview | None = None
+    review_only: bool = False
     skipped_tool_calls: list[ToolCall] = field(default_factory=list)
 
 
@@ -89,6 +95,7 @@ class AgentSession:
     known_message_ids: set[str] = field(default_factory=set)
     turn_counter: int = 0
     mode: str = "default"
+    require_prewrite_review: bool = True
     pending_permission_execution: PendingPermissionExecution | None = None
 
     @classmethod
@@ -237,7 +244,7 @@ class AgentSession:
         if len(pending) != 1:
             return None
 
-        tool_call, skipped_tool_calls = pending[0]
+        tool_call, skipped_tool_calls, persisted_review_only = pending[0]
         preflight = self.preflight_tool_call_permission(tool_call)
         if preflight is None:
             return None
@@ -246,10 +253,66 @@ class AgentSession:
             request_id=preflight.request.id,
             tool_call=tool_call,
             permission_request=preflight.request,
+            prewrite_review=(
+                build_prewrite_review(
+                    self.permission_manager.policy.project_root,
+                    tool_call,
+                    access=self.sandbox_access,
+                )
+                if self.permission_manager is not None and supports_prewrite_review(tool_call.name)
+                else None
+            ),
+            review_only=(
+                persisted_review_only
+                if persisted_review_only is not None
+                else preflight.decision.kind == PermissionDecisionKind.ALLOW
+            ),
             skipped_tool_calls=skipped_tool_calls,
         )
         self.pending_permission_execution = restored
         return restored
+
+    def persist_pending_permission_kind(self, *, tool_call_id: str, review_only: bool) -> None:
+        view = self.rebuild_view()
+        for message in reversed(view.messages):
+            if message.role != "assistant":
+                continue
+            part = next(
+                (
+                    item
+                    for item in message.parts
+                    if item.kind == "tool_call" and str(item.metadata.get("tool_call_id") or "") == tool_call_id
+                ),
+                None,
+            )
+            if part is not None:
+                self.writer.append_message_part_metadata_updated(
+                    message_id=message.id,
+                    part_id=part.id,
+                    metadata={"prewrite_review_only": review_only},
+                )
+            return
+
+    def pending_permission_input_request(
+        self,
+        pending: PendingPermissionExecution | None = None,
+    ) -> UserInputRequest | None:
+        pending = pending or self.pending_permission_execution
+        if pending is None or self.permission_manager is None:
+            return None
+        confirmation = (
+            self.permission_manager.build_prewrite_review_confirmation(pending.permission_request)
+            if pending.review_only
+            else self.permission_manager.build_confirmation(pending.permission_request)
+        )
+        if pending.prewrite_review is not None:
+            confirmation.payload["prewrite_review"] = pending.prewrite_review.to_payload()
+        confirmation.payload["pending_tool_call"] = {
+            "id": pending.tool_call.id,
+            "name": pending.tool_call.name,
+            "arguments": deepcopy(pending.tool_call.arguments),
+        }
+        return confirmation
 
     def append_session_created(self) -> None:
         self.writer.append_session_created()
@@ -327,11 +390,17 @@ class AgentSession:
             blocks.append("\n".join(lines))
         return "\n\n".join(blocks)
 
-    def append_user_message(self, content: str) -> str:
+    def append_user_message(self, content: str, *, attachments: list[UserAttachment] | None = None) -> str:
         """把用户输入写成可恢复的 user_message 事件。"""
 
+        prepared_attachments = prepare_attachments_for_session(
+            attachments or [],
+            store_root=self.store.root,
+            session_id=self.session_id,
+        )
         message_id = self.writer.append_user_message(
             content,
+            attachments=prepared_attachments,
             part_metadata=self._current_context_metadata(),
         )
         self.turn_counter = self.writer.current_turn
@@ -386,10 +455,12 @@ class AgentSession:
     def execute_tool_call_after_permission_confirmation(self, tool_call: ToolCall) -> ToolResult:
         """执行已经通过用户确认的 pending tool_call。"""
 
-        registry = self.tool_registry
-        if isinstance(registry, PermissionAwareToolRegistry):
-            return registry.execute_without_permission_check(tool_call.name, tool_call.arguments)
-        return registry.execute(tool_call.name, tool_call.arguments)
+        if isinstance(self.tool_registry, PermissionAwareToolRegistry):
+            return self.tool_registry.execute_without_permission_check(
+                tool_call.name,
+                tool_call.arguments,
+            )
+        return self.tool_registry.execute(tool_call.name, tool_call.arguments)
 
     def set_permission_mode(self, mode: PermissionMode | str) -> PermissionMode:
         """切换当前 session 的权限策略模式。"""
@@ -436,6 +507,7 @@ class AgentSession:
         )
         self.known_message_ids.add(tool_message_id)
         self._append_task_boundary_observation_if_present(tool_call=tool_call, result=result)
+        self._append_todo_updated_if_present(tool_call=tool_call, result=result)
         return tool_message_id
 
     def append_interrupted_tool_results(self) -> list[ToolCall]:
@@ -445,7 +517,7 @@ class AgentSession:
         if len(pending) != 1:
             return []
 
-        first, remaining = pending[0]
+        first, remaining, _ = pending[0]
         tool_calls = [first, *remaining]
         for tool_call in tool_calls:
             self.append_tool_result(
@@ -475,6 +547,17 @@ class AgentSession:
         if observation is not None:
             self.writer.append_task_boundary_observation(observation)
 
+    def _append_todo_updated_if_present(self, *, tool_call: ToolCall, result: ToolResult) -> None:
+        if tool_call.name != "todo" or not result.ok:
+            return
+        todos = result.data.get("todos")
+        if not isinstance(todos, list) or not all(isinstance(item, dict) for item in todos):
+            return
+        self.writer.append_todo_updated(
+            [dict(item) for item in todos],
+            task_hash=self.runtime_state.active_task_hash,
+        )
+
     def _current_context_metadata(self) -> dict[str, object]:
         metadata: dict[str, object] = {}
         if self.runtime_state.active_task_hash:
@@ -488,7 +571,7 @@ class AgentSession:
         for part in parts:
             part.metadata.update(metadata)
 
-    def _pending_tool_calls_from_tail(self) -> list[tuple[ToolCall, list[ToolCall]]]:
+    def _pending_tool_calls_from_tail(self) -> list[tuple[ToolCall, list[ToolCall], bool | None]]:
         messages = self.rebuild_view().messages
         if not messages:
             return []
@@ -502,15 +585,8 @@ class AgentSession:
             return []
 
         assistant = messages[assistant_index]
-        tool_calls = [
-            ToolCall(
-                id=str(part.metadata["tool_call_id"]),
-                name=str(part.metadata["tool_name"]),
-                arguments=part.metadata.get("arguments", {}),
-            )
-            for part in assistant.parts
-            if part.kind == "tool_call"
-        ]
+        tool_call_parts = [part for part in assistant.parts if part.kind == "tool_call"]
+        tool_calls = [_tool_call_from_part(part) for part in tool_call_parts]
         if not tool_calls:
             return []
 
@@ -525,7 +601,29 @@ class AgentSession:
         pending_calls = [tool_call for tool_call in tool_calls if tool_call.id not in completed_ids]
         if not pending_calls:
             return []
-        return [(pending_calls[0], pending_calls[1:])]
+        first_pending = pending_calls[0]
+        source_part = next(
+            part
+            for part in tool_call_parts
+            if str(part.metadata.get("tool_call_id") or "") == first_pending.id
+        )
+        persisted_review_only = source_part.metadata.get("prewrite_review_only")
+        return [
+            (
+                first_pending,
+                pending_calls[1:],
+                persisted_review_only if isinstance(persisted_review_only, bool) else None,
+            )
+        ]
+
+
+def _tool_call_from_part(part: MessagePart) -> ToolCall:
+    arguments = deepcopy(part.metadata.get("arguments", {}))
+    return ToolCall(
+        id=str(part.metadata["tool_call_id"]),
+        name=str(part.metadata["tool_name"]),
+        arguments=arguments,
+    )
 
 
 def _infer_turn_counter(messages: list[AgentMessage]) -> int:

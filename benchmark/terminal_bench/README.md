@@ -27,7 +27,8 @@ to the Python SDK before running Terminal-Bench:
 export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"
 ```
 
-Run a small task with the import-path agent:
+Run a small task with the import-path agent. The published `firstcoder` package
+is the default package source:
 
 ```sh
 .venv/bin/tb run \
@@ -35,7 +36,6 @@ Run a small task with the import-path agent:
   --task-id hello-world \
   --model openai/gpt-4.1-mini \
   --agent-kwarg max_tool_rounds=120 \
-  --agent-kwarg package='https://github.com/KomorGiaoGiao/FirstCoder/archive/refs/heads/main.zip' \
   --n-concurrent 1
 ```
 
@@ -77,12 +77,12 @@ FIRSTCODER_PROVIDER_NAME=yurenapi
 FIRSTCODER_MODEL=gpt-5.5
 ```
 
-## Local Source Install
+## Test an Unpublished Source Revision
 
-By default the setup script installs the published `firstcoder` package from PyPI.
-The current Terminal-Bench adapter needs a package version that includes
-`firstcoder --benchmark`; until that version is published, pass a package specifier
-that the container can install:
+By default the setup script installs the published `firstcoder` package from
+PyPI, including its `firstcoder --benchmark` entry point. Pass an explicit
+package specifier only when testing an unpublished branch, tag, Git URL, or
+local package source:
 
 ```sh
 .venv/bin/tb run \
@@ -106,8 +106,9 @@ You can verify the adapter without starting Docker:
 
 ## Verified Smokes
 
-These were run against the GitHub `main.zip` package with
-`--model yurenapi/gpt-5.5`:
+These historical smokes used the GitHub `main.zip` package with
+`--model yurenapi/gpt-5.5`. That URL is an optional source-revision example,
+not a required PyPI workaround:
 
 | Run ID | Task | Result |
 | --- | --- | --- |

@@ -198,6 +198,10 @@ def test_fork_command_copies_current_session_archives_and_updates_current_sessio
     writer = SessionEventWriter(store=store, session_id="sess_one")
     writer.append_session_created(title="旧会话")
     writer.append_user_message("原始问题")
+    writer.append_todo_updated(
+        [{"content": "继续原始问题", "status": "in_progress", "priority": "high"}],
+        task_hash="task_original",
+    )
     archive_dir = tmp_path / "archives" / "sess_one"
     archive_dir.mkdir(parents=True)
     (archive_dir / "ar_1.txt").write_text("archived output", encoding="utf-8")
@@ -219,6 +223,9 @@ def test_fork_command_copies_current_session_archives_and_updates_current_sessio
     assert record.title == "分支会话"
     assert record.metadata["forked_from"] == "sess_one"
     assert store.rebuild_session_view(forked_id).messages[0].parts[0].content == "原始问题"
+    assert store.rebuild_session_view(forked_id).todos == [
+        {"content": "继续原始问题", "status": "in_progress", "priority": "high"}
+    ]
     assert (tmp_path / "archives" / forked_id / "ar_1.txt").read_text(encoding="utf-8") == "archived output"
 
 

@@ -6,6 +6,7 @@ Textual widget 只负责显示和输入；这里把“当前 session 可被 resu
 
 from __future__ import annotations
 
+from firstcoder.input.attachments import UserAttachment
 from firstcoder.utils.text import ellipsis_truncate
 
 import asyncio
@@ -25,7 +26,6 @@ from firstcoder.agent.session import AgentSession
 from firstcoder.agent.user_input import AgentTurnStatus
 from firstcoder.runtime.user_input import UserInputRequest
 from firstcoder.context.context_builder import ContextBuilder
-from firstcoder.context.manager import ContextCompactRequest
 from firstcoder.context.models import AgentMessage, MessagePart, SessionView
 from firstcoder.context.runtime_state import SessionRuntimeState
 from firstcoder.permissions.types import PermissionMode
@@ -103,6 +103,10 @@ class AgentChatRunner:
         self.use_streaming = use_streaming
         self.last_stream_events = []
 
+    def sync_pending_input_from_current_session(self) -> UserInputRequest | None:
+        self.last_pending_input = self.current_session.session.pending_permission_input_request()
+        return self.last_pending_input
+
     def add_guidance(self, content: str) -> None:
         text = content.strip()
         if not text:
@@ -132,25 +136,18 @@ class AgentChatRunner:
             if self._active_cancellation_token is token:
                 self._active_cancellation_token = None
 
-    def run_user_turn(self, content: str) -> ChatResponse:
+    def run_user_turn(
+        self,
+        content: str,
+        *,
+        attachments: list[UserAttachment] | None = None,
+    ) -> ChatResponse:
         before_count = len(self.current_session.rebuild_view().messages)
         self.last_pending_input = None
         cancellation_token = self._begin_cancellable_turn()
-        loop = AgentLoop(
-            session=self.current_session.session,
-            provider=self.provider,
-            tools=self._current_tools(),
-            context_builder=self.context_builder,
-            context_manager=self.context_manager,
-            limits=self.limits,
-            tool_event_handler=self.tool_event_handler,
-            guidance_provider=self.drain_guidance,
-            cancellation_token=cancellation_token,
-            **self._legacy_max_tool_rounds_kwargs(),
-        )
-        self.loops.append(loop)
+        loop = self._create_loop(cancellation_token)
         try:
-            result = loop.run_user_turn_interactive(content)
+            result = loop.run_user_turn_interactive(content, attachments=attachments)
         finally:
             self._finish_cancellable_turn(cancellation_token)
         self.last_stream_events = []
@@ -159,16 +156,7 @@ class AgentChatRunner:
         self.last_display_lines = _display_lines_from_messages(after_view.messages[before_count:])
         if result.response is not None:
             return result.response
-        response = ChatResponse(
-            provider=self.provider.name,
-            model=self.provider.model,
-            content=result.pending_input.question if result.pending_input else "等待用户输入。",
-            finish_reason=AgentTurnStatus.WAITING_FOR_USER_INPUT.value,
-            raw={"pending_input": result.pending_input},
-        )
-        if response.content:
-            self.last_display_lines.append(response.content)
-        return response
+        return self._waiting_for_input_response(result.pending_input)
 
     def resume_with_user_input(self, request_id: str, answer: str) -> ChatResponse:
         """恢复等待中的权限确认。
@@ -180,19 +168,7 @@ class AgentChatRunner:
         before_count = len(self.current_session.rebuild_view().messages)
         self.last_pending_input = None
         cancellation_token = self._begin_cancellable_turn()
-        loop = AgentLoop(
-            session=self.current_session.session,
-            provider=self.provider,
-            tools=self._current_tools(),
-            context_builder=self.context_builder,
-            context_manager=self.context_manager,
-            limits=self.limits,
-            tool_event_handler=self.tool_event_handler,
-            guidance_provider=self.drain_guidance,
-            cancellation_token=cancellation_token,
-            **self._legacy_max_tool_rounds_kwargs(),
-        )
-        self.loops.append(loop)
+        loop = self._create_loop(cancellation_token)
         try:
             result = loop.resume_with_user_input(request_id, answer)
         finally:
@@ -205,18 +181,14 @@ class AgentChatRunner:
             if result.response.content and not self.last_display_lines:
                 self.last_display_lines.append(result.response.content)
             return result.response
-        response = ChatResponse(
-            provider=self.provider.name,
-            model=self.provider.model,
-            content=result.pending_input.question if result.pending_input else "等待用户输入。",
-            finish_reason=AgentTurnStatus.WAITING_FOR_USER_INPUT.value,
-            raw={"pending_input": result.pending_input},
-        )
-        if response.content:
-            self.last_display_lines.append(response.content)
-        return response
+        return self._waiting_for_input_response(result.pending_input)
 
-    async def arun_user_turn(self, content: str) -> ChatResponse:
+    async def arun_user_turn(
+        self,
+        content: str,
+        *,
+        attachments: list[UserAttachment] | None = None,
+    ) -> ChatResponse:
         """异步聊天入口。
 
         Textual 已经运行在 asyncio event loop 中，所以 UI 需要 await 这个入口；只有这里
@@ -227,26 +199,13 @@ class AgentChatRunner:
             before_count = len(self.current_session.rebuild_view().messages)
             self.last_pending_input = None
             cancellation_token = self._begin_cancellable_turn()
-            loop = AgentLoop(
-                session=self.current_session.session,
-                provider=self.provider,
-                tools=self._current_tools(),
-                context_builder=self.context_builder,
-                context_manager=self.context_manager,
-                limits=self.limits,
-                stream_event_handler=self.stream_event_handler,
-                tool_event_handler=self.tool_event_handler,
-                guidance_provider=self.drain_guidance,
-                cancellation_token=cancellation_token,
-                **self._legacy_max_tool_rounds_kwargs(),
-            )
-            self.loops.append(loop)
+            loop = self._create_loop(cancellation_token, streaming=True)
             self.last_display_lines = []
             self.last_stream_events = []
             try:
                 response = await anyio.to_thread.run_sync(
                     _run_coroutine_in_thread,
-                    loop.run_user_turn_streaming(content),
+                    loop.run_user_turn_streaming(content, attachments=attachments),
                 )
             finally:
                 self._finish_cancellable_turn(cancellation_token)
@@ -259,27 +218,14 @@ class AgentChatRunner:
                 self.last_display_lines.append(response.content)
             return response
 
-        return await asyncio.to_thread(self.run_user_turn, content)
+        return await asyncio.to_thread(self.run_user_turn, content, attachments=attachments)
 
     async def aresume_with_user_input(self, request_id: str, answer: str) -> ChatResponse:
         if self.use_streaming:
             before_count = len(self.current_session.rebuild_view().messages)
             self.last_pending_input = None
             cancellation_token = self._begin_cancellable_turn()
-            loop = AgentLoop(
-                session=self.current_session.session,
-                provider=self.provider,
-                tools=self._current_tools(),
-                context_builder=self.context_builder,
-                context_manager=self.context_manager,
-                limits=self.limits,
-                stream_event_handler=self.stream_event_handler,
-                tool_event_handler=self.tool_event_handler,
-                guidance_provider=self.drain_guidance,
-                cancellation_token=cancellation_token,
-                **self._legacy_max_tool_rounds_kwargs(),
-            )
-            self.loops.append(loop)
+            loop = self._create_loop(cancellation_token, streaming=True)
             self.last_display_lines = []
             self.last_stream_events = []
             try:
@@ -295,16 +241,7 @@ class AgentChatRunner:
             self.last_display_lines = _display_lines_from_messages(after_view.messages[before_count:])
             if result.response is not None:
                 return result.response
-            response = ChatResponse(
-                provider=self.provider.name,
-                model=self.provider.model,
-                content=result.pending_input.question if result.pending_input else "等待用户输入。",
-                finish_reason=AgentTurnStatus.WAITING_FOR_USER_INPUT.value,
-                raw={"pending_input": result.pending_input},
-            )
-            if response.content:
-                self.last_display_lines.append(response.content)
-            return response
+            return self._waiting_for_input_response(result.pending_input)
 
         return await asyncio.to_thread(self.resume_with_user_input, request_id, answer)
 
@@ -312,6 +249,37 @@ class AgentChatRunner:
         """Resolve tools once per loop so the session registry sees that same list."""
 
         return self.tools_provider() if self.tools_provider is not None else self.tools
+
+    def _create_loop(self, cancellation_token: CancellationToken, *, streaming: bool = False) -> AgentLoop:
+        kwargs = {
+            "session": self.current_session.session,
+            "provider": self.provider,
+            "tools": self._current_tools(),
+            "context_builder": self.context_builder,
+            "context_manager": self.context_manager,
+            "limits": self.limits,
+            "tool_event_handler": self.tool_event_handler,
+            "guidance_provider": self.drain_guidance,
+            "cancellation_token": cancellation_token,
+            **self._legacy_max_tool_rounds_kwargs(),
+        }
+        if streaming:
+            kwargs["stream_event_handler"] = self.stream_event_handler
+        loop = AgentLoop(**kwargs)
+        self.loops.append(loop)
+        return loop
+
+    def _waiting_for_input_response(self, pending: UserInputRequest | None) -> ChatResponse:
+        response = ChatResponse(
+            provider=self.provider.name,
+            model=self.provider.model,
+            content=pending.question if pending else "等待用户输入。",
+            finish_reason=AgentTurnStatus.WAITING_FOR_USER_INPUT.value,
+            raw={"pending_input": pending},
+        )
+        if response.content:
+            self.last_display_lines.append(response.content)
+        return response
 
     def _legacy_max_tool_rounds_kwargs(self) -> dict[str, int | None | object]:
         if self.max_tool_rounds is _DEFAULT_MAX_TOOL_ROUNDS:
@@ -367,5 +335,3 @@ def _tool_lines(parts: list[MessagePart]) -> list[str]:
         content = ellipsis_truncate(part.content, 400, normalize_ws=True)
         lines.append(f"Tool result: {name} {status}: {content}")
     return lines
-
-

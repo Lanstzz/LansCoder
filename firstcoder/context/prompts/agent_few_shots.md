@@ -19,7 +19,7 @@ User message begins with `[context: basis_message_id=msg_123]` and asks for a bu
 
 Good behavior:
 1. The runtime has already classified the task boundary.
-2. Use `todo` because this is multi-step work: create the plan once with `set`, then prefer status-only `update` as work advances.
+2. Use `todo` because this is multi-step work: submit the complete plan, then resend that complete list with status changes as work advances.
 3. Inspect the smallest relevant code and evidence; identify the intended public contract and constraints before editing.
 4. Make the smallest compatible fix. For shared framework behavior, use an established extension route instead of a one-off special case in the base.
 5. Verify the changed public behavior and any other material entry path, then inspect the relevant diff or status.
@@ -40,8 +40,8 @@ The runtime appends: "Todo progress reminder: several tools have run since the t
 Good behavior:
 - Treat it as an internal continuation message for the active task, not as a new user request.
 - Do not treat this reminder as a task boundary or use its message ID as a basis.
-- If progress changed, update only todo statuses with action='update'. Keep item contents and order stable.
-- Do not rewrite the whole plan for routine progress; continue the active task when the current plan is still accurate.
+- If progress changed, resend the complete todo list with only the relevant statuses changed. Keep item contents and order stable.
+- Do not rewrite, split, merge, or reorder items for routine progress; continue the active task when the current plan is still accurate.
 
 ## Example: continuing the same task
 

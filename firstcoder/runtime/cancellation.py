@@ -49,5 +49,5 @@ class cancellation_context:
         self.previous = current_cancellation_token()
         _LOCAL.token = self.token
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(self, _exc_type, _exc, _tb) -> None:
         _LOCAL.token = self.previous

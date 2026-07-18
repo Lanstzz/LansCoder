@@ -79,11 +79,18 @@ class JsonlSessionStore:
             _apply_message_part_metadata_update(view, event)
             return
 
+        if event.type == "todo_updated":
+            _apply_todo_payload(view, event.payload)
+            return
+
         role = EVENT_ROLE_MAP.get(event.type)
         if role is None:
             return
 
-        view.messages.append(_message_from_event(event, role=role))
+        message = _message_from_event(event, role=role)
+        view.messages.append(message)
+        if event.type == "tool_result":
+            _apply_legacy_todo_result(view, message)
 
 
 def _message_from_event(event: SessionEvent, *, role: str) -> AgentMessage:
@@ -161,3 +168,28 @@ def _apply_message_part_metadata_update(view: SessionView, event: SessionEvent) 
             if part.id == part_id:
                 part.metadata.update(metadata)
                 return
+
+
+def _apply_todo_payload(view: SessionView, payload: dict[str, object]) -> None:
+    todos = payload.get("todos")
+    if not isinstance(todos, list) or not all(isinstance(item, dict) for item in todos):
+        return
+    view.todos = [dict(item) for item in todos]
+    view.todo_initialized = True
+    task_hash = payload.get("task_hash")
+    view.todo_task_hash = str(task_hash) if task_hash is not None else None
+
+
+def _apply_legacy_todo_result(view: SessionView, message: AgentMessage) -> None:
+    for part in message.parts:
+        if part.kind != "tool_result" or part.metadata.get("tool_name") != "todo":
+            continue
+        if part.metadata.get("ok") is False:
+            continue
+        data = part.metadata.get("data")
+        if not isinstance(data, dict):
+            continue
+        payload: dict[str, object] = {"todos": data.get("todos")}
+        if part.metadata.get("task_hash") is not None:
+            payload["task_hash"] = part.metadata["task_hash"]
+        _apply_todo_payload(view, payload)

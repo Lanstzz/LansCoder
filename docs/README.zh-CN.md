@@ -15,9 +15,10 @@
 2. [代码阅读指南](CODEBASE_READING_GUIDE.zh-CN.md)：先得到目录地图和一条完整执行链。
 3. [CLI / TUI 设计](CLI_TUI_DESIGN.zh-CN.md)：理解启动、装配、命令、流式输出和界面状态。
 4. [Agent 主循环护栏](AGENT_LOOP_GUARDRAILS.zh-CN.md)：理解一条用户消息如何变成模型调用与工具结果。
-5. [工具设计](TOOLS_DESIGN.zh-CN.md) 与 [权限设计](PERMISSIONS_DESIGN.zh-CN.md)：理解模型的请求怎样变成受控的本地操作。
-6. [上下文管理](CONTEXT_MANAGEMENT_DESIGN.zh-CN.md)：理解会话事实、投影、压缩与任务边界。
-7. [Provider 设计](PROVIDERS_DESIGN.zh-CN.md) 与 [Skill 系统设计](SKILL_SYSTEM_DESIGN.zh-CN.md)：理解两个主要扩展点。
+5. [多模态输入设计](MULTIMODAL_INPUT_DESIGN.zh-CN.md)：理解附件暂存、持久化和 provider 投影。
+6. [工具设计](TOOLS_DESIGN.zh-CN.md) 与 [权限设计](PERMISSIONS_DESIGN.zh-CN.md)：理解模型的请求怎样变成受控的本地操作。
+7. [上下文管理](CONTEXT_MANAGEMENT_DESIGN.zh-CN.md)：理解会话事实、投影、压缩与任务边界。
+8. [Provider 设计](PROVIDERS_DESIGN.zh-CN.md) 与 [Skill 系统设计](SKILL_SYSTEM_DESIGN.zh-CN.md)：理解两个主要扩展点。
 
 每篇设计文档都提供可观察的小实验和相关测试。建议边读边开源码；目标不是背文件名，而是建立能实际排障的运行模型。
 
@@ -27,6 +28,7 @@
 | --- | --- |
 | 包边界和依赖规则是什么？ | [架构说明](ARCHITECTURE.zh-CN.md) / [English](ARCHITECTURE.md) |
 | 终端应用怎样被装配和刷新？ | [CLI / TUI 设计](CLI_TUI_DESIGN.zh-CN.md) / [English](CLI_TUI_DESIGN.md) |
+| 粘贴文件和剪贴板图片怎样变成 provider 内容？ | [多模态输入设计](MULTIMODAL_INPUT_DESIGN.zh-CN.md) / [English](MULTIMODAL_INPUT_DESIGN.md) |
 | 一轮任务何时停止、暂停、继续？ | [Agent 主循环护栏](AGENT_LOOP_GUARDRAILS.zh-CN.md) / [English](AGENT_LOOP_GUARDRAILS.md) |
 | 长对话怎样放进模型上下文窗口？ | [上下文管理](CONTEXT_MANAGEMENT_DESIGN.zh-CN.md) / [English](CONTEXT_MANAGEMENT_DESIGN.md) |
 | 为什么写文件、执行 shell 要确认？ | [权限设计](PERMISSIONS_DESIGN.zh-CN.md) / [English](PERMISSIONS_DESIGN.md) |

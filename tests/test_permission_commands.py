@@ -19,6 +19,8 @@ def test_permission_mode_command_shows_current_mode(tmp_path) -> None:
 
     assert result.handled is True
     assert "Permission mode: standard" in result.output
+    assert "Available: standard, aggressive, bypass" in result.output
+    assert "conservative" not in result.output
 
 
 def test_permission_mode_command_updates_session_and_manager(tmp_path) -> None:
@@ -119,3 +121,23 @@ def test_permission_mode_command_rejects_unknown_mode(tmp_path) -> None:
     assert result.handled is True
     assert "Unknown permission mode" in result.output
     assert session.mode == PermissionMode.STANDARD.value
+
+
+def test_permission_mode_command_rejects_removed_conservative_mode(tmp_path) -> None:
+    session = AgentSession.from_project(
+        store=JsonlSessionStore(tmp_path / ".firstcoder"),
+        session_id="sess_mode",
+        project_root=tmp_path,
+        tools=[],
+    )
+    handler = PermissionCommandHandler(session=session)
+
+    result = handler.handle("/mode conservative")
+
+    assert result.handled is True
+    assert result.output == "Unknown permission mode. Available: standard, aggressive, bypass"
+    assert session.mode == PermissionMode.STANDARD.value
+
+
+def test_permission_mode_enum_contains_only_three_modes() -> None:
+    assert [mode.value for mode in PermissionMode] == ["standard", "aggressive", "bypass"]

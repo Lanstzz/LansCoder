@@ -33,6 +33,7 @@ This is why schemas should not be copied into prompt text.
 | Type | Purpose |
 | --- | --- |
 | `ChatMessage` | normalized system/user/assistant/tool message |
+| `ContentPart` | provider-neutral text or image content within a message |
 | `ToolDefinition` / `ToolCall` | definition sent vs call returned |
 | `ChatRequest` | all input to an adapter, including native-tool-independent definitions |
 | `ChatResponse` | complete normalized result and finish reason |
@@ -73,6 +74,12 @@ Streaming chunks are accumulated inside the adapter until a complete tool call
 exists; callers receive stable `ChatStreamEvent` values rather than raw SDK
 chunks.
 
+When `ChatMessage.content_parts` is present, text remains text content and an
+image becomes OpenAI-compatible `image_url` content with a `data:` URL. The
+base64 is produced by `ContextBuilder` at request time from the session
+attachment store, not persisted into JSONL. A provider/model still needs vision
+support; this adapter encoding does not make every configured model visual.
+
 ## Anthropic Path: Contract Parity With OpenAI-Compatible
 
 `AnthropicProvider` implements the same internal contracts as the OpenAI-compatible
@@ -82,6 +89,18 @@ error classification. It moves system messages to Anthropic's dedicated `system`
 field and maps schemas through `input_schema`. Consecutive `tool` messages are
 merged into one user `tool_result` block list. Anthropic-only extras such as prompt
 caching remain optional and are not required for agent-loop parity.
+
+Rich text/image messages map to Anthropic content blocks. Images use
+`{"type": "image", "source": {"type": "base64", ...}}`, with the same
+provider-neutral `ContentPart` source as the OpenAI-compatible path.
+
+## Multimodal Scope
+
+FirstCoder supports image attachments and small text-file attachments through
+its existing Chat Completions-compatible and Anthropic Messages paths. It does
+not implement the OpenAI Responses API. See
+[Multimodal Input Design](MULTIMODAL_INPUT_DESIGN.md) for the input, storage,
+and safety boundary; do not duplicate provider-only base64 into the session log.
 
 
 ## Error and Recovery Contract
@@ -95,7 +114,7 @@ context recovery path for prompt-too-long—without parsing every vendor message
 
 ```sh
 .venv/bin/python -m pytest tests/test_providers.py tests/test_provider_errors.py \
-  tests/test_readme_provider_docs.py -q
+  tests/test_multimodal_input.py tests/test_readme_provider_docs.py -q
 ```
 
 When adding an adapter, fake the vendor client in tests and assert the outgoing

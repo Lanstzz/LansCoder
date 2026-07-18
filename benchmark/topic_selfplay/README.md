@@ -4,6 +4,8 @@
 
 它不是完整评测 agent 编码能力的 benchmark，而是专门评测任务边界和 `topic_hash` 维护能力。这个能力后续会影响上下文压缩、checkpoint、resume、历史归档和多轮任务追踪：如果 agent 把不同任务错误合并，旧上下文会污染新任务；如果 agent 把同一任务错误切断，又会丢失必要上下文。
 
+它也不是当前 FirstCoder `AgentLoop` 的端到端 benchmark：runner 自己实现 `continue/new_task` 和 `topic_hash` 协议，不会调用 `TaskBoundaryClassifier`、session JSONL 回放或真实 provider 请求投影。因此它适合观察任务边界概念和模型行为，不能直接当作 FirstCoder 隐藏分类机制的回归分数。
+
 ## 角色
 
 这个 benchmark 一轮里最多有三个模型角色：

@@ -15,8 +15,10 @@ ToolPermissionSpec -> PermissionRequest -> PermissionManager
   -> PermissionAwareToolRegistry action
 ```
 
-The tool executor runs only on the `ALLOW` branch. That is the boundary that
-matters when reviewing safety—not the wording in a system message.
+The registry executor runs only after `ALLOW`; direct file mutations have one
+additional program-side boundary: `ToolExecutor` builds a trusted prewrite
+review before it dispatches. That is the boundary that matters when reviewing
+safety—not the wording in a system message.
 
 ## Concrete Example: Writing a File
 
@@ -25,10 +27,12 @@ matters when reviewing safety—not the wording in a system message.
    containing action, normalized target, cwd, and policy hints.
 3. `PermissionManager.preflight` first checks matching grants, then the default
    policy under the active mode.
-4. `ALLOW` executes; `DENY` becomes a tool result; `ASK` becomes a structured
-   `UserInputRequest` (from `firstcoder.runtime.user_input`) and the turn pauses.
-5. After an answer, `resolve_confirmation` rechecks guards and either executes
-   the original pending call or appends a denied result.
+4. `DENY` becomes a tool result. `ASK` shows the trusted diff plus a structured
+   `UserInputRequest` (from `firstcoder.runtime.user_input`) and pauses. An
+   `ALLOW` decision for a supported direct mutation still pauses once for a
+   review-only Apply confirmation.
+5. After an answer, `resolve_confirmation` rechecks the saved file snapshots
+   and either executes the original pending call or appends a denied result.
 
 The model sees the resulting tool message and can adapt. It never directly
 writes a grant file or calls an executor behind the registry.
@@ -45,7 +49,7 @@ writes a grant file or calls an executor behind the registry.
 | `PermissionPersistence` | whether an approval is once or durable |
 | `PermissionGrant` | a durable, scoped allow rule |
 | `PermissionScopeType` | exact path, command prefix, host, env key, and similar scope |
-| `PermissionMode` | conservative, standard, aggressive, or bypass policy setting |
+| `PermissionMode` | standard, aggressive, or bypass policy setting |
 
 Do not conflate decision and persistence: “allow this once” is an allowed
 decision with short persistence; “allow always” creates a scoped grant only
@@ -61,7 +65,6 @@ of restating a partial copy in callers.
 
 Modes adjust that policy:
 
-- `conservative`: asks more often;
 - `standard`: normal project behavior;
 - `aggressive`: permits selected auto-eligible actions more readily;
 - `bypass`: a maximally permissive policy mode.
@@ -70,6 +73,26 @@ Modes adjust that policy:
 dispatch still occurs, results are still logged, and hard safety checks/policy
 rules still define the actual behavior. Treat it as an explicit operating mode,
 not an invisible model superpower.
+
+### Trusted prewrite review
+
+`write`, `edit`, `apply_patch`, and `delete` are reviewed before their executor
+runs. `shell` deliberately is not: arbitrary command effects cannot be
+predicted safely. The review is computed from the original `ToolCall`, stores
+the expected file snapshots, and gives the UI a bounded unified diff; the UI
+may only return a request ID and choice, never a replacement call payload.
+
+| Mode / decision | Direct file mutation behavior |
+| --- | --- |
+| standard + `ASK` | trusted diff + ordinary permission confirmation; approval executes |
+| aggressive or matching grant + `ALLOW` | trusted diff + review-only Apply; it creates no new durable grant |
+| bypass | emit a non-blocking `prewrite_review` event, then execute immediately |
+| benchmark adapter | may explicitly set `require_prewrite_review = False` for non-interactive runs |
+
+Before execution after a pause, the saved snapshots are checked again. A stale
+preview is blocked rather than writing through a concurrent external change.
+This reduces accidental overwrites but is not a filesystem-level atomic
+transaction.
 
 `FilePermissionGrantStore` persists grants in the data root's `permissions.json`.
 An “allow always” is converted to a calculated scope via
@@ -99,7 +122,8 @@ parallel conversation log.
 ```sh
 .venv/bin/python -m pytest tests/test_permissions_policy.py \
   tests/test_permissions_manager.py tests/test_permissions_grants.py \
-  tests/test_permission_registry.py tests/test_permission_commands.py -q
+  tests/test_permission_registry.py tests/test_permission_commands.py \
+  tests/test_prewrite_review.py tests/test_review_view.py -q
 ```
 
 Read `tests/test_permission_registry.py` for the essential proof: the executor
@@ -112,6 +136,7 @@ is not invoked for deny or ask until the correct resume path occurs.
 | unexpected prompt | exact action/target derived by the tool spec, then policy mode |
 | expected durable approval ignored | grant scope normalization and grant store location |
 | user approved but tool did not run | pending execution id and resume call |
+| review cannot resume | original call is still pending and its snapshots have not changed |
 | a dangerous action ran | registry wrapper was actually installed and tool has a permission spec |
 | permission result breaks provider history | matching tool call id was appended |
 

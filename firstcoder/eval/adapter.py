@@ -109,6 +109,7 @@ class FirstCoderCodingAgentAdapter:
             permission_manager=permission_manager,
             sandbox_access=sandbox_access,
         )
+        session.require_prewrite_review = False
         return AgentLoop(
             session=session,
             provider=self._create_provider(),

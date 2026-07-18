@@ -17,6 +17,7 @@ from uuid import uuid4
 from rich.markup import escape
 from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.screen import Screen
@@ -51,6 +52,7 @@ from firstcoder.app.picker_adapters import (
 )
 from firstcoder.app.session_commands import SESSION_LIST_VISIBLE_LIMIT
 from firstcoder.app.permission_view import permission_choice_for_text, permission_options_text, permission_prompt_text
+from firstcoder.app.review_view import render_prewrite_review, review_command_from_text
 from firstcoder.app.transcript_view import (
     display_line_kind,
     display_line_status,
@@ -65,10 +67,10 @@ from firstcoder.app.transcript_view import (
 from firstcoder.app.tui_state import TuiEntryKind, TuiTodoItem, TuiTranscript, TuiTranscriptEntry
 from firstcoder.app.welcome import welcome_renderable
 from firstcoder.app import yuren_topbar_themes
+from firstcoder.input.attachments import UserAttachment, format_attachment_chip, resolve_paste_attachments
 
 
 _PERMISSION_MODE_COLORS = {
-    "conservative": "#5fb5ff",
     "standard": "#cfd1d6",
     "aggressive": "#f6b73c",
     "bypass": "#ff6b5f",
@@ -94,6 +96,15 @@ class FirstCoderMarkdown(Markdown):
 class ComposerTextArea(TextArea):
     """Multiline composer where Enter submits and Shift+Enter inserts a newline."""
 
+    # TextArea owns Ctrl+V, so an App binding is not invoked while the composer
+    # has focus. Route the key through this widget before falling back to the
+    # regular text-paste behavior.
+    BINDINGS = [
+        Binding("ctrl+v", "paste", show=False, priority=True),
+        Binding("super+v", "paste", show=False, priority=True),
+        Binding("f8", "paste", show=False, priority=True),
+    ]
+
     class Submitted(Message):
         pass
 
@@ -109,6 +120,27 @@ class ComposerTextArea(TextArea):
             self.insert("\n")
             return
         await super()._on_key(event)
+
+    async def _on_paste(self, event: events.Paste) -> None:
+        """Stage pasted files before TextArea inserts their paths as text."""
+
+        stage_attachments = getattr(self.app, "_stage_paste_attachments", None)
+        if callable(stage_attachments) and stage_attachments(event.text):
+            event.stop()
+            event.prevent_default()
+            return
+        await super()._on_paste(event)
+
+    def action_paste(self) -> None:
+        """Attach an OS clipboard image, otherwise retain TextArea text paste."""
+
+        paste_attachment = getattr(self.app, "_paste_composer_clipboard_image", None)
+        if paste_attachment is not None and paste_attachment():
+            return
+        paste_unavailable = getattr(self.app, "_notify_clipboard_image_unavailable", None)
+        if callable(paste_unavailable):
+            paste_unavailable()
+        super().action_paste()
 
 
 def _plain_static(content: object = "", *args, **kwargs) -> Static:
@@ -157,7 +189,9 @@ class FirstCoderApp(App[None]):
 
     CSS_PATH = "tui.tcss"
     ALLOW_SELECT = False
-    BINDINGS = [("ctrl+c", "quit", "Quit")]
+    BINDINGS = [
+        ("ctrl+c", "quit", "Quit"),
+    ]
     STREAM_RENDER_INTERVAL_SECONDS = 0.2
     WORKING_ANIMATION_INTERVAL_SECONDS = 0.18
     WORKING_FRAMES = ("[.  ]", "[.. ]", "[...]", "[ ..]", "[  .]")
@@ -223,6 +257,8 @@ class FirstCoderApp(App[None]):
         self._input_history: list[str] = []
         self._input_history_index: int | None = None
         self._picker: TuiPickerState | None = None
+        self._review_expanded_paths: set[str] = set()
+        self._staged_attachments: list[UserAttachment] = []
         self._welcome_widget: Static | None = None
         self._welcome_particle_timer: Timer | None = None
         self._welcome_particle_frame = 0
@@ -238,7 +274,7 @@ class FirstCoderApp(App[None]):
             yield Static("idle · ready", id="activity", classes="activity-line")
             with Vertical(id="composer", classes="composer"):
                 yield ComposerTextArea(
-                    placeholder="输入消息，Enter 发送，Shift+Enter 换行",
+                    placeholder="输入消息，Enter 发送，Shift+Enter 换行，F8 粘贴剪贴板图片",
                     id="input",
                     show_line_numbers=False,
                     soft_wrap=True,
@@ -267,8 +303,11 @@ class FirstCoderApp(App[None]):
         input_widget = self.query_one("#input", TextArea)
         text = input_widget.text.strip()
         input_widget.clear()
-        if not text:
+        attachments = list(self._staged_attachments)
+        if not text and not attachments:
             return
+        if not text:
+            text = "请分析这些附件。"
         self._dismiss_welcome()
         self._record_input_history(text)
 
@@ -276,7 +315,11 @@ class FirstCoderApp(App[None]):
             if self._picker_select_number(int(text)):
                 return
 
-        self._write_line(f"> {text}", kind=TuiEntryKind.USER)
+        attachment_chips = "\n".join(format_attachment_chip(item) for item in attachments)
+        user_display = f"> {text}"
+        if attachment_chips:
+            user_display = f"{user_display}\n{attachment_chips}"
+        self._write_line(user_display, kind=TuiEntryKind.USER)
 
         if text.startswith("/"):
             if self.command_handler is None:
@@ -292,7 +335,8 @@ class FirstCoderApp(App[None]):
             self._write_line(f"Unknown command: {text}", kind=TuiEntryKind.ERROR)
             return
 
-        self._submit_chat_text(text)
+        self._staged_attachments.clear()
+        self._submit_chat_text(text, attachments=attachments)
 
     async def on_composer_text_area_submitted(self, event: ComposerTextArea.Submitted) -> None:
         event.stop()
@@ -324,6 +368,49 @@ class FirstCoderApp(App[None]):
         event.prevent_default()
         input_widget.load_text(recalled)
         input_widget.cursor_location = input_widget.document.end
+
+    def on_paste(self, event: events.Paste) -> None:
+        """Turn pasted file paths or clipboard images into pending attachments."""
+
+        focused = getattr(self, "focused", None)
+        if getattr(focused, "id", None) != "input":
+            return
+        if self._stage_paste_attachments(getattr(event, "text", None)):
+            event.stop()
+            event.prevent_default()
+
+    def _paste_composer_clipboard_image(self) -> bool:
+        """Attach a clipboard image when the focused TextArea handles Ctrl/Cmd+V."""
+
+        focused = getattr(self, "focused", None)
+        if getattr(focused, "id", None) != "input":
+            return False
+        return self._stage_paste_attachments(None)
+
+    def _notify_clipboard_image_unavailable(self) -> None:
+        """Confirm that the paste shortcut ran when its clipboard image lookup failed."""
+
+        self._write_line(
+            "No clipboard image found. Copy an image first, or paste an image file path instead.",
+            kind=TuiEntryKind.SYSTEM,
+        )
+
+    def _stage_paste_attachments(self, paste_text: str | None) -> bool:
+        try:
+            attachments = resolve_paste_attachments(paste_text)
+        except (OSError, ValueError) as exc:
+            self._write_line(f"Could not attach pasted image: {exc}", kind=TuiEntryKind.ERROR)
+            return True
+        if not attachments:
+            return False
+        existing_paths = {item.path for item in self._staged_attachments}
+        added = [item for item in attachments if item.path not in existing_paths]
+        if not added:
+            return True
+        self._staged_attachments.extend(added)
+        chips = ", ".join(format_attachment_chip(item) for item in added)
+        self._write_line(f"Attached: {chips}", kind=TuiEntryKind.SYSTEM)
+        return True
 
     def _next_chat_turn_token(self) -> int:
         self._chat_turn_token += 1
@@ -412,7 +499,7 @@ class FirstCoderApp(App[None]):
             return self._input_history[self._input_history_index]
         return None
 
-    def _submit_chat_text(self, text: str) -> None:
+    def _submit_chat_text(self, text: str, *, attachments: list[UserAttachment] | None = None) -> None:
         if self.chat_runner is None:
             self._write_line("普通聊天入口尚未接入 AgentLoop。", kind=TuiEntryKind.ERROR)
             return
@@ -432,6 +519,24 @@ class FirstCoderApp(App[None]):
 
         pending = getattr(self.chat_runner, "last_pending_input", None)
         if getattr(pending, "kind", None) == "permission_confirmation":
+            payload = getattr(pending, "payload", {}) or {}
+            review_payload = payload.get("prewrite_review")
+            if isinstance(review_payload, dict):
+                review_command = review_command_from_text(text, review_payload)
+                if review_command is not None:
+                    action, path = review_command
+                    if action == "all":
+                        self._review_expanded_paths = {
+                            str(item.get("path") or "")
+                            for item in review_payload.get("files", [])
+                            if isinstance(item, dict)
+                        }
+                    elif action == "clear":
+                        self._review_expanded_paths.clear()
+                    elif path:
+                        self._review_expanded_paths.add(path)
+                    self._write_review_payload(review_payload)
+                    return
             choice = permission_choice_for_text(text, pending)
             if choice is None:
                 self._write_line(permission_options_text(pending), kind=TuiEntryKind.PERMISSION)
@@ -443,7 +548,7 @@ class FirstCoderApp(App[None]):
 
         self._chat_busy = True
         token = self._begin_active_chat_turn()
-        self._chat_worker = self.run_worker(self._run_chat_turn(text, token))
+        self._chat_worker = self.run_worker(self._run_chat_turn(text, token, attachments=attachments))
 
     def _handle_command_action(self, action: dict[str, Any] | None, *, output: str = "") -> bool:
         if not action:
@@ -644,6 +749,10 @@ class FirstCoderApp(App[None]):
             return
         view = rebuild_view()
         self._clear_output()
+        self.transcript.update_todos(
+            [item for item in getattr(view, "todos", []) if isinstance(item, dict)]
+        )
+        self._render_todo_panel()
         for message in getattr(view, "messages", []):
             content = "\n".join(part.content for part in message.parts if getattr(part, "content", ""))
             if not content:
@@ -654,6 +763,10 @@ class FirstCoderApp(App[None]):
                 self._write_markdown_message(content)
             else:
                 self._write_line(content, kind=TuiEntryKind.TOOL)
+        sync_pending = getattr(self.chat_runner, "sync_pending_input_from_current_session", None)
+        if sync_pending is not None:
+            sync_pending()
+        self._write_pending_input()
 
     async def _resume_permission_turn(self, request_id: str, answer: str, token: int) -> None:
         previous_stream_handler = None
@@ -690,7 +803,13 @@ class FirstCoderApp(App[None]):
         if self._is_current_chat_turn(token):
             self._write_chat_response(response)
 
-    async def _run_chat_turn(self, text: str, token: int) -> None:
+    async def _run_chat_turn(
+        self,
+        text: str,
+        token: int,
+        *,
+        attachments: list[UserAttachment] | None = None,
+    ) -> None:
         previous_stream_handler = None
         previous_tool_handler = None
         try:
@@ -705,9 +824,17 @@ class FirstCoderApp(App[None]):
             self._show_working_indicator("planning next step...")
             async_runner = getattr(self.chat_runner, "arun_user_turn", None) if self.chat_runner else None
             if async_runner is not None:
-                response = await async_runner(text)
+                response = (
+                    await async_runner(text, attachments=attachments)
+                    if attachments
+                    else await async_runner(text)
+                )
             else:
-                response = self.chat_runner.run_user_turn(text)
+                response = (
+                    self.chat_runner.run_user_turn(text, attachments=attachments)
+                    if attachments
+                    else self.chat_runner.run_user_turn(text)
+                )
         except asyncio.CancelledError:
             return
         except Exception as exc:
@@ -885,6 +1012,11 @@ class FirstCoderApp(App[None]):
             tool_call = getattr(event, "tool_call", None)
             tool_name = str(getattr(tool_call, "name", "") or "tool")
             if tool_name in HIDDEN_TOOL_STATUS_NAMES:
+                return
+            if str(getattr(event, "kind", "") or "") == "prewrite_review":
+                review = getattr(event, "prewrite_review", None)
+                if isinstance(review, dict):
+                    self._call_ui_thread(self._write_review_payload, review)
                 return
             line = tool_status_text(event)
             if not line:
@@ -1129,6 +1261,11 @@ class FirstCoderApp(App[None]):
         if pending is None:
             return
         if getattr(pending, "kind", None) == "permission_confirmation":
+            payload = getattr(pending, "payload", {}) or {}
+            review_payload = payload.get("prewrite_review")
+            if isinstance(review_payload, dict):
+                self._review_expanded_paths.clear()
+                self._write_review_payload(review_payload)
             self._write_line(permission_prompt_text(pending), kind=TuiEntryKind.PERMISSION)
             self._set_activity("waiting · permission")
             return
@@ -1136,16 +1273,15 @@ class FirstCoderApp(App[None]):
         self._write_line(f"需要用户输入：\n{question}", kind=TuiEntryKind.PERMISSION)
         self._set_activity("waiting · input")
 
-    def _append_stream_line(self, label: str, text: str, *, include_label: bool) -> None:
+    def _write_review_payload(self, payload: dict[str, object]) -> None:
+        rendered = render_prewrite_review(payload, expanded_paths=self._review_expanded_paths)
         output = self.query_one("#output")
-        line = f"{label}: {text}" if include_label else text
         if hasattr(output, "mount"):
-            entry = self.transcript.add(TuiEntryKind.REASONING, line)
-            output.mount(_plain_static(entry_plain_text(entry), classes="message reasoning-message"))
+            output.mount(_plain_static(rendered, classes="message permission-message review-message"))
             self._scroll_output_end_if_pinned(output)
             return
-        if hasattr(output, "write"):
-            output.write(line)
+        if hasattr(output, "write_line"):
+            output.write_line(rendered.plain)
 
     def _show_working_indicator(self, text: str) -> None:
         self._stop_activity_animation()

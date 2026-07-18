@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from firstcoder.runtime.cancellation import CancellationToken

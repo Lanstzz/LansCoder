@@ -5,10 +5,16 @@ from __future__ import annotations
 
 def permission_choice_for_text(text: str, pending) -> str | None:
     normalized = text.strip().lower().replace(" ", "_")
+    raw = text.strip()
+    if raw.lower().startswith(("reject:", "reject_with_feedback:")):
+        return f"reject_with_feedback: {raw.split(':', 1)[1].strip()}"
     aliases = {
         "1": "deny",
         "no": "deny",
         "deny": "deny",
+        "4": "reject_with_feedback",
+        "reject": "reject_with_feedback",
+        "reject_with_feedback": "reject_with_feedback",
         "2": "allow_once",
         "allow_once": "allow_once",
         "once": "allow_once",
@@ -57,14 +63,22 @@ def permission_prompt_text(pending) -> str:
     options = list(getattr(pending, "options", []) or [])
     if options:
         choices: list[str] = []
+        option_numbers = {
+            "deny": 1,
+            "allow_once": 2,
+            "allow_always_same_scope": 3,
+            "reject_with_feedback": 4,
+        }
         for index, option in enumerate(options, start=1):
             label = str(getattr(option, "label", "") or getattr(option, "id", ""))
             option_id = str(getattr(option, "id", ""))
             rendered = permission_option_label(label, option_id)
-            choices.append(f"[{index}] {rendered}")
+            choices.append(f"[{option_numbers.get(option_id, index)}] {rendered}")
         lines.append("  " + "  ".join(choices))
     else:
         lines.append("  [1] deny  [2] allow once  [3] allow always")
+    if isinstance(payload.get("prewrite_review"), dict):
+        lines.append("  Or reply: reject: <feedback>")
     return "\n".join(lines)
 
 
@@ -74,5 +88,6 @@ def permission_option_label(label: str, option_id: str) -> str:
         "deny": "deny",
         "allow once": "allow once",
         "allow always same scope": "allow always",
+        "reject with feedback": "reject: <feedback>",
     }
     return aliases.get(normalized, label.strip().lower() or option_id)

@@ -66,13 +66,14 @@ codebase.
 ## 3. Package Map
 
 Rough sizes fluctuate; treat them as orientation, not budgets. At the time of
-writing, `firstcoder/` is ~23k lines of Python across ~170 files. The largest
+writing, `firstcoder/` is ~25k lines of Python across 174 files. The largest
 packages are `context/`, `app/`, `tools/`, and `agent/`.
 
 | Package | Responsibility | Read first | Must not own |
 | --- | --- | --- | --- |
 | `runtime/` | Shared cancellation + structured user-input requests | `cancellation.py`, `user_input.py` | Loop policy, tools, UI |
 | `app/` | Composition root, TUI, slash commands, UI-edge ports | `factory.py`, `runtime.py`, `ports.py`, `tui.py` | Provider protocol translation |
+| `input/` | Attachment discovery, clipboard reads, and session staging | `attachments.py`, `clipboard.py` | Provider wire encoding or widget state |
 | `agent/` | One-turn orchestration and the session runtime object | `loop.py`, `session.py`, `loop_limits.py` | Shell/HTTP concrete work |
 | `context/` | Append-only facts, projection, compaction L1–L4 | `store.py`, `writer.py`, `context_builder.py`, `manager.py` | Widgets, vendor SDKs |
 | `session/` | Catalog / index / new / resume / fork / share | `bootstrap.py`, `catalog.py`, `resume.py` | Model completion |
@@ -93,6 +94,7 @@ cli / app
   ├── providers.factory  ──► ChatProvider
   ├── context.manager    ──► compaction decisions
   └── AgentChatRunner    ──► agent.loop.AgentLoop
+                                ├── input attachments → session store
                                 ├── context.writer / builder
                                 ├── providers.complete|astream
                                 ├── tools (+ PermissionAwareToolRegistry)
@@ -177,7 +179,7 @@ providers / config
 This is the spine of the system. Memorize the *shape*, not every helper name.
 
 ```text
-User submits text in TUI / CLI
+User submits text and optional staged attachments in TUI / CLI
   │
   ▼
 firstcoder/cli.py
@@ -190,8 +192,9 @@ app.runtime.AgentChatRunner.run_user_turn / resume_with_user_input
   │
   ▼
 agent.loop.AgentLoop
-  1. append user message via session writer  (durable fact)
-  2. optional task-boundary classification
+  1. copy attachments beneath session storage; append user message/metadata
+     via the session writer  (durable facts)
+  2. initialize the first task, or run hidden task-boundary classification
   3. compact triggers:
        _auto_compact
        _compact_for_prompt_too_long
@@ -202,6 +205,8 @@ agent.loop.AgentLoop
   6. for each tool_call:
        session tool registry (+ permissions preflight)
        on ASK: pause with UserInputRequest (kind=permission_confirmation)
+       on direct file mutation: build trusted prewrite diff; standard asks for
+         permission, allowed/aggressive paths ask for review-only Apply
        on allow: execute; append tool result fact
   7. settle / verify / stop according to AgentLoopLimits and content
   │
@@ -214,7 +219,9 @@ runtime events → AgentChatRunner → TUI transcript / activity / permission UI
 | Durable (survive process exit) | Process-local (rebuild or lose) |
 | --- | --- |
 | `.firstcoder/sessions/<id>.jsonl` facts | `SessionRuntimeState` |
+| `.firstcoder/attachments/<session-id>/` staged attachment bytes | pending attachment chips in the composer |
 | permission grants file (`permissions.json`) | pending permission original tool_call |
+| `todo_updated` snapshots replayed into `SessionView.todos` | current review-card expansion state |
 | skill files on disk | prompt prefix cache |
 | MCP server configs | live MCP connections |
 
@@ -226,6 +233,8 @@ across restarts must be a fact or an explicit grant—not only a Python object.
 | Object | Package | Role |
 | --- | --- | --- |
 | `ChatRequest` / `ChatResponse` | `providers.types` | Internal model I/O |
+| `UserAttachment` / `PreparedAttachment` | `input.attachments` | composer input and session-safe attachment metadata |
+| `ContentPart` | `providers.types` | provider-neutral text/image content projection |
 | `Tool` / `ToolCall` / `ToolResult` | `tools.types` | Schema + execution result |
 | `PermissionRequest` / decision | `permissions` | allow / ask / deny |
 | `UserInputRequest` | `runtime.user_input` | Pause for human (permission or ask_user) |
@@ -366,6 +375,14 @@ model tool_call
 
 `ask_user` uses the same `UserInputRequest` shape with `kind="ask_user"`.
 
+For `write`, `edit`, `apply_patch`, and `delete`, `ToolExecutor` builds a
+trusted `PrewriteReview` before execution. In standard mode the diff is part of
+the normal permission pause; an `ALLOW` decision (including aggressive mode or
+a matching grant) still becomes a review-only Apply pause. Bypass emits the
+same diff as a non-blocking event and proceeds; non-interactive benchmark
+adapters can explicitly disable it. Resume rechecks the saved snapshots, and
+the UI never supplies the executable call payload.
+
 Critical safety rule: the pending original `tool_call` must come from **local
 session state**, never from a model-replayed payload the user could not see.
 
@@ -389,6 +406,10 @@ time via the factory’s tool provider, and still pass through permissions.
 
 Deep dives: [PROVIDERS_DESIGN.md](PROVIDERS_DESIGN.md),
 [SKILL_SYSTEM_DESIGN.md](SKILL_SYSTEM_DESIGN.md), [MCP.md](MCP.md).
+
+`ContextBuilder` also projects persisted image attachments into `ContentPart`
+values at request time. It reads only paths that resolve under the session store;
+the JSONL log stores relative paths and metadata, never image base64.
 
 ---
 
@@ -475,6 +496,7 @@ generated benchmark trees can contain their own `tests/` directories.
 | Tools | [TOOLS_DESIGN.md](TOOLS_DESIGN.md) |
 | Permissions | [PERMISSIONS_DESIGN.md](PERMISSIONS_DESIGN.md) |
 | Providers | [PROVIDERS_DESIGN.md](PROVIDERS_DESIGN.md) |
+| Multimodal attachment path | [MULTIMODAL_INPUT_DESIGN.md](MULTIMODAL_INPUT_DESIGN.md) |
 | Skills | [SKILL_SYSTEM_DESIGN.md](SKILL_SYSTEM_DESIGN.md) |
 | MCP | [MCP.md](MCP.md) |
 | Index of all tech docs | [README.md](README.md) |

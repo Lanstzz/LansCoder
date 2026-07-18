@@ -19,6 +19,7 @@ from firstcoder.context.models import MessagePart, utc_now_iso
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.context.task_boundary import TaskBoundaryObservation, TaskBoundaryService
 from firstcoder.context.versions import CONTEXT_EVENT_SCHEMA_VERSION
+from firstcoder.input.attachments import PreparedAttachment
 from firstcoder.providers.types import ChatResponse, ToolCall
 from firstcoder.tools.types import ToolResult
 
@@ -82,22 +83,50 @@ class SessionEventWriter:
         self,
         content: str,
         *,
+        attachments: list[PreparedAttachment] | None = None,
         metadata: dict[str, Any] | None = None,
         part_metadata: dict[str, Any] | None = None,
     ) -> str:
         self.current_turn += 1
         message_id = new_message_id()
-        part = MessagePart(
-            id=new_part_id(),
-            message_id=message_id,
-            kind="text",
-            content=content,
-            metadata=self._part_metadata(part_metadata),
-        )
+        parts = [
+            MessagePart(
+                id=new_part_id(),
+                message_id=message_id,
+                kind="text",
+                content=content,
+                metadata=self._part_metadata(part_metadata),
+            )
+        ]
+        for attachment in attachments or []:
+            attachment_metadata = dict(part_metadata or {})
+            attachment_metadata.update(
+                {
+                    "filename": attachment.filename,
+                    "media_type": attachment.media_type,
+                    "path": attachment.relative_path,
+                    "bytes": attachment.size_bytes,
+                    "sha256": attachment.sha256,
+                    "source": attachment.source,
+                }
+            )
+            parts.append(
+                MessagePart(
+                    id=new_part_id(),
+                    message_id=message_id,
+                    kind=attachment.kind,
+                    content=(
+                        f"[image: {attachment.filename}]"
+                        if attachment.kind == "image"
+                        else attachment.inline_text or f"[file: {attachment.filename}]"
+                    ),
+                    metadata=self._part_metadata(attachment_metadata),
+                )
+            )
         self._append_message_event(
             "user_message",
             message_id=message_id,
-            parts=[part],
+            parts=parts,
             metadata=metadata,
         )
         return message_id
@@ -254,6 +283,21 @@ class SessionEventWriter:
     def append_task_boundary_observation(self, observation: TaskBoundaryObservation) -> None:
         event = TaskBoundaryService().to_event(session_id=self.session_id, observation=observation)
         self.store.append_event(event)
+
+    def append_todo_updated(self, todos: list[dict[str, Any]], *, task_hash: str | None = None) -> None:
+        """追加当前 session 的完整 Todo 列表快照。"""
+
+        payload: dict[str, Any] = {"todos": [dict(item) for item in todos]}
+        if task_hash is not None:
+            payload["task_hash"] = task_hash
+        self.store.append_event(
+            SessionEvent(
+                id=new_event_id(),
+                session_id=self.session_id,
+                type="todo_updated",
+                payload=payload,
+            )
+        )
 
     def _append_message_event(
         self,

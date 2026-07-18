@@ -412,11 +412,16 @@ def _pending_kind(pending: object) -> str:
 
 def _permission_choice_for_text(text: str, pending: object) -> str | None:
     normalized = text.strip().lower().replace(" ", "_")
+    raw = text.strip()
+    if raw.lower().startswith(("reject:", "reject_with_feedback:")):
+        return f"reject_with_feedback: {raw.split(':', 1)[1].strip()}"
     aliases = {
         "1": "deny",
         "n": "deny",
         "no": "deny",
         "deny": "deny",
+        "reject": "reject_with_feedback",
+        "reject_with_feedback": "reject_with_feedback",
         "2": "allow_once",
         "y": "allow_once",
         "yes": "allow_once",

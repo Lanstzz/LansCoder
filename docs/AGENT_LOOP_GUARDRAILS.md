@@ -16,8 +16,8 @@ tool-heavy task cannot continue indefinitely. They are code-enforced checks in
 ## The Turn State Machine
 
 ```text
-user input
-  -> append user fact -> build request -> provider call
+user text + optional attachments
+  -> stage attachments, append user fact -> build request -> provider call
   -> plain assistant text ----------------------------> complete
   -> assistant tool calls -> tool registry execution
        -> ALLOW/result -> append tool result -> provider call
@@ -54,10 +54,16 @@ budgets.
 
 ## What Happens Before a Normal Tool Round
 
-At the start of a tool-capable turn, the loop can force the session-injected
-`task_boundary` tool. The program supplies the stable task hash; the model may
-only report a decision based on a real user-message id. Once a boundary is
-confirmed, context compaction may run under a task-switch trigger.
+The first user message initializes the active task program-side. For every
+later message, `TaskBoundaryClassifier` makes a hidden provider request before
+the visible agent request. It asks for exact JSON (`same`, `new`, or
+`uncertain`) anchored to the current real message ID, retries an invalid or
+failed classification up to three times, then records `uncertain` if none is
+valid. Program code feeds the result through the session-injected
+`task_boundary` tool and records the resulting state transition. The hidden
+request is not forwarded to the TUI, but it consumes provider calls and turn
+time; benchmark expectations must account for it. A confirmed boundary may
+trigger context compaction.
 
 The loop also constructs a stable system prefix and projects conversation
 history through `ContextBuilder`. The resulting `ChatRequest` contains two
@@ -94,8 +100,10 @@ parallel. Mutation ordering is not casually parallelized.
 
 The loop also observes todo behavior. After enough non-todo tool results it can
 ask for a plan; after several results since the last update it can ask for todo
-progress. These are model-visible reminders, not a second planner and not a
-permission mechanism.
+progress. `todo` submits the complete current list, and every successful update
+also appends a session-scoped `todo_updated` event. `SessionView.todos`, resume,
+fork, and the TUI consume that durable snapshot. The reminders are not a second
+planner or a permission mechanism.
 
 ## Recovery Paths
 
@@ -104,6 +112,8 @@ permission mechanism.
 - A malformed/unknown tool call becomes a structured `ToolResult` error.
 - Permission `ASK` creates `PendingPermissionExecution`; interaction resumes
   the same original call.
+- A prewrite review rechecks its file snapshots before it dispatches; if they
+  changed, the operation is blocked and the model must propose a fresh diff.
 - A cancelled task reports cancellation through the runner/UI boundary.
 
 ## Minimal Evidence
@@ -111,7 +121,8 @@ permission mechanism.
 ```sh
 .venv/bin/python -m pytest \
   tests/test_agent_loop_limits.py tests/test_agent_context_loop.py \
-  tests/test_agent_tool_flow.py tests/test_agent_verification.py -q
+  tests/test_agent_tool_flow.py tests/test_agent_verification.py \
+  tests/test_multimodal_input.py tests/test_prewrite_review.py -q
 ```
 
 Then locate the exact assertion you are changing:
@@ -131,6 +142,11 @@ that early-finalization behavior.
 
 **“Bypass removes the wrapper.”** No. It changes policy decisions. The session
 registry, event logging, normalized result handling, and loop limits remain.
+
+**“The model invokes `task_boundary` before every visible response.”** No. The
+loop initializes the first task itself; later turns use an invisible classifier
+request, then program code records the decision through the existing control
+tool.
 
 ## Safe Changes
 

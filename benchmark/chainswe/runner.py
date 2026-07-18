@@ -227,6 +227,7 @@ class FirstCoderChainAgent:
             tools=tools,
         )
         self.app.current_session.set_permission_mode(PermissionMode.BYPASS)
+        self.app.current_session.session.require_prewrite_review = False
         self._rebuild_chain_session_tool_registry()
         limits = AgentLoopLimits.swe_lite()
         if max_tool_rounds is not None:

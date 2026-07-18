@@ -90,6 +90,15 @@ class AgentMessage:
         }
 
 
+def latest_user_message_id(messages: list[AgentMessage]) -> str | None:
+    """Return the latest user message ID, if the history contains one."""
+
+    for message in reversed(messages):
+        if message.role == "user":
+            return message.id
+    return None
+
+
 @dataclass(slots=True)
 class SessionView:
     """由事件日志重放得到的当前会话视图。"""
@@ -98,3 +107,6 @@ class SessionView:
     messages: list[AgentMessage] = field(default_factory=list)
     checkpoints: list[Checkpoint] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    todos: list[dict[str, Any]] = field(default_factory=list)
+    todo_initialized: bool = False
+    todo_task_hash: str | None = None

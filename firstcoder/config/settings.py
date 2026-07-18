@@ -60,10 +60,8 @@ class AppConfig:
             env_value = self.get_env(env)
             if env_value:
                 return env_value
-        value = self._provider_config_value(name, provider_name=provider_name, prefer_project=True)
-        if value is not None:
-            return value
-        return default
+        value = self._provider_config_raw_value(name, provider_name=provider_name)
+        return str(value) if value is not None else default
 
     def get_provider_bool(
         self,
@@ -79,7 +77,7 @@ class AppConfig:
             env_value = self.get_env(env)
             if env_value:
                 return _bool_value_from_raw(env_value)
-        value = self._provider_config_raw_value(name, provider_name=provider_name, prefer_project=True)
+        value = self._provider_config_raw_value(name, provider_name=provider_name)
         if value is not None:
             return _bool_value_from_raw(value)
         return default
@@ -113,29 +111,13 @@ class AppConfig:
 
         return [path for path in (self.global_config_path, self.project_config_path) if path is not None]
 
-    def _provider_config_value(
-        self,
-        name: str,
-        *,
-        provider_name: str | None,
-        prefer_project: bool,
-    ) -> str | None:
-        configs = (self.project_config, self.global_config) if prefer_project else (self.global_config, self.project_config)
-        for config in configs:
-            value = _provider_value(config, name, provider_name=provider_name or self.provider_name)
-            if value is not None:
-                return value
-        return None
-
     def _provider_config_raw_value(
         self,
         name: str,
         *,
         provider_name: str | None,
-        prefer_project: bool,
     ) -> Any | None:
-        configs = (self.project_config, self.global_config) if prefer_project else (self.global_config, self.project_config)
-        for config in configs:
+        for config in (self.project_config, self.global_config):
             value = _provider_raw_value(config, name, provider_name=provider_name or self.provider_name)
             if value is not None:
                 return value
@@ -236,20 +218,13 @@ def _read_toml_file(path: Path) -> dict[str, Any] | None:
 
 
 def _provider_name_from_config(config: dict[str, Any] | None) -> str | None:
-    provider_type = _provider_value(config, "type", provider_name=None)
-    if provider_type:
-        return provider_type
+    provider_type = _provider_raw_value(config, "type", provider_name=None)
+    if provider_type is not None:
+        return str(provider_type)
     model = _string_value(config, "model")
     if model and "/" in model:
         return model.split("/", 1)[0]
     return None
-
-
-def _provider_value(config: dict[str, Any] | None, name: str, *, provider_name: str | None) -> str | None:
-    value = _provider_raw_value(config, name, provider_name=provider_name)
-    if value is None:
-        return None
-    return str(value)
 
 
 def _provider_raw_value(config: dict[str, Any] | None, name: str, *, provider_name: str | None) -> Any | None:

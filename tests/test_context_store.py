@@ -92,6 +92,42 @@ def test_jsonl_store_lists_events_in_append_order(tmp_path: Path) -> None:
     ]
 
 
+def test_store_replays_legacy_todo_tool_result_as_session_state(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    todos = [{"content": "旧任务", "status": "in_progress", "priority": "medium"}]
+    store.append_event(
+        SessionEvent(
+            id="evt_tool",
+            session_id="sess_test",
+            type="tool_result",
+            payload={
+                "message_id": "msg_tool",
+                "parts": [
+                    MessagePart(
+                        id="part_tool",
+                        message_id="msg_tool",
+                        kind="tool_result",
+                        content="任务清单",
+                        metadata={
+                            "tool_name": "todo",
+                            "tool_call_id": "call_todo",
+                            "ok": True,
+                            "task_hash": "task_old",
+                            "data": {"todos": todos},
+                        },
+                    ).to_dict()
+                ],
+            },
+        )
+    )
+
+    view = store.rebuild_session_view("sess_test")
+
+    assert view.todos == todos
+    assert view.todo_initialized is True
+    assert view.todo_task_hash == "task_old"
+
+
 def test_programmatic_compaction_rebuilds_replaced_parts(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     session_id = "sess_test"
