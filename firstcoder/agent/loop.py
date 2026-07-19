@@ -635,10 +635,7 @@ class AgentLoop:
             tool_rounds = 0
             response, pending_input = self._continue_tool_loop_from_response(response, complete_once, tool_rounds)
             if pending_input is not None:
-                return AgentTurnResult(
-                    status=AgentTurnStatus.WAITING_FOR_USER_INPUT,
-                    pending_input=pending_input,
-                )
+                return self._pending_turn_result(pending_input)
         except _AgentLoopLimitReached as exc:
             response = self._limit_response(exc.reason)
         except AgentCancelledError:
@@ -648,21 +645,14 @@ class AgentLoop:
         if self._is_cancelled():
             self._append_interrupted_tool_results()
             response = self._interrupted_response()
-            self.session.append_assistant_response(response)
-            self._auto_compact()
-            return AgentTurnResult(status=AgentTurnStatus.COMPLETED, response=response)
+            return self._complete_turn(response)
         response, pending_input = self._run_todo_self_check_if_needed(response, complete_once)
         if pending_input is not None:
-            return AgentTurnResult(
-                status=AgentTurnStatus.WAITING_FOR_USER_INPUT,
-                pending_input=pending_input,
-            )
+            return self._pending_turn_result(pending_input)
 
         # 没有工具调用时，这条 response 就是最终 assistant 回复。命中轮次上限时也会写入
         # 一条纯文本说明，避免保存未执行的 tool_call。
-        self.session.append_assistant_response(response)
-        self._auto_compact()
-        return AgentTurnResult(status=AgentTurnStatus.COMPLETED, response=response)
+        return self._complete_turn(response)
 
     async def _run_tool_loop_interactive_async(self, complete_once, *, initial_tool_choice="auto") -> AgentTurnResult:
         """streaming 版本的工具循环，语义与同步版本一致。"""
@@ -672,10 +662,7 @@ class AgentLoop:
             tool_rounds = 0
             response, pending_input = await self._continue_tool_loop_from_response_async(response, complete_once, tool_rounds)
             if pending_input is not None:
-                return AgentTurnResult(
-                    status=AgentTurnStatus.WAITING_FOR_USER_INPUT,
-                    pending_input=pending_input,
-                )
+                return self._pending_turn_result(pending_input)
         except _AgentLoopLimitReached as exc:
             response = self._limit_response(exc.reason)
         except AgentCancelledError:
@@ -685,16 +672,18 @@ class AgentLoop:
         if self._is_cancelled():
             self._append_interrupted_tool_results()
             response = self._interrupted_response()
-            self.session.append_assistant_response(response)
-            self._auto_compact()
-            return AgentTurnResult(status=AgentTurnStatus.COMPLETED, response=response)
+            return self._complete_turn(response)
         response, pending_input = await self._run_todo_self_check_if_needed_async(response, complete_once)
         if pending_input is not None:
-            return AgentTurnResult(
-                status=AgentTurnStatus.WAITING_FOR_USER_INPUT,
-                pending_input=pending_input,
-            )
+            return self._pending_turn_result(pending_input)
 
+        return self._complete_turn(response)
+
+    @staticmethod
+    def _pending_turn_result(pending_input: UserInputRequest) -> AgentTurnResult:
+        return AgentTurnResult(status=AgentTurnStatus.WAITING_FOR_USER_INPUT, pending_input=pending_input)
+
+    def _complete_turn(self, response: ChatResponse) -> AgentTurnResult:
         self.session.append_assistant_response(response)
         self._auto_compact()
         return AgentTurnResult(status=AgentTurnStatus.COMPLETED, response=response)
@@ -740,10 +729,8 @@ class AgentLoop:
         response: ChatResponse,
         complete_once,
     ) -> tuple[ChatResponse, UserInputRequest | None]:
-        prompt = self.todo_policy.self_check_prompt()
-        if not prompt:
+        if not self._prepare_todo_self_check():
             return response, None
-        self.session.append_user_message(prompt)
         response = self._drop_unsupported_tool_calls(complete_once())
         return self._continue_tool_loop_from_response(response, complete_once, 0)
 
@@ -752,12 +739,17 @@ class AgentLoop:
         response: ChatResponse,
         complete_once,
     ) -> tuple[ChatResponse, UserInputRequest | None]:
-        prompt = self.todo_policy.self_check_prompt()
-        if not prompt:
+        if not self._prepare_todo_self_check():
             return response, None
-        self.session.append_user_message(prompt)
         response = self._drop_unsupported_tool_calls(await complete_once())
         return await self._continue_tool_loop_from_response_async(response, complete_once, 0)
+
+    def _prepare_todo_self_check(self) -> bool:
+        prompt = self.todo_policy.self_check_prompt()
+        if not prompt:
+            return False
+        self.session.append_user_message(prompt)
+        return True
 
     async def _continue_tool_loop_from_response_async(
         self,

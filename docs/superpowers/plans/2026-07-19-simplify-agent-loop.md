@@ -215,3 +215,16 @@ Record the measured total and net reduction in this plan. Do not count test chan
 git add firstcoder/agent/loop.py tests/test_agent_context_loop.py docs/superpowers/plans/2026-07-19-simplify-agent-loop.md
 git commit -m "Simplify agent loop state transitions"
 ```
+
+## Execution record
+
+- Added sync/streaming terminal-state characterization: red run `2 failed`, corrected run `2 passed`.
+- Existing Agent Loop/E2E baseline before refactor: `99 passed`.
+- Kept shared `_pending_turn_result`, `_complete_turn`, and `_prepare_todo_self_check` helpers.
+- Rejected `_advance_tool_loop`: the helper plus four-value branching reduced `loop.py` by only two lines and made each adapter harder to follow. It was reverted before the final run.
+- Focused Agent Loop suite: `86 passed`.
+- Edge selection: `26 passed, 60 deselected`.
+- Full suite: `1185 passed, 30 warnings`.
+- `compileall` and `git diff --check`: exit 0.
+- `firstcoder/agent/loop.py`: 23 additions, 31 deletions, net -8 production lines.
+- Production total after this batch: 25,585 lines; cumulative reduction from 25,616 baseline: 31 lines.

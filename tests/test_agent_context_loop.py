@@ -638,6 +638,36 @@ def test_agent_loop_executes_tool_call_and_appends_tool_result(tmp_path) -> None
     view = store.rebuild_session_view("sess_test")
     assert [message.role for message in view.messages] == ["user", "assistant", "tool", "assistant"]
     assert view.messages[1].parts[0].kind == "tool_call"
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_sync_and_streaming_tool_loops_persist_equivalent_terminal_state(tmp_path, streaming) -> None:
+    store = JsonlSessionStore(tmp_path / str(streaming))
+    session = AgentSession.create(store=store, session_id="sess_parity", agents_md="")
+    responses = [
+        ChatResponse(
+            provider="fake",
+            model="fake-model",
+            content="",
+            tool_calls=[ToolCall(id="call_1", name="echo", arguments={"text": "abc"})],
+            finish_reason="tool_calls",
+        ),
+        ChatResponse(provider="fake", model="fake-model", content="完成"),
+    ]
+    provider = StreamingProvider(responses) if streaming else FakeProvider(responses)
+    loop = AgentLoop(session=session, provider=provider, tools=[_echo_tool()])
+
+    response = (
+        loop.run_user_turn_streaming_sync("调用工具")
+        if streaming
+        else loop.run_user_turn("调用工具")
+    )
+
+    view = session.rebuild_view()
+    assert response.content == "完成"
+    assert [message.role for message in view.messages] == ["user", "assistant", "tool", "assistant"]
+    assert view.messages[1].parts[0].metadata["tool_call_id"] == "call_1"
+    assert session.pending_permission_execution is None
     assert view.messages[2].parts[0].metadata["tool_call_id"] == "call_1"
     assert view.messages[0].parts[0].metadata["created_turn"] == 1
     assert view.messages[1].parts[0].metadata["created_turn"] == 1
