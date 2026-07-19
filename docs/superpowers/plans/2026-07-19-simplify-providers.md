@@ -172,3 +172,14 @@ git commit -m "Share provider streaming primitives"
 ```
 
 Do not keep a shared helper if imports plus policy callbacks yield no net production-code reduction.
+
+## Execution record
+
+- Added cross-provider usage characterization: red run `2 failed`, corrected run `2 passed`.
+- Shared usage selection: `3 passed, 35 deselected`.
+- Shared streaming tool-call selection: `9 passed, 29 deselected`.
+- Provider-focused suite: `46 passed`.
+- Full suite: `1187 passed, 30 warnings`.
+- `compileall` and `git diff --check`: exit 0.
+- Shared `token_usage`, `merge_usage`, `StreamToolCallAccumulator`, and `complete_stream_tool_calls` in `providers/streaming.py`; vendor event traversal and finish-reason mapping remain separate.
+- Production total after this batch: 25,551 lines; this batch net reduction: 34 lines; cumulative reduction from 25,616 baseline: 65 lines.

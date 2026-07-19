@@ -15,6 +15,7 @@ from firstcoder.providers.types import (
     ChatMessage,
     ChatRequest,
     ProviderCapabilities,
+    TokenUsage,
     ToolCall,
     ToolChoiceFunction,
     ToolDefinition,
@@ -723,6 +724,29 @@ class _NoStreamProvider(ChatProvider):
 
     def complete(self, request: ChatRequest):
         raise AssertionError("not used")
+
+
+@pytest.mark.parametrize("provider_kind", ["openai", "anthropic"])
+def test_provider_usage_normalizes_to_shared_token_usage(provider_kind) -> None:
+    if provider_kind == "openai":
+        provider = OpenAICompatibleProvider(
+            name="test-openai",
+            model="test-model",
+            api_key="test-key",
+            client=_FakeOpenAIClient(),
+        )
+        expected = TokenUsage(input_tokens=11, output_tokens=7, total_tokens=18)
+    else:
+        provider = AnthropicProvider(
+            model="claude-test",
+            api_key="test-key",
+            client=_FakeAnthropicLengthClient(),
+        )
+        expected = TokenUsage(input_tokens=5, output_tokens=9, total_tokens=14)
+
+    response = provider.complete(ChatRequest(messages=[ChatMessage(role="user", content="hi")]))
+
+    assert response.usage == expected
 
 
 def test_openai_compatible_provider_parses_tool_calls():
