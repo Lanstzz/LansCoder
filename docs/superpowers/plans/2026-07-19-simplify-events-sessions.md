@@ -129,3 +129,15 @@ git diff --numstat -- firstcoder/context/writer.py firstcoder/skills/session.py 
 git add firstcoder/context/writer.py firstcoder/skills/session.py firstcoder/session tests/test_context_writer.py tests/test_agent_skill_flow.py tests/test_session_resume_service.py tests/test_app_session_commands.py docs/superpowers/plans/2026-07-19-simplify-events-sessions.md
 git commit -m "Simplify session event assembly"
 ```
+
+## Execution record
+
+- Added event-envelope characterization: red run `1 failed`, corrected run `1 passed`.
+- Event/replay/skill focused suite: `35 passed`.
+- Session service focused suite: `40 passed`.
+- Full suite: `1188 passed, 30 warnings`.
+- `compileall` and `git diff --check`: exit 0.
+- Centralized event id/session/type construction in `SessionEventWriter.append_event`; skill audit events now use the same envelope owner.
+- Shared corrupt/empty record validation while preserving missing-session and fork empty-log behavior.
+- Did not abstract repeated `SessionBootstrap(...)` arguments: a service protocol/helper would add coupling and little or no net reduction.
+- Production total after this batch: 25,510 lines; this batch net reduction: 41 lines; cumulative reduction from 25,616 baseline: 106 lines.
