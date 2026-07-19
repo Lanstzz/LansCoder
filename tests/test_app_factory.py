@@ -3,6 +3,7 @@ from pathlib import Path
 
 from firstcoder.agent.loop_limits import AgentLoopLimits
 from firstcoder.app.factory import create_firstcoder_app
+from firstcoder.app.model_state import ModelStateStore
 from firstcoder.app.router import CompositeCommandHandler
 from firstcoder.app.runtime import AgentChatRunner
 from firstcoder.config.settings import AppConfig
@@ -249,6 +250,124 @@ def test_model_command_switches_runtime_provider_and_compact_summarizer(tmp_path
     assert app.chat_runner.provider.model == "new-model"
     assert app.chat_runner.use_streaming is True
     assert app.chat_runner.context_manager.l4_service.summarizer.provider is app.chat_runner.provider
+
+
+def _catalog_config(*, default_model: str | None = "yuren/main") -> AppConfig:
+    project = {
+        "providers": {
+            "yuren": {
+                "type": "openai-compatible",
+                "base_url": "https://example.test/v1",
+                "api_key_env": "YUREN_KEY",
+            },
+            "mimo": {
+                "type": "openai-compatible",
+                "base_url": "https://mimo.example/v1",
+                "api_key_env": "MIMO_KEY",
+            },
+        },
+        "models": {
+            "yuren/main": {"request": {"temperature": 0.2}},
+            "mimo/pro": {},
+        },
+    }
+    if default_model is not None:
+        project["default_model"] = default_model
+    return AppConfig(
+        provider_name="openai-compatible",
+        env={"YUREN_KEY": "test-key", "MIMO_KEY": "mimo-key"},
+        project_config=project,
+    )
+
+
+def test_factory_catalog_startup_honors_model_spec_over_default(tmp_path: Path) -> None:
+    app = create_firstcoder_app(
+        project_root=tmp_path,
+        data_root=tmp_path / ".firstcoder",
+        app_config=_catalog_config(),
+        model_spec="mimo/pro",
+        session_id="sess_test",
+        tools=[],
+    )
+
+    assert app.chat_runner.provider.name == "mimo"
+    assert app.chat_runner.provider.model == "pro"
+
+
+def test_factory_catalog_startup_honors_default_over_saved_state(tmp_path: Path) -> None:
+    data_root = tmp_path / ".firstcoder"
+    ModelStateStore(data_root / "model_state.json").record_selection("mimo/pro")
+    app = create_firstcoder_app(
+        project_root=tmp_path,
+        data_root=data_root,
+        app_config=_catalog_config(default_model="yuren/main"),
+        session_id="sess_test",
+        tools=[],
+    )
+
+    assert app.chat_runner.provider.name == "yuren"
+    assert app.chat_runner.provider.model == "main"
+
+
+def test_factory_catalog_startup_falls_back_from_stale_saved_state(tmp_path: Path) -> None:
+    data_root = tmp_path / ".firstcoder"
+    ModelStateStore(data_root / "model_state.json").record_selection("gone/model")
+    config = _catalog_config(default_model=None)
+    app = create_firstcoder_app(
+        project_root=tmp_path,
+        data_root=data_root,
+        app_config=config,
+        session_id="sess_test",
+        tools=[],
+    )
+
+    assert app.chat_runner.provider.name == "mimo"
+    assert app.chat_runner.provider.model == "pro"
+
+
+def test_factory_legacy_custom_provider_keeps_base_url_environment_fallback(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("FIRSTCODER_API_KEY", "legacy-key")
+    monkeypatch.setenv("FIRSTCODER_BASE_URL", "https://legacy.example/v1")
+    monkeypatch.delenv("FIRSTCODER_PROVIDER_NAME", raising=False)
+    (tmp_path / "firstcoder.toml").write_text(
+        '\n'.join(
+            [
+                'model = "legacy/model"',
+                '',
+                '[provider]',
+                'type = "openai-compatible"',
+                'name = "legacy"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    app = create_firstcoder_app(
+        project_root=tmp_path,
+        provider=None,
+        session_id="sess_test",
+        tools=[],
+    )
+
+    assert app.chat_runner.provider.name == "legacy"
+    assert app.chat_runner.provider.model == "model"
+    assert app.chat_runner.provider.base_url == "https://legacy.example/v1"
+
+
+def test_catalog_model_switch_records_selection_and_request_options(tmp_path: Path) -> None:
+    app = create_firstcoder_app(
+        project_root=tmp_path,
+        data_root=tmp_path / ".firstcoder",
+        app_config=_catalog_config(),
+        session_id="sess_test",
+        tools=[],
+    )
+
+    result = app.command_handler.handle("/model mimo/pro")
+
+    assert result.output == "Model switched: mimo/pro"
+    assert app.chat_runner.request_options.temperature is None
+    assert ModelStateStore(tmp_path / ".firstcoder" / "model_state.json").load().last_selected == "mimo/pro"
 
 
 def test_app_factory_configures_default_loop_limits(tmp_path: Path) -> None:
