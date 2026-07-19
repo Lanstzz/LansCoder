@@ -94,6 +94,7 @@ def test_task_boundary_classifier_keeps_its_fixed_request_options(tmp_path) -> N
         context_builder=ContextBuilder(),
         compact_if_needed=lambda **_: None,
         check_cancelled=lambda: None,
+        reserve_provider_call=lambda: None,
         check_turn_timeout=lambda: None,
         tag_task_boundary_messages=lambda *_: None,
     )

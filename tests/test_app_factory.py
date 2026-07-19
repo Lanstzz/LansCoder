@@ -496,7 +496,7 @@ def test_create_firstcoder_app_can_use_default_builtin_tools(tmp_path: Path) -> 
     assert "web_search" in names
 
 
-def test_create_firstcoder_app_exposes_task_boundary_in_real_prompt(tmp_path: Path) -> None:
+def test_create_firstcoder_app_hides_task_boundary_from_main_model(tmp_path: Path) -> None:
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
     app = create_firstcoder_app(
         project_root=tmp_path,
@@ -508,13 +508,12 @@ def test_create_firstcoder_app_exposes_task_boundary_in_real_prompt(tmp_path: Pa
     app.chat_runner.run_user_turn("你好")
 
     tool_names = [tool.name for tool in provider.requests[0].tools]
-    assert "task_boundary" in tool_names
+    assert "task_boundary" in app.chat_runner.current_session.session.tool_registry.names()
+    assert "task_boundary" not in tool_names
     assert "fetch" in tool_names
     assert "web_search" in tool_names
-    descriptions = {tool.name: tool.description for tool in provider.requests[0].tools}
-    assert descriptions["task_boundary"].startswith("Report whether the current user message starts a new task")
-    assert "Do not provide task hashes" in descriptions["task_boundary"]
-    assert "Do not call task_boundary unless the runtime explicitly asks for it" in provider.requests[0].messages[0].content
+    assert "Task boundaries are internal runtime state, not an agent tool" in provider.requests[0].messages[0].content
+    assert "task_boundary" not in provider.requests[0].messages[0].content
 
 
 def test_create_firstcoder_app_wires_l4_service_for_default_context_manager(tmp_path: Path) -> None:

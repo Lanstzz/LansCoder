@@ -98,6 +98,7 @@ class AgentChatRunner:
     _guidance_lock: threading.Lock = field(default_factory=threading.Lock)
     _cancellation_lock: threading.Lock = field(default_factory=threading.Lock)
     _active_cancellation_token: CancellationToken | None = None
+    _pending_permission_loop: AgentLoop | None = None
 
     def set_provider(self, provider: ChatProvider, *, use_streaming: bool) -> None:
         self.set_model(provider, request_options=MainRequestOptions(), use_streaming=use_streaming)
@@ -156,6 +157,26 @@ class AgentChatRunner:
             self.last_stream_events = []
         return before_count, token, self._create_loop(token, streaming=streaming)
 
+    def _resume_turn(self, *, streaming: bool = False) -> tuple[int, CancellationToken, AgentLoop]:
+        before_count = len(self.current_session.rebuild_view().messages)
+        self.last_pending_input = None
+        token = self._begin_cancellable_turn()
+        loop = self._pending_permission_loop
+        if loop is None or loop.session is not self.current_session.session:
+            loop = self._create_loop(token, streaming=streaming)
+        else:
+            loop.replace_cancellation_token(token)
+            if streaming:
+                self.last_display_lines = []
+                self.last_stream_events = []
+                loop.clear_stream_events()
+        return before_count, token, loop
+
+    def _remember_pending_permission_loop(self, loop: AgentLoop) -> None:
+        self._pending_permission_loop = (
+            loop if self.current_session.session.pending_permission_execution is not None else None
+        )
+
     def _refresh_turn_output(self, before_count: int, loop: AgentLoop) -> None:
         self.last_stream_events = list(loop.last_stream_events)
         messages = self.current_session.rebuild_view().messages[before_count:]
@@ -173,6 +194,7 @@ class AgentChatRunner:
         finally:
             self._finish_cancellable_turn(cancellation_token)
         self.last_pending_input = result.pending_input
+        self._remember_pending_permission_loop(loop)
         self._refresh_turn_output(before_count, loop)
         if result.response is not None:
             return result.response
@@ -185,12 +207,13 @@ class AgentChatRunner:
         tool_result，所以 UI 通过这个入口把用户选择交回 agent loop。
         """
 
-        before_count, cancellation_token, loop = self._start_turn()
+        before_count, cancellation_token, loop = self._resume_turn()
         try:
             result = loop.resume_with_user_input(request_id, answer)
         finally:
             self._finish_cancellable_turn(cancellation_token)
         self.last_pending_input = result.pending_input
+        self._remember_pending_permission_loop(loop)
         self._refresh_turn_output(before_count, loop)
         if result.response is not None:
             if result.response.content and not self.last_display_lines:
@@ -221,6 +244,7 @@ class AgentChatRunner:
                 self._finish_cancellable_turn(cancellation_token)
             raw_pending = response.raw.get("pending_input") if isinstance(response.raw, dict) else None
             self.last_pending_input = raw_pending if isinstance(raw_pending, UserInputRequest) else None
+            self._remember_pending_permission_loop(loop)
             self._refresh_turn_output(before_count, loop)
             if self.last_pending_input is not None and response.content:
                 self.last_display_lines.append(response.content)
@@ -230,7 +254,7 @@ class AgentChatRunner:
 
     async def aresume_with_user_input(self, request_id: str, answer: str) -> ChatResponse:
         if self.use_streaming:
-            before_count, cancellation_token, loop = self._start_turn(streaming=True)
+            before_count, cancellation_token, loop = self._resume_turn(streaming=True)
             try:
                 result = await anyio.to_thread.run_sync(
                     _run_coroutine_in_thread,
@@ -239,6 +263,7 @@ class AgentChatRunner:
             finally:
                 self._finish_cancellable_turn(cancellation_token)
             self.last_pending_input = result.pending_input
+            self._remember_pending_permission_loop(loop)
             self._refresh_turn_output(before_count, loop)
             if result.response is not None:
                 return result.response
