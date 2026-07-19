@@ -7,7 +7,12 @@ import pytest
 from firstcoder.config import AppConfig, load_config
 from firstcoder.config.models import ModelCatalogError
 from firstcoder.config.settings import default_global_config_path, render_default_config
-from firstcoder.providers.factory import ProviderConfigError, create_provider_from_config
+from firstcoder.providers.anthropic_provider import AnthropicProvider
+from firstcoder.providers.factory import (
+    ProviderConfigError,
+    create_provider_for_model,
+    create_provider_from_config,
+)
 from firstcoder.providers.openai_compatible import OpenAICompatibleProvider
 from firstcoder.providers.presets import PROVIDER_PRESETS
 
@@ -316,6 +321,99 @@ def test_model_catalog_adapts_legacy_single_provider_config() -> None:
 
     assert profile.provider.type == "openai-compatible"
     assert profile.provider.base_url == "https://example.test/v1"
+
+
+def test_create_provider_for_model_uses_profile_provider_and_model_options() -> None:
+    config = AppConfig(
+        provider_name="openai-compatible",
+        env={"YUREN_API_KEY": "test-key"},
+        project_config={
+            "providers": {
+                "yuren": {
+                    "type": "openai-compatible",
+                    "base_url": "https://example.test/v1",
+                    "api_key_env": "YUREN_API_KEY",
+                    "parallel_tool_calls": True,
+                    "streaming": False,
+                }
+            },
+            "models": {"yuren/gpt-test": {}},
+        },
+    )
+
+    provider = create_provider_for_model(config, config.model_catalog().require("yuren/gpt-test"))
+
+    assert isinstance(provider, OpenAICompatibleProvider)
+    assert provider.name == "yuren"
+    assert provider.model == "gpt-test"
+    assert provider.base_url == "https://example.test/v1"
+    assert provider.capabilities.supports_parallel_tool_calls is True
+    assert provider.capabilities.supports_streaming is False
+
+
+def test_create_provider_for_model_supports_anthropic_profile() -> None:
+    config = AppConfig(
+        provider_name="anthropic",
+        env={"ANTHROPIC_API_KEY": "test-key"},
+        project_config={
+            "providers": {"claude": {"type": "anthropic", "api_key_env": "ANTHROPIC_API_KEY"}},
+            "models": {"claude/claude-test": {}},
+        },
+    )
+
+    provider = create_provider_for_model(config, config.model_catalog().require("claude/claude-test"))
+
+    assert isinstance(provider, AnthropicProvider)
+    assert provider.model == "claude-test"
+
+
+def test_create_provider_for_model_reports_profile_api_key_env() -> None:
+    config = AppConfig(
+        provider_name="openai-compatible",
+        env={},
+        project_config={
+            "providers": {
+                "yuren": {
+                    "type": "openai-compatible",
+                    "api_key_env": "YUREN_API_KEY",
+                }
+            },
+            "models": {"yuren/gpt-test": {}},
+        },
+    )
+
+    with pytest.raises(ProviderConfigError, match="YUREN_API_KEY"):
+        create_provider_for_model(config, config.model_catalog().require("yuren/gpt-test"))
+
+
+def test_create_provider_for_model_supports_preset_and_profile_model() -> None:
+    config = AppConfig(
+        provider_name="openai",
+        env={"OPENAI_API_KEY": "test-key"},
+        project_config={
+            "providers": {"openai": {"type": "openai"}},
+            "models": {"openai/custom-gpt": {}},
+        },
+    )
+
+    provider = create_provider_for_model(config, config.model_catalog().require("openai/custom-gpt"))
+
+    assert isinstance(provider, OpenAICompatibleProvider)
+    assert provider.model == "custom-gpt"
+
+
+def test_create_provider_for_model_reports_missing_preset_api_key() -> None:
+    config = AppConfig(
+        provider_name="openai",
+        env={},
+        project_config={
+            "providers": {"openai": {"type": "openai"}},
+            "models": {"openai/custom-gpt": {}},
+        },
+    )
+
+    with pytest.raises(ProviderConfigError, match="OPENAI_API_KEY"):
+        create_provider_for_model(config, config.model_catalog().require("openai/custom-gpt"))
 
 
 def test_model_catalog_validates_request_options_and_reserved_extra_body() -> None:
