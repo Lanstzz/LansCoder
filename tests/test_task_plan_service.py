@@ -47,6 +47,7 @@ def test_create_returns_projection_and_writes_exactly_one_replayable_event(
 
     assert isinstance(mutation, TaskPlanMutation)
     assert mutation.changed is True
+    assert mutation.changes == tuple(task.to_dict() for task in mutation.plan.tasks)
     assert mutation.plan.revision == 1
     assert mutation.projection == {
         "mode": "linear",

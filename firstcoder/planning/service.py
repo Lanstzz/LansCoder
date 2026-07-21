@@ -35,6 +35,7 @@ class TaskPlanMutation:
     plan: TaskPlan
     projection: dict[str, object]
     changed: bool
+    changes: tuple[dict[str, object], ...] = ()
 
 
 class TaskPlanService:
@@ -159,4 +160,5 @@ class TaskPlanService:
             plan=result.plan,
             projection=project_plan(result.plan),
             changed=result.changed,
+            changes=result.changes,
         )
