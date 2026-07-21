@@ -373,6 +373,14 @@ def test_resume_service_rejects_corrupt_session(tmp_path: Path) -> None:
         service.resume("sess_corrupt")
 
 
+def test_resume_service_reports_invalid_utf8_session_as_corrupt(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    (tmp_path / "sessions" / "sess_invalid_utf8.jsonl").write_bytes(b"\xff\xfe\n")
+
+    with pytest.raises(SessionCorruptError):
+        ResumeService(store=store, project_root=tmp_path).resume("sess_invalid_utf8")
+
+
 def test_resume_service_rejects_empty_session(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     (tmp_path / "sessions" / "sess_empty.jsonl").write_text("", encoding="utf-8")

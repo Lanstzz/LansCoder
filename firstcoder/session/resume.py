@@ -67,24 +67,27 @@ def validate_session_schema(store: JsonlSessionStore, session_id: str) -> None:
 
     actual = None
     saw_valid_envelope = False
-    with path.open("r", encoding="utf-8") as file:
-        for line in file:
-            if not line.strip():
-                continue
-            try:
-                envelope = json.loads(line)
-            except json.JSONDecodeError:
-                if not saw_valid_envelope:
-                    return
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            for line in file:
+                if not line.strip():
+                    continue
+                try:
+                    envelope = json.loads(line)
+                except json.JSONDecodeError:
+                    if not saw_valid_envelope:
+                        return
+                    break
+                if not isinstance(envelope, dict) or envelope.get("type") != "session_created":
+                    saw_valid_envelope = isinstance(envelope, dict)
+                    continue
+                saw_valid_envelope = True
+                payload = envelope.get("payload")
+                if isinstance(payload, dict):
+                    actual = payload.get("context_event_schema_version")
                 break
-            if not isinstance(envelope, dict) or envelope.get("type") != "session_created":
-                saw_valid_envelope = isinstance(envelope, dict)
-                continue
-            saw_valid_envelope = True
-            payload = envelope.get("payload")
-            if isinstance(payload, dict):
-                actual = payload.get("context_event_schema_version")
-            break
+    except UnicodeError:
+        return
     if not saw_valid_envelope:
         return
     actual_version = str(actual) if actual is not None else "missing"
