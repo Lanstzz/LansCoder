@@ -3,6 +3,7 @@ import pytest
 from firstcoder.context.runtime_state import SessionRuntimeState
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.context.task_boundary import TaskBoundaryDecision, TaskBoundaryService
+from firstcoder.context.versions import CONTEXT_EVENT_SCHEMA_VERSION
 from firstcoder.context.writer import SessionEventWriter
 from firstcoder.planning.models import Task, TaskPlan, TaskPlanError
 from firstcoder.providers.types import ChatResponse, ToolCall
@@ -81,6 +82,17 @@ def test_writer_appends_session_created_once_when_requested(tmp_path) -> None:
     view = store.rebuild_session_view("sess_test")
     assert view.metadata["session_id"] == "sess_test"
     assert view.metadata["title"] == "demo"
+
+
+def test_writer_stamps_current_schema_version_on_session_created(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    writer = SessionEventWriter(store=store, session_id="sess_test")
+
+    writer.append_session_created(context_event_schema_version="v1")
+
+    event = store.list_events("sess_test")[0]
+    assert CONTEXT_EVENT_SCHEMA_VERSION == "v2"
+    assert event.payload["context_event_schema_version"] == "v2"
 
 
 def test_writer_appends_session_metadata_update_event(tmp_path) -> None:

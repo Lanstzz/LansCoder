@@ -52,6 +52,7 @@ class SessionEventWriter:
     def append_session_created(self, **metadata: Any) -> None:
         payload = {"session_id": self.session_id}
         payload.update(metadata_without_reserved_keys(metadata))
+        payload["context_event_schema_version"] = CONTEXT_EVENT_SCHEMA_VERSION
         self.append_event("session_created", payload)
 
     def append_session_metadata_updated(self, **metadata: Any) -> None:

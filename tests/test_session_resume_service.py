@@ -5,10 +5,17 @@ import pytest
 from firstcoder.agent.session import AgentSession
 from firstcoder.agent.loop import AgentLoop
 from firstcoder.context.store import JsonlSessionStore
+from firstcoder.context.events import SessionEvent
 from firstcoder.context.writer import SessionEventWriter
+from firstcoder.planning.models import Task, TaskPlan
 from firstcoder.providers.base import ChatProvider
 from firstcoder.providers.types import ChatRequest, ChatResponse, ToolCall
-from firstcoder.session.errors import SessionCorruptError, SessionEmptyError, SessionNotFoundError
+from firstcoder.session.errors import (
+    SessionCorruptError,
+    SessionEmptyError,
+    SessionNotFoundError,
+    SessionUnsupportedSchemaError,
+)
 from firstcoder.session.resume import ResumeService
 from firstcoder.tools.write import create_write_tool
 from firstcoder.permissions.types import PermissionMode
@@ -53,16 +60,93 @@ def test_resume_service_restores_session_todo_state(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     writer = SessionEventWriter(store=store, session_id="sess_todos")
     writer.append_session_created(title="todo demo")
-    writer.append_todo_updated(
-        [{"content": "恢复任务", "status": "in_progress", "priority": "high"}],
-        task_hash="task_current",
+    plan = TaskPlan(
+        mode="linear",
+        revision=1,
+        tasks=(Task(id="restore", content="恢复任务", status="in_progress"),),
+    )
+    writer.append_task_plan_updated(
+        previous_revision=0,
+        operation="create",
+        changes=[plan.tasks[0].to_dict()],
+        snapshot=plan,
     )
 
     result = ResumeService(store=store, project_root=tmp_path).resume("sess_todos")
 
-    assert result.session.rebuild_view().todos == [
-        {"content": "恢复任务", "status": "in_progress", "priority": "high"}
-    ]
+    assert result.session.rebuild_view().task_plan == plan
+
+
+@pytest.mark.parametrize(
+    ("schema_payload", "actual_version"),
+    [
+        (None, "missing"),
+        ({}, "missing"),
+        ({"context_event_schema_version": "v1"}, "v1"),
+        ({"context_event_schema_version": "future"}, "future"),
+    ],
+)
+def test_resume_rejects_unsupported_schema_before_bootstrap_side_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    schema_payload: dict[str, str] | None,
+    actual_version: str,
+) -> None:
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    if schema_payload is None:
+        store.append_event(
+            SessionEvent(
+                id="evt_metadata",
+                session_id="sess_legacy",
+                type="session_metadata_updated",
+                payload={"title": "Legacy"},
+            )
+        )
+    else:
+        store.append_event(
+            SessionEvent(
+                id="evt_created",
+                session_id="sess_legacy",
+                type="session_created",
+                payload={"session_id": "sess_legacy", **schema_payload},
+            )
+        )
+        store.append_event(
+            SessionEvent(
+                id="evt_created_later",
+                session_id="sess_legacy",
+                type="session_created",
+                payload={"context_event_schema_version": "v2"},
+            )
+        )
+    calls: list[str] = []
+
+    def unexpected_bootstrap(**kwargs):
+        calls.append("bootstrap")
+        raise AssertionError("bootstrap must not be constructed")
+
+    monkeypatch.setattr("firstcoder.session.resume.SessionBootstrap", unexpected_bootstrap)
+    monkeypatch.setattr(
+        AgentSession,
+        "restore_pending_permission_execution",
+        lambda self: calls.append("pending_permission_restore"),
+    )
+    service = ResumeService(
+        store=store,
+        project_root=tmp_path,
+        tools_provider=lambda: calls.append("tools_provider") or [],
+    )
+
+    with pytest.raises(SessionUnsupportedSchemaError) as caught:
+        service.resume("sess_legacy")
+
+    assert caught.value.session_id == "sess_legacy"
+    assert caught.value.actual_version == actual_version
+    assert caught.value.expected_version == "v2"
+    assert "sess_legacy" in str(caught.value)
+    assert actual_version in str(caught.value)
+    assert "v2" in str(caught.value)
+    assert calls == []
 
 
 def test_resume_service_rediscovers_current_project_skill_catalog(tmp_path: Path, monkeypatch) -> None:
@@ -234,27 +318,15 @@ def test_resume_service_has_no_pending_review_after_bypass_write(tmp_path: Path)
         tools=[create_write_tool(tmp_path)],
     )
     original.set_permission_mode(PermissionMode.BYPASS)
-    provider = FakeProvider(
-        [
-            ChatResponse(
-                provider="fake",
-                model="fake-model",
-                content="",
-                tool_calls=[
-                    ToolCall(
-                        id="call_write",
-                        name="write",
-                        arguments={"path": "README.md", "content": "hello"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ChatResponse(provider="fake", model="fake-model", content="写好了"),
-        ]
+    tool_call = ToolCall(
+        id="call_write",
+        name="write",
+        arguments={"path": "README.md", "content": "hello"},
     )
 
-    completed = AgentLoop(session=original, provider=provider).run_user_turn_interactive("写 README")
-    assert completed.pending_input is None
+    tool_result = original.execute_tool_call(tool_call)
+
+    assert tool_result.ok is True
     assert original.pending_permission_execution is None
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "hello"
 

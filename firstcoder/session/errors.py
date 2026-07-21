@@ -25,3 +25,16 @@ class SessionEmptyError(SessionError):
 
 class SessionCorruptError(SessionError):
     """session 事件日志损坏，无法安全 resume 或导出。"""
+
+
+class SessionUnsupportedSchemaError(SessionError):
+    """session 使用当前运行时不支持的 context event schema。"""
+
+    def __init__(self, *, session_id: str, actual_version: str, expected_version: str) -> None:
+        self.session_id = session_id
+        self.actual_version = actual_version
+        self.expected_version = expected_version
+        super().__init__(
+            f"session {session_id} uses context event schema {actual_version}; "
+            f"expected {expected_version}"
+        )

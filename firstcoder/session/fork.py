@@ -15,6 +15,7 @@ from firstcoder.session.bootstrap import SessionBootstrap
 from firstcoder.session.catalog import SessionCatalog, require_usable_record
 from firstcoder.session.errors import SessionNotFoundError
 from firstcoder.session.models import ResumeResult
+from firstcoder.session.resume import validate_session_schema
 from firstcoder.tools.types import Tool
 from firstcoder.utils.sandbox_access import SandboxAccess
 
@@ -34,6 +35,7 @@ class ForkSessionService:
     def fork(self, source_session_id: str, *, title: str | None = None) -> ResumeResult:
         catalog = self.catalog or SessionCatalog(self.store.root)
         record = require_usable_record(catalog.get_session(source_session_id))
+        validate_session_schema(self.store, source_session_id)
 
         events = self.store.list_events(source_session_id)
         if not events:
