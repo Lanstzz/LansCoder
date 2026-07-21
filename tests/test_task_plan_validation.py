@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from firstcoder.planning.models import Task, TaskPlan, TaskPlanError
+from firstcoder.planning.models import Task, TaskPlan, TaskPlanError, TaskPlanMode
 from firstcoder.planning.validation import validate_plan
 
 
-def _plan(*tasks: Task, mode: str = "dag") -> TaskPlan:
-    return TaskPlan(mode=mode, revision=1, tasks=tasks)  # type: ignore[arg-type]
+def _plan(*tasks: Task, mode: TaskPlanMode = "dag") -> TaskPlan:
+    return TaskPlan(mode=mode, revision=1, tasks=tasks)
 
 
 @pytest.mark.parametrize(
@@ -47,7 +47,7 @@ def test_validate_plan_rejects_multiple_linear_tasks_in_progress() -> None:
 
 
 @pytest.mark.parametrize("mode", ["linear", "dag"])
-def test_validate_plan_rejects_start_before_prerequisites(mode: str) -> None:
+def test_validate_plan_rejects_start_before_prerequisites(mode: TaskPlanMode) -> None:
     first = Task(id="first", content="First", order=0)
     second = Task(
         id="second",

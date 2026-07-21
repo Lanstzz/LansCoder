@@ -23,7 +23,7 @@ def effective_dependencies(plan: TaskPlan) -> dict[str, tuple[str, ...]]:
 
     ordered = ordered_tasks(plan)
     return {
-        task.id: (() if index == 0 else (ordered[index - 1].id,))
+        task.id: tuple(previous.id for previous in ordered[:index])
         for index, task in enumerate(ordered)
     }
 

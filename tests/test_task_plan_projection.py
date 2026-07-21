@@ -48,6 +48,21 @@ def test_cancelled_dependency_keeps_task_blocked() -> None:
     assert blocked_task_ids(plan) == ("work",)
 
 
+def test_linear_cancelled_task_blocks_all_later_tasks_across_completed_gap() -> None:
+    plan = TaskPlan(
+        mode="linear",
+        revision=1,
+        tasks=(
+            Task(id="cancelled", content="Cancelled", status="cancelled", order=0),
+            Task(id="completed", content="Completed", status="completed", order=1),
+            Task(id="later", content="Later", status="pending", order=2),
+        ),
+    )
+
+    assert ready_task_ids(plan) == ()
+    assert blocked_task_ids(plan) == ("later",)
+
+
 def test_linear_projection_uses_order_and_implicit_predecessors() -> None:
     plan = TaskPlan(
         mode="linear",
