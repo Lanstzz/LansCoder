@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from firstcoder.utils.text import optional_str
 
 
 INDEX_VERSION = 1
+_INDEX_LOCK = threading.RLock()
 
 
 class SessionIndex:
@@ -26,16 +28,17 @@ class SessionIndex:
     def update_event(self, event: SessionEvent) -> None:
         from firstcoder.session.catalog import build_record_from_events
 
-        data = self._load_data()
-        events = self._load_session_events(event.session_id)
-        if not events:
-            return
-        try:
-            record = build_record_from_events(session_id=event.session_id, events=events)
-        except Exception as exc:  # noqa: BLE001 - index must not block event persistence.
-            record = SessionRecord(session_id=event.session_id, title=event.session_id, status="corrupt", error=str(exc))
-        data["sessions"][event.session_id] = _record_to_dict(record)
-        self._write_data(data)
+        with _INDEX_LOCK:
+            data = self._load_data()
+            events = self._load_session_events(event.session_id)
+            if not events:
+                return
+            try:
+                record = build_record_from_events(session_id=event.session_id, events=events)
+            except Exception as exc:  # noqa: BLE001 - index must not block event persistence.
+                record = SessionRecord(session_id=event.session_id, title=event.session_id, status="corrupt", error=str(exc))
+            data["sessions"][event.session_id] = _record_to_dict(record)
+            self._write_data(data)
 
     def list_records(self) -> list[SessionRecord]:
         if not self.path.exists():
@@ -49,13 +52,14 @@ class SessionIndex:
     def rebuild(self) -> None:
         from firstcoder.session.catalog import record_from_path
 
-        sessions_dir = self.root / "sessions"
-        data = _empty_data()
-        if sessions_dir.exists():
-            for path in sessions_dir.glob("*.jsonl"):
-                record = record_from_path(path)
-                data["sessions"][record.session_id] = _record_to_dict(record)
-        self._write_data(data)
+        with _INDEX_LOCK:
+            sessions_dir = self.root / "sessions"
+            data = _empty_data()
+            if sessions_dir.exists():
+                for path in sessions_dir.glob("*.jsonl"):
+                    record = record_from_path(path)
+                    data["sessions"][record.session_id] = _record_to_dict(record)
+            self._write_data(data)
 
     def _reconcile_missing_files(self) -> None:
         from firstcoder.session.catalog import record_from_path
@@ -63,17 +67,18 @@ class SessionIndex:
         sessions_dir = self.root / "sessions"
         if not sessions_dir.exists():
             return
-        data = self._load_data()
-        sessions = data["sessions"]
-        changed = False
-        for path in sessions_dir.glob("*.jsonl"):
-            if path.stem in sessions:
-                continue
-            record = record_from_path(path)
-            sessions[record.session_id] = _record_to_dict(record)
-            changed = True
-        if changed:
-            self._write_data(data)
+        with _INDEX_LOCK:
+            data = self._load_data()
+            sessions = data["sessions"]
+            changed = False
+            for path in sessions_dir.glob("*.jsonl"):
+                if path.stem in sessions:
+                    continue
+                record = record_from_path(path)
+                sessions[record.session_id] = _record_to_dict(record)
+                changed = True
+            if changed:
+                self._write_data(data)
 
     def _load_data(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -135,6 +140,5 @@ def _record_from_dict(data: dict[str, Any]) -> SessionRecord:
         error=optional_str(data.get("error")),
         metadata=dict(data.get("metadata") or {}),
     )
-
 
 

@@ -58,9 +58,16 @@ def create_python_exec_tool(root: str | Path, *, access: SandboxAccess | None = 
     tool = tool_from_function(python_exec)
     tool.permission = ToolPermissionSpec(
         action=PermissionAction.EXECUTE_SHELL,
-        target_value="python -c",
+        target_builder=_permission_target_for_python_exec,
         cwd_arg="cwd",
         reason="执行 Python 代码需要用户确认。",
         allow_always=False,
+        allow_auto=False,
     )
     return tool
+
+
+def _permission_target_for_python_exec(arguments: dict[str, object]) -> str:
+    code = str(arguments.get("code") or "")
+    preview = code if len(code) <= 200 else code[:200] + "..."
+    return f"python -c {preview}"

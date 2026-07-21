@@ -311,8 +311,8 @@ class SessionEventWriter:
         job_id: str,
         tool_name: str,
         status: str,
-        graph_id: str | None = None,
-        node_id: str | None = None,
+        task_id: str | None = None,
+        observed_revision: int | None = None,
     ) -> str:
         """追加一条后台任务完成通知，投影成普通 user 消息。
 
@@ -327,10 +327,10 @@ class SessionEventWriter:
             "background_tool_name": tool_name,
             "background_status": status,
         }
-        if graph_id is not None:
-            metadata["background_graph_id"] = graph_id
-        if node_id is not None:
-            metadata["background_node_id"] = node_id
+        if task_id is not None:
+            metadata["background_task_id"] = task_id
+        if observed_revision is not None:
+            metadata["background_observed_revision"] = observed_revision
         part = MessagePart(
             id=new_part_id(),
             message_id=message_id,

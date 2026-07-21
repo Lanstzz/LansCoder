@@ -44,5 +44,26 @@ def test_build_system_prompt_inputs_uses_permission_policy_without_tool_schema()
     assert inputs.permission_policy["shell"] == DEFAULT_PERMISSION_POLICY["shell"]
 
 
+def test_system_prompt_guides_incremental_task_plan_updates() -> None:
+    inputs = build_system_prompt_inputs(
+        base_rules="基础规则",
+        agents_md="",
+        provider_name="fake",
+        provider_model="fake-model",
+    )
+    content = SystemPromptBuilder().build(inputs).messages[0].content
+
+    assert "Start with task_list to read the authoritative plan and its revision." in content
+    assert "Use task_create only to create a plan or append new tasks." in content
+    assert "Use task_update to change status, owner, or dependencies by stable task ID." in content
+    assert "Use task_revise only when a task's semantic content must change." in content
+    assert "Never resend or replace the whole task list just to update one task." in content
+    assert "If a write reports a revision conflict, call task_list and retry against its revision." in content
+    assert "A `linear` TaskPlan executes in its stable display order" in content
+    assert "A `dag` TaskPlan uses explicit dependencies" in content
+    assert "old, missing-version, and future-version sessions are rejected" in content
+    assert "Do not attempt migration, fallback replay, or recovery from legacy tool results." in content
+
+
 def test_default_permission_policy_describes_mcp_tool_confirmation() -> None:
     assert DEFAULT_PERMISSION_POLICY["mcp_tools"] == "confirm"

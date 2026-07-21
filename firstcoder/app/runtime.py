@@ -21,6 +21,7 @@ import anyio
 from firstcoder.runtime.cancellation import CancellationToken
 from firstcoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from firstcoder.agent.loop import AgentLoop, ToolExecutionEvent
+from firstcoder.agent.background import BackgroundJobManager
 from firstcoder.agent.loop_limits import AgentLoopLimits
 from firstcoder.agent.session import AgentSession
 from firstcoder.agent.user_input import AgentTurnStatus
@@ -94,6 +95,7 @@ class AgentChatRunner:
     last_pending_input: UserInputRequest | None = None
     stream_event_handler: Callable[[ChatStreamEvent], None] | None = None
     tool_event_handler: Callable[[ToolExecutionEvent], None] | None = None
+    background_manager: BackgroundJobManager | None = None
     pending_guidance: list[str] = field(default_factory=list)
     _guidance_lock: threading.Lock = field(default_factory=threading.Lock)
     _cancellation_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -166,6 +168,12 @@ class AgentChatRunner:
             loop = self._create_loop(token, streaming=streaming)
         else:
             loop.replace_cancellation_token(token)
+            # Permission resume reuses the paused AgentLoop so budget/state continue.
+            # TUI/runtime may have installed fresher stream/tool handlers (and a new
+            # turn token) while waiting for the user; rebind them or live UI events
+            # keep going through the pre-pause closures and get dropped as stale.
+            loop.stream_event_handler = self.stream_event_handler if streaming else None
+            loop.tool_event_handler = self.tool_event_handler
             if streaming:
                 self.last_display_lines = []
                 self.last_stream_events = []
@@ -288,6 +296,7 @@ class AgentChatRunner:
             "tool_event_handler": self.tool_event_handler,
             "guidance_provider": self.drain_guidance,
             "cancellation_token": cancellation_token,
+            "background_manager": self.background_manager,
             **self._legacy_max_tool_rounds_kwargs(),
         }
         if streaming:

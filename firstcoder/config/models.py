@@ -158,7 +158,6 @@ def build_model_catalog(
     *,
     legacy_provider_name: str | None = None,
     env: Mapping[str, str] | None = None,
-    legacy_config: Mapping[str, Any] | None = None,
 ) -> ModelCatalog:
     """合并全局/项目 TOML，并构造不可变模型目录。"""
     providers_raw = _merged_sections(global_config, project_config, "providers")

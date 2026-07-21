@@ -79,7 +79,7 @@ tool definitions. Tool JSON schemas are not duplicated in the system message.
 | `loop_limits.py` | budgets and stop-reason enums |
 | `tool_execution.py` | execute/record tool calls |
 | `tool_flow.py` / `tool_settlement.py` | batch flow and settlement |
-| `todo_policy.py` | active-task Todo lookup and one-time final reconciliation |
+| `task_plan_policy.py` | active TaskPlan lookup and one-time final reconciliation |
 | `task_boundary_classifier.py` | task-boundary classification helpers |
 | `ports.py` | minimal `ContextManagerLike` for the loop |
 
@@ -96,12 +96,13 @@ Readonly calls such as `view`, `grep`, and `git_diff` may run in parallel when
 the response permits it. In bypass mode, a wider explicit set can run in
 parallel. Mutation ordering is not casually parallelized.
 
-`todo` submits the complete current list, and every successful update appends a
-session-scoped `todo_updated` event. `SessionView.todos`, resume, fork, and the
-TUI consume that durable snapshot. The loop does not inject periodic synthetic
-user reminders. Before natural completion it may send one ephemeral system
-instruction to reconcile unfinished active-task items; that instruction is not
-written to the session log.
+TaskPlan mutations address stable task IDs and append exactly one
+session-scoped `task_plan_updated` event when they change state. `SessionView.task_plan`,
+resume, fork, and the TUI consume that durable snapshot. `linear` derives sequence
+from stable order; `dag` uses explicit dependencies. The loop does not inject
+periodic synthetic user reminders. Before natural completion it may send one
+ephemeral system instruction to reconcile unfinished TaskPlan work; that
+instruction is not written to the session log.
 
 ## Recovery Paths
 

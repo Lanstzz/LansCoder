@@ -130,8 +130,8 @@ def test_system_prompt_loads_one_unified_agent_prompt() -> None:
     assert "# Decision and verification discipline" not in content
     assert "# Task boundary" not in content
     assert "# Few-shot examples" not in content
-    assert "Todo planning reminder" not in content
-    assert "Todo progress reminder" not in content
+    assert "planning reminder" not in content
+    assert "progress reminder" not in content
     assert "task_boundary" not in content
     assert "successful verification" not in content.lower()
 
@@ -143,9 +143,9 @@ def test_system_prompt_loads_one_unified_agent_prompt() -> None:
     assert "Persist until the user's task is handled end-to-end" in content
     assert "The runtime classifies every real user turn before this request" in content
     assert "Never invent, guess, or display task hashes" in content
-    assert "Use todo for multi-step coding tasks" in content
-    assert "Every todo call replaces the full list" in content
-    assert "resend the complete current list with updated statuses" in content
+    assert "Use a TaskPlan for multi-step coding tasks" in content
+    assert "Start with task_list to read the authoritative plan and its revision" in content
+    assert "Never resend or replace the whole task list just to update one task" in content
 
 
 def test_system_prompt_delegates_task_boundary_to_runtime() -> None:

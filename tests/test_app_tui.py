@@ -22,10 +22,10 @@ from firstcoder.app.tui import _plain_static
 from firstcoder.app.tui import _observe_markdown_update
 from firstcoder.app.picker import TuiPickerItem, TuiPickerState, render_picker
 from firstcoder.app.picker_adapters import render_picker_item
-from firstcoder.app.activity_view import tool_event_label, tool_event_status, turn_metrics_text
+from firstcoder.app.activity_view import task_plan_panel_text, tool_event_label, tool_event_status, turn_metrics_text
 from firstcoder.app.welcome import welcome_renderable
 from firstcoder.app.transcript_view import entry_classes, tool_event_entry_kind
-from firstcoder.app.tui_state import TuiEntryKind, TuiTodoItem, TuiTranscript
+from firstcoder.app.tui_state import TuiEntryKind, TuiTaskPlanPanelState, TuiTranscript
 from firstcoder.app.tui_state import TuiTranscriptEntry
 from firstcoder.context.models import SessionView
 from firstcoder.context.runtime_state import SessionRuntimeState
@@ -38,6 +38,7 @@ from firstcoder.session.new import NewSessionService
 from firstcoder.session.resume import ResumeService
 from firstcoder.providers.types import ChatResponse, ChatStreamEvent, TokenUsage, ToolCall
 from firstcoder.tools.types import ToolResult
+from firstcoder.planning.models import Task, TaskPlan
 
 
 class FakeOutput:
@@ -121,8 +122,16 @@ class FakeTopbar(FakeActivity):
     pass
 
 
-class FakeTodoPanel(FakeActivity):
-    pass
+class FakeTaskPlanPanel(FakeActivity):
+    def __init__(self) -> None:
+        super().__init__()
+        self.classes: set[str] = set()
+
+    def add_class(self, name: str) -> None:
+        self.classes.add(name)
+
+    def remove_class(self, name: str) -> None:
+        self.classes.discard(name)
 
 
 def test_stage_paste_attachments_adds_clipboard_attachment(monkeypatch, tmp_path) -> None:
@@ -678,20 +687,20 @@ def test_firstcoder_app_topbar_fits_narrow_width_with_long_activity_and_metadata
     text = app._topbar_text(width=80)
     plain = Text.from_markup(text).plain
 
-    assert "\n" in plain
+    assert "\n" not in plain
+    assert len(plain) <= 80
     assert "sess_test" not in plain
-    assert "yurenapi/very-long-model-name" in plain
-    assert "cwd FirstCoder" in plain
+    assert plain.startswith("FirstCoder")
 
     narrow_plain = Text.from_markup(app._topbar_text(width=60)).plain
 
-    assert "\n" in narrow_plain
+    assert "\n" not in narrow_plain
+    assert len(narrow_plain) <= 60
     assert "sess_test" not in narrow_plain
-    assert "yurenapi/very-long-model-name" in narrow_plain
-    assert "cwd FirstCoder" in narrow_plain
+    assert narrow_plain.startswith("FirstCoder")
 
 
-def test_firstcoder_app_topbar_wraps_narrow_metadata_with_each_row_right_aligned() -> None:
+def test_firstcoder_app_topbar_truncates_narrow_metadata_to_one_row() -> None:
     app = FirstCoderApp(
         current_session=FakeSession(),
         config=FirstCoderTuiConfig(
@@ -701,13 +710,13 @@ def test_firstcoder_app_topbar_wraps_narrow_metadata_with_each_row_right_aligned
         ),
     )
 
-    plain_rows = Text.from_markup(app._topbar_text(width=60)).plain.splitlines()
+    plain = Text.from_markup(app._topbar_text(width=60)).plain
 
-    assert plain_rows[0].startswith("FirstCoder")
-    assert "sess_test" not in "\n".join(plain_rows)
-    assert any("idle · ready" in row for row in plain_rows)
-    assert any("yurenapi/very-long-model-name" in row for row in plain_rows)
-    assert "cwd FirstCoder" in plain_rows[-1]
+    assert "\n" not in plain
+    assert len(plain) <= 60
+    assert plain.startswith("FirstCoder")
+    assert "idle" in plain
+    assert "sess_test" not in plain
 
 
 def test_tui_transcript_records_structured_entries_with_stable_labels() -> None:
@@ -744,36 +753,95 @@ def test_tui_transcript_tracks_active_tool_until_terminal_status() -> None:
     assert transcript.recent_tools[-1].status == "success"
 
 
-def test_tui_transcript_updates_persistent_todos_from_tool_data() -> None:
-    transcript = TuiTranscript()
+def test_task_plan_panel_state_keeps_only_last_rendered_revision() -> None:
+    state = TuiTaskPlanPanelState()
 
-    transcript.update_todos(
-        [
-            {"id": "todo_1", "content": "读代码", "status": "done"},
-            {"id": "todo_2", "content": "跑测试", "status": "in_progress"},
-        ]
+    assert state.last_rendered_revision is None
+    state.last_rendered_revision = 3
+
+    assert state.last_rendered_revision == 3
+
+
+def test_task_plan_panel_text_renders_linear_tasks_in_ordered_single_column() -> None:
+    assert task_plan_panel_text(
+        {
+            "mode": "linear",
+            "revision": 1,
+            "ready_task_ids": ["inspect"],
+            "blocked_task_ids": ["test"],
+            "topological_levels": [["inspect"], ["test"]],
+            "tasks": [
+                {
+                    "id": "test",
+                    "content": "跑测试",
+                    "status": "pending",
+                    "depends_on": [],
+                    "order": 20,
+                },
+                {
+                    "id": "inspect",
+                    "content": "读代码",
+                    "status": "completed",
+                    "depends_on": [],
+                    "order": 10,
+                },
+                {
+                    "id": "implement",
+                    "content": "实现改动",
+                    "status": "in_progress",
+                    "depends_on": [],
+                    "order": 15,
+                },
+            ],
+        }
+    ) == (
+        "Task Plan · linear\n"
+        "[✓] 读代码\n"
+        "[~] 实现改动\n"
+        "[!] 跑测试"
     )
 
-    assert transcript.todos == [
-        TuiTodoItem(content="读代码", status="done"),
-        TuiTodoItem(content="跑测试", status="in_progress"),
-    ]
 
-
-def test_tui_transcript_accepts_mixed_legacy_and_current_todo_payloads() -> None:
-    transcript = TuiTranscript()
-
-    transcript.update_todos(
-        [
-            {"content": "恢复代码", "status": "completed", "priority": "high"},
-            {"content": "恢复测试", "status": "in_progress"},
-        ]
+def test_task_plan_panel_text_renders_dag_levels_dependencies_and_derived_statuses() -> None:
+    assert task_plan_panel_text(
+        {
+            "mode": "dag",
+            "revision": 2,
+            "ready_task_ids": ["research_a"],
+            "blocked_task_ids": ["summary"],
+            "topological_levels": [["research_a", "research_b"], ["summary"]],
+            "tasks": [
+                {
+                    "id": "summary",
+                    "content": "汇总",
+                    "status": "pending",
+                    "depends_on": ["research_a", "research_b"],
+                    "order": 30,
+                },
+                {
+                    "id": "research_b",
+                    "content": "调研 B",
+                    "status": "in_progress",
+                    "depends_on": [],
+                    "order": 20,
+                },
+                {
+                    "id": "research_a",
+                    "content": "调研 A",
+                    "status": "pending",
+                    "depends_on": [],
+                    "order": 10,
+                },
+            ],
+        }
+    ) == (
+        "Task Plan · dag\n"
+        "Level 0 · parallel\n"
+        "  [→] 调研 A (research_a)\n"
+        "  [~] 调研 B (research_b)\n"
+        "Level 1\n"
+        "  [!] 汇总 (summary) · depends on: research_a, research_b"
     )
-
-    assert transcript.todos == [
-        TuiTodoItem(content="恢复代码", status="completed", priority="high"),
-        TuiTodoItem(content="恢复测试", status="in_progress"),
-    ]
 
 
 def test_firstcoder_app_records_rendered_messages_in_transcript(monkeypatch) -> None:
@@ -2125,98 +2193,196 @@ def test_firstcoder_app_does_not_restart_streaming_status_for_every_token(monkey
     assert app._activity_timer is timer
 
 
-def test_firstcoder_app_updates_persistent_todo_panel_for_todo_events(monkeypatch) -> None:
-    runner = FakeToolEventAsyncChatRunner()
+def test_firstcoder_app_hides_task_plan_panel_when_session_has_no_plan(monkeypatch) -> None:
     output = FakeOutput()
-    activity = FakeActivity()
-    todo_panel = FakeTodoPanel()
-    app = FirstCoderApp(chat_runner=runner)
+    panel = FakeTaskPlanPanel()
+    view = SessionView(session_id="sess_without_plan")
+    session = FakeSession()
+    monkeypatch.setattr(session, "rebuild_view", lambda: view)
+    app = FirstCoderApp(current_session=session)
 
     def query_one(selector, *args, **kwargs):
-        if selector == "#activity":
-            return activity
-        if selector == "#todo-panel":
-            return todo_panel
+        if selector == "#task-plan-panel":
+            return panel
         return output
 
     monkeypatch.setattr(app, "query_one", query_one)
+    app._replay_current_session()
 
-    previous_handler = app._install_tool_event_handler()
-    runner.tool_event_handler(
-        ToolExecutionEvent(
-            kind="finished",
-            tool_call=ToolCall(id="call_todo", name="todo", arguments={"todos": []}),
-            result=ToolResult(
-                name="todo",
-                ok=True,
-                content="已设置任务清单",
-                data={
-                    "todos": [
-                        {"id": "todo_1", "content": "读代码", "status": "completed"},
-                        {"id": "todo_2", "content": "跑测试", "status": "in_progress"},
-                    ]
-                },
-            ),
-        )
-    )
-    app._restore_tool_event_handler(previous_handler)
-
-    assert app.transcript.todos == [
-        TuiTodoItem(content="读代码", status="completed"),
-        TuiTodoItem(content="跑测试", status="in_progress"),
-    ]
-    assert todo_panel.updates[-1] == "Todo · model reported\n[✓] 读代码\n[~] 跑测试"
+    assert panel.updates == [""]
+    assert "hidden" in panel.classes
 
 
-def test_firstcoder_app_replays_todos_from_current_session_view(monkeypatch) -> None:
+def test_firstcoder_app_replays_linear_task_plan_from_current_session_view(monkeypatch) -> None:
     output = FakeOutput()
-    todo_panel = FakeTodoPanel()
+    panel = FakeTaskPlanPanel()
     view = SessionView(
-        session_id="sess_todo_replay",
-        todos=[
-            {"content": "恢复代码", "status": "completed", "priority": "high"},
-            {"content": "恢复测试", "status": "in_progress", "priority": "medium"},
-        ],
-        todo_initialized=True,
-        todo_task_hash="task_current",
+        session_id="sess_linear_replay",
+        task_plan=TaskPlan(
+            mode="linear",
+            revision=1,
+            tasks=(
+                Task(id="test", content="恢复测试", status="in_progress", order=20),
+                Task(id="inspect", content="恢复代码", status="completed", order=10),
+            ),
+        ),
     )
     session = FakeSession()
     monkeypatch.setattr(session, "rebuild_view", lambda: view)
     app = FirstCoderApp(current_session=session)
 
     def query_one(selector, *args, **kwargs):
-        if selector == "#todo-panel":
-            return todo_panel
+        if selector == "#task-plan-panel":
+            return panel
         return output
 
     monkeypatch.setattr(app, "query_one", query_one)
     app._replay_current_session()
 
-    assert app.transcript.todos == [
-        TuiTodoItem(content="恢复代码", status="completed", priority="high"),
-        TuiTodoItem(content="恢复测试", status="in_progress"),
-    ]
-    assert todo_panel.updates[-1] == "Todo · model reported\n[✓] 恢复代码\n[~] 恢复测试"
+    assert panel.updates[-1] == "Task Plan · linear\n[✓] 恢复代码\n[~] 恢复测试"
 
 
-@pytest.mark.anyio
-@pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_firstcoder_app_todo_panel_preserves_status_markers_as_plain_text() -> None:
+def test_firstcoder_app_replays_dag_task_plan_from_current_session_view(monkeypatch) -> None:
+    output = FakeOutput()
+    panel = FakeTaskPlanPanel()
+    view = SessionView(
+        session_id="sess_dag_replay",
+        task_plan=TaskPlan(
+            mode="dag",
+            revision=1,
+            tasks=(
+                Task(id="a", content="调研 A", status="completed", order=10),
+                Task(id="b", content="调研 B", status="in_progress", order=20),
+                Task(id="c", content="汇总", depends_on=("a", "b"), order=30),
+            ),
+        ),
+    )
+    session = FakeSession()
+    monkeypatch.setattr(session, "rebuild_view", lambda: view)
+    app = FirstCoderApp(current_session=session)
+
+    def query_one(selector, *args, **kwargs):
+        if selector == "#task-plan-panel":
+            return panel
+        return output
+
+    monkeypatch.setattr(app, "query_one", query_one)
+    app._replay_current_session()
+
+    assert panel.updates[-1] == (
+        "Task Plan · dag\n"
+        "Level 0 · parallel\n"
+        "  [✓] 调研 A (a)\n"
+        "  [~] 调研 B (b)\n"
+        "Level 1\n"
+        "  [!] 汇总 (c) · depends on: a, b"
+    )
+
+
+def test_firstcoder_app_refreshes_task_plan_from_session_instead_of_tool_result(monkeypatch) -> None:
+    runner = FakeToolEventAsyncChatRunner()
+    output = FakeOutput()
+    activity = FakeActivity()
+    panel = FakeTaskPlanPanel()
+    session = FakeSession()
+    monkeypatch.setattr(
+        session,
+        "rebuild_view",
+        lambda: SessionView(
+            session_id="sess_live_plan",
+            task_plan=TaskPlan(
+                mode="linear",
+                revision=1,
+                tasks=(Task(id="inspect", content="来自会话", status="in_progress"),),
+            ),
+        ),
+    )
+    app = FirstCoderApp(chat_runner=runner, current_session=session)
+
+    def query_one(selector, *args, **kwargs):
+        if selector == "#activity":
+            return activity
+        if selector == "#task-plan-panel":
+            return panel
+        return output
+
+    monkeypatch.setattr(app, "query_one", query_one)
+    previous_handler = app._install_tool_event_handler()
+    runner.tool_event_handler(
+        ToolExecutionEvent(
+            kind="finished",
+            tool_call=ToolCall(id="call_create", name="task_create", arguments={}),
+            result=ToolResult(
+                name="task_create",
+                ok=True,
+                content="created",
+                data={"snapshot": {"tasks": [{"content": "不是展示来源"}]}},
+            ),
+        )
+    )
+    app._restore_tool_event_handler(previous_handler)
+
+    assert panel.updates[-1] == "Task Plan · linear\n[~] 来自会话"
+
+
+def test_firstcoder_app_skips_same_task_plan_revision_and_updates_existing_panel(monkeypatch) -> None:
+    output = FakeOutput()
+    panel = FakeTaskPlanPanel()
     app = FirstCoderApp()
 
-    async with app.run_test():
-        panel = app.query_one("#todo-panel")
-        app.transcript.update_todos(
-            [
-                {"id": "todo_1", "content": "已完成", "status": "completed"},
-                {"id": "todo_2", "content": "进行中", "status": "in_progress"},
-                {"id": "todo_3", "content": "未完成", "status": "pending"},
-            ]
-        )
-        app._render_todo_panel()
+    def query_one(selector, *args, **kwargs):
+        if selector == "#task-plan-panel":
+            return panel
+        return output
 
-        assert panel.content == "Todo · model reported\n[✓] 已完成\n[~] 进行中\n[ ] 未完成"
-        assert str(panel.render()) == "Todo · model reported\n[✓] 已完成\n[~] 进行中\n[ ] 未完成"
+    monkeypatch.setattr(app, "query_one", query_one)
+    initial = TaskPlan(
+        mode="linear",
+        revision=1,
+        tasks=(Task(id="inspect", content="读代码", status="in_progress"),),
+    )
+    updated = TaskPlan(
+        mode="linear",
+        revision=2,
+        tasks=(Task(id="inspect", content="读代码", status="completed"),),
+    )
+
+    app._render_task_plan_panel(initial)
+    app._render_task_plan_panel(initial)
+    app._render_task_plan_panel(updated)
+
+    assert panel.updates == [
+        "Task Plan · linear\n[~] 读代码",
+        "Task Plan · linear\n[✓] 读代码",
+    ]
+    assert app.task_plan_panel_state.last_rendered_revision == 2
+
+
+def test_firstcoder_app_clear_output_clears_and_hides_rendered_task_plan_panel(monkeypatch) -> None:
+    output = FakeOutput()
+    panel = FakeTaskPlanPanel()
+    app = FirstCoderApp()
+
+    def query_one(selector, *args, **kwargs):
+        if selector == "#task-plan-panel":
+            return panel
+        return output
+
+    monkeypatch.setattr(app, "query_one", query_one)
+    monkeypatch.setattr(app, "is_mounted", True)
+    app._render_task_plan_panel(
+        TaskPlan(
+            mode="linear",
+            revision=1,
+            tasks=(Task(id="inspect", content="读代码", status="in_progress"),),
+        )
+    )
+
+    app._clear_output()
+
+    assert panel.updates[-1] == ""
+    assert "hidden" in panel.classes
+    assert app.task_plan_panel_state.last_rendered_revision is None
 
 
 def test_firstcoder_app_updates_topbar_when_activity_changes(monkeypatch) -> None:

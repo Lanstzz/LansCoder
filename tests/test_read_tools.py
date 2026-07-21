@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from firstcoder.agent.session import create_project_permission_manager
+from firstcoder.permissions.types import PermissionMode
 from firstcoder.utils import git as git_utils
 from firstcoder.utils.subprocess import CommandResult
 from firstcoder.utils.sandbox import PathSandbox
 from firstcoder.tools import grep as grep_module
 from firstcoder.tools import create_builtin_registry
+from firstcoder.tools.permission_registry import PermissionAwareToolRegistry
 
 
 def _completed(args, returncode=0, stdout="", stderr=""):
@@ -107,6 +110,42 @@ def test_tools_reject_paths_outside_root(tmp_path):
 
     assert result.ok is False
     assert "超出项目目录" in result.error
+
+
+def test_sensitive_file_read_requires_permission_confirmation(tmp_path):
+    secret = tmp_path / "private.key"
+    secret.write_text("PRIVATE_KEY=secret\n", encoding="utf-8")
+    registry = create_builtin_registry(tmp_path)
+    permissioned = PermissionAwareToolRegistry(
+        registry,
+        create_project_permission_manager(tmp_path, mode=PermissionMode.STANDARD),
+    )
+
+    result = permissioned.execute("view", {"path": "private.key"})
+
+    assert result.ok is True
+    assert result.data["requires_user_input"] is True
+    assert result.data["permission_request"]["action"] == "read_path"
+    assert "PRIVATE_KEY=secret" not in result.content
+
+
+def test_read_multi_checks_all_requested_paths_before_reading(tmp_path):
+    safe = tmp_path / "README.md"
+    secret = tmp_path / "private.key"
+    safe.write_text("safe\n", encoding="utf-8")
+    secret.write_text("PRIVATE_KEY=secret\n", encoding="utf-8")
+    registry = create_builtin_registry(tmp_path)
+    permissioned = PermissionAwareToolRegistry(
+        registry,
+        create_project_permission_manager(tmp_path, mode=PermissionMode.STANDARD),
+    )
+
+    result = permissioned.execute("read_multi", {"paths": ["README.md", "private.key"]})
+
+    assert result.ok is True
+    assert result.data["requires_user_input"] is True
+    assert result.data["permission_request"]["action"] == "read_path"
+    assert "PRIVATE_KEY=secret" not in result.content
 
 
 def test_grep_finds_matching_lines(tmp_path):

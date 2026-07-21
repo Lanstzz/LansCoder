@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from firstcoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
+from firstcoder.permissions.types import PermissionAction
+from firstcoder.tools.path_permissions import read_multi_target
+from firstcoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result, make_text_result
 from firstcoder.utils.introspection import tool_from_function
 from firstcoder.utils.sandbox import PathSandbox
 from firstcoder.utils.sandbox_access import SandboxAccess
@@ -93,4 +95,10 @@ def create_read_multi_tool(root: str | Path, *, access: SandboxAccess | None = N
             truncated=truncated,
         )
 
-    return tool_from_function(read_multi)
+    tool = tool_from_function(read_multi)
+    tool.permission = ToolPermissionSpec(
+        action=PermissionAction.READ_PATH,
+        target_builder=read_multi_target,
+        reason="批量读取文件需要权限检查。",
+    )
+    return tool

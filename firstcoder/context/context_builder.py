@@ -204,7 +204,7 @@ def _collapse_identical_adjacent_duplicate_tool_calls(messages: list[AgentMessag
     """Ignore a narrowly defined duplicate created while pausing for user input.
 
     A historical bug could append the exact same assistant tool-call response twice
-    when Todo self-check entered a permission pause.  Keep the first durable fact
+    when TaskPlan reconciliation entered a permission pause. Keep the first durable fact
     and drop only an immediately adjacent assistant message whose visible text and
     complete tool-call identity are identical.  All other invalid sequences still
     reach ``validate_tool_call_sequence`` and fail closed.

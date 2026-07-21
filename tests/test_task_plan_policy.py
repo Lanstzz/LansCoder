@@ -47,9 +47,9 @@ def test_linear_plan_reconciliation_lists_unfinished_tasks_in_stable_order() -> 
         mode="linear",
         revision=3,
         tasks=(
-            Task(id="verify", content="Run focused tests", status="pending", order=20),
-            Task(id="inspect", content="Inspect implementation", status="completed", order=10),
             Task(id="document", content="Document blocker", status="in_progress", order=30),
+            Task(id="inspect", content="Inspect implementation", status="completed", order=10),
+            Task(id="verify", content="Run focused tests", status="pending", order=20),
         ),
     )
 
@@ -64,6 +64,8 @@ def test_linear_plan_reconciliation_lists_unfinished_tasks_in_stable_order() -> 
     assert "task_update" in instruction
     assert "by task ID" in instruction
     assert "do not recreate or rebuild" in instruction.lower()
+    assert "real blocker" in instruction.lower()
+    assert "do not claim completion" in instruction.lower()
 
 
 def test_dag_plan_uses_the_same_reconciliation_protocol() -> None:

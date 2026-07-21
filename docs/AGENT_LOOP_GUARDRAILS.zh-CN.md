@@ -53,7 +53,7 @@
 | `loop_limits.py` | 预算与 stop-reason 枚举 |
 | `tool_execution.py` | 执行/记录 tool call |
 | `tool_flow.py` / `tool_settlement.py` | 批次流控与 settle |
-| `todo_policy.py` | 当前任务 Todo 读取与一次性结束对账 |
+| `task_plan_policy.py` | 当前 TaskPlan 读取与一次性结束对账 |
 | `task_boundary_classifier.py` | 任务边界分类辅助 |
 | `ports.py` | loop 用的最小 `ContextManagerLike` |
 
@@ -67,7 +67,7 @@ tools/permissions/utils 共用的 DTO 在 `firstcoder.runtime`，不在 loop 包
 
 `view`、`grep`、`git_diff` 等只读调用在响应允许时可以并发；bypass mode 中还有一份明确的更宽并发名单。写入顺序不会被随手并行。
 
-`todo` 每次提交完整的当前列表，成功更新还会追加 session 范围的 `todo_updated` 事件；`SessionView.todos`、resume、fork 和 TUI 都读取这份持久快照。loop 不再周期性注入合成 user reminder。模型自然准备结束而当前任务仍有未完成 Todo 时，loop 最多发送一次不落盘的临时 system 对账指令。
+TaskPlan 变更按稳定任务 ID 定位，且仅在状态改变时追加一个 session 范围的 `task_plan_updated` 事件；`SessionView.task_plan`、resume、fork 和 TUI 都读取这份持久快照。`linear` 从稳定 order 推导顺序，`dag` 使用显式依赖。loop 不再周期性注入合成 user reminder。模型自然准备结束而 TaskPlan 仍有未完成任务时，loop 最多发送一次不落盘的临时 system 对账指令。
 
 ## 恢复路径
 

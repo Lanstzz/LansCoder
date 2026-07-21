@@ -511,8 +511,6 @@ class AgentSession:
         )
         self.known_message_ids.add(tool_message_id)
         self._append_task_boundary_observation_if_present(tool_call=tool_call, result=result)
-        self._append_todo_updated_if_present(tool_call=tool_call, result=result)
-        self._append_task_graph_updated_if_present(tool_call=tool_call, result=result)
         return tool_message_id
 
     def append_interrupted_tool_results(self) -> list[ToolCall]:
@@ -543,8 +541,8 @@ class AgentSession:
         job_id: str,
         tool_name: str,
         status: str,
-        graph_id: str | None = None,
-        node_id: str | None = None,
+        task_id: str | None = None,
+        observed_revision: int | None = None,
     ) -> str:
         """把一条后台完成通知写成可 resume 的独立事件。"""
 
@@ -553,8 +551,8 @@ class AgentSession:
             job_id=job_id,
             tool_name=tool_name,
             status=status,
-            graph_id=graph_id,
-            node_id=node_id,
+            task_id=task_id,
+            observed_revision=observed_revision,
         )
         self.known_message_ids.add(message_id)
         return message_id
@@ -574,31 +572,6 @@ class AgentSession:
         observation = observation_from_tool_result_data(result.data)
         if observation is not None:
             self.writer.append_task_boundary_observation(observation)
-
-    def _append_todo_updated_if_present(self, *, tool_call: ToolCall, result: ToolResult) -> None:
-        if tool_call.name != "todo" or not result.ok:
-            return
-        todos = result.data.get("todos")
-        if not isinstance(todos, list) or not all(isinstance(item, dict) for item in todos):
-            return
-        self.writer.append_todo_updated(
-            [dict(item) for item in todos],
-            task_hash=self.runtime_state.active_task_hash,
-        )
-
-    def _append_task_graph_updated_if_present(self, *, tool_call: ToolCall, result: ToolResult) -> None:
-        if tool_call.name != "task_graph" or not result.ok:
-            return
-        graph = result.data.get("graph")
-        if not isinstance(graph, dict):
-            return
-        ready = result.data.get("ready_nodes")
-        ready_nodes = [str(item) for item in ready] if isinstance(ready, list) else None
-        self.writer.append_task_graph_updated(
-            dict(graph),
-            ready_nodes=ready_nodes,
-            task_hash=self.runtime_state.active_task_hash,
-        )
 
     def _current_context_metadata(self) -> dict[str, object]:
         metadata: dict[str, object] = {}

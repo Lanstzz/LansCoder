@@ -7,6 +7,7 @@ from firstcoder.context.compaction import CompactionPipeline, CompactionRequest
 from firstcoder.context.events import SessionEvent
 from firstcoder.context.models import AgentMessage, MessagePart, SessionView
 from firstcoder.context.store import JsonlSessionStore, SessionStoreCorruptError
+from firstcoder.context.versions import CONTEXT_EVENT_SCHEMA_VERSION
 from firstcoder.context.writer import SessionEventWriter
 
 
@@ -21,7 +22,10 @@ def test_jsonl_store_rebuilds_session_view_from_events(tmp_path: Path) -> None:
             id="evt_1",
             session_id=session_id,
             type="session_created",
-            payload={"title": "demo"},
+            payload={
+                "title": "demo",
+                "context_event_schema_version": CONTEXT_EVENT_SCHEMA_VERSION,
+            },
             created_at="2026-06-01T00:00:00Z",
         )
     )
@@ -92,57 +96,6 @@ def test_jsonl_store_lists_events_in_append_order(tmp_path: Path) -> None:
         "evt_1",
         "evt_2",
     ]
-
-
-def test_store_ignores_legacy_planning_events_and_tool_results(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    todos = [{"content": "旧任务", "status": "in_progress", "priority": "medium"}]
-    store.append_event(
-        SessionEvent(
-            id="evt_todo",
-            session_id="sess_test",
-            type="todo_updated",
-            payload={"todos": todos, "task_hash": "task_old"},
-        )
-    )
-    store.append_event(
-        SessionEvent(
-            id="evt_graph",
-            session_id="sess_test",
-            type="task_graph_updated",
-            payload={"graph": {"graph_id": "old", "nodes": []}, "ready_nodes": []},
-        )
-    )
-    store.append_event(
-        SessionEvent(
-            id="evt_tool",
-            session_id="sess_test",
-            type="tool_result",
-            payload={
-                "message_id": "msg_tool",
-                "parts": [
-                    MessagePart(
-                        id="part_tool",
-                        message_id="msg_tool",
-                        kind="tool_result",
-                        content="任务清单",
-                        metadata={
-                            "tool_name": "todo",
-                            "tool_call_id": "call_todo",
-                            "ok": True,
-                            "task_hash": "task_old",
-                            "data": {"todos": todos},
-                        },
-                    ).to_dict()
-                ],
-            },
-        )
-    )
-
-    view = store.rebuild_session_view("sess_test")
-
-    assert view.task_plan is None
-    assert [message.id for message in view.messages] == ["msg_tool"]
 
 
 def test_programmatic_compaction_rebuilds_replaced_parts(tmp_path: Path) -> None:

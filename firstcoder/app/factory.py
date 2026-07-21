@@ -46,6 +46,7 @@ from firstcoder.session.resume import ResumeService
 from firstcoder.session.share import SessionShareService
 from firstcoder.skills.discovery import discover_all_skills
 from firstcoder.tools.builtin import create_builtin_registry
+from firstcoder.agent.background import BackgroundJobManager
 from firstcoder.tools.types import Tool
 from firstcoder.utils.sandbox_access import SandboxAccess
 
@@ -132,6 +133,7 @@ def create_firstcoder_app(
             raise ValueError(str(error)) from error
     store = JsonlSessionStore(resolved_data_root)
     sandbox_access = SandboxAccess()
+    background_manager = BackgroundJobManager()
     resolved_tools = tools if tools is not None else create_builtin_registry(
         project_path,
         include_mutation_tools=True,
@@ -210,6 +212,7 @@ def create_firstcoder_app(
         limits=AgentLoopLimits.default(),
         use_streaming=_should_use_streaming(resolved_provider, resolved_app_config),
         request_options=_main_request_options(selected_profile),
+        background_manager=background_manager,
     )
     model_switcher = RuntimeModelSwitcher(
         app_config=resolved_app_config,

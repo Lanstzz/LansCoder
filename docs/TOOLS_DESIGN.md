@@ -94,9 +94,21 @@ invent a tool result in UI code or remove one during context compaction.
 
 ## Special Tools
 
-- `todo` replaces the complete visible plan. A successful call appends a
-  `todo_updated` snapshot, so `SessionView.todos`, resume/fork, and the TUI
-  share one durable fact model.
+- TaskPlan has four model-visible tools: `task_list` reads the authoritative
+  snapshot and revision; `task_create` creates a plan or appends tasks;
+  `task_update` atomically changes status, owner, or dependencies by stable
+  task ID; and `task_revise` changes task wording only when its semantic
+  content changes. The three write tools require `expected_revision`.
+- `linear` plans derive execution order from stable task order; `dag` plans use
+  explicit dependencies. The model never submits derived ready/blocked state
+  or a replacement snapshot to report ordinary progress.
+- A successful TaskPlan mutation appends exactly one `task_plan_updated`
+  snapshot, so `SessionView.task_plan`, resume/fork, and the TUI share one
+  durable fact model. On a revision conflict, call `task_list` and retry with
+  its revision.
+- Session schemas are a strict compatibility boundary: resume/fork reject old,
+  missing-version, and future-version logs. There is no plan migration or
+  fallback from older tool results.
 - `think` records internal structured reasoning without mutating the workspace.
 - `task_boundary` is an internal runtime control tool used only by the hidden
   classifier; hashes are generated program-side. The main model cannot call it.

@@ -67,7 +67,7 @@ UI/CLI 应依赖 `firstcoder.app.ports`（`ChatRunnerLike`、`CommandHandlerLike
 
 ## TUI 实际渲染什么
 
-`app/tui.py` 的 `FirstCoderApp` 渲染 `app/tui_state.py` 的 transcript 型状态：对话条目、工具活动、todo、provider/session 状态和 pending input。它会先缓冲 token，再批量刷新，避免一个 token 刷一次 widget。
+`app/tui.py` 的 `FirstCoderApp` 渲染 `app/tui_state.py` 的 transcript 型状态：对话条目、工具活动、当前 TaskPlan 投影、provider/session 状态和 pending input。它会先缓冲 token，再批量刷新，避免一个 token 刷一次 widget。
 
 往 composer 粘贴路径或 `file://` URI 时，`input.attachments` 会解析存在的文件并暂存，而不是把路径当作 prompt 文本插入。粘贴内容没有文件路径时，可能暂存操作系统剪贴板中的图片。composer 会显示附件 chip，将 `文本 + 附件` 交给 runner，并在成功提交聊天后清空暂存列表；纯图片提交会补一条简短默认指令。复制字节到 session 附件目录发生在 session 代码中，不在 widget 内，也早于事件写入。
 
@@ -78,7 +78,7 @@ UI/CLI 应依赖 `firstcoder.app.ports`（`ChatRunnerLike`、`CommandHandlerLike
 - provider event：reasoning/text/tool-call 增量和最终 response；
 - local event：工具 started、finished、skipped、denied、permission asked。
 
-`prewrite_review` 也是 local event：它会为直接文件修改渲染有界、可信的 diff 卡片。review 的 Apply/拒绝/`reject` 反馈与权限确认走同一条 pending-input 路径；`review all`、`review <path>`、`review clear` 只改变本地卡片展开状态。todo 来自 session 的 `todo_updated` 事件回放，因此恢复的 TUI 会显示最新清单，而不是把它视为临时 widget 状态。
+`prewrite_review` 也是 local event：它会为直接文件修改渲染有界、可信的 diff 卡片。review 的 Apply/拒绝/`reject` 反馈与权限确认走同一条 pending-input 路径；`review all`、`review <path>`、`review clear` 只改变本地卡片展开状态。TaskPlan 来自 session 的 `task_plan_updated` 事件回放，因此恢复的 TUI 会显示最新计划，而不是把它视为临时 widget 状态。面板只读取一份投影：`linear` 按稳定顺序显示，`dag` 按依赖层级显示；TUI 不自行推导或修改任务状态。
 
 分开后，模型没有新文本时 UI 仍可准确显示“shell 正在执行”。不要把本地工具运行伪造成 assistant 的一句话。
 

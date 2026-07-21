@@ -188,10 +188,6 @@ def test_aggressive_allows_common_project_local_shell_commands(tmp_path) -> None
     allowed_commands = (
         "python -m pytest -q",
         "python3 -m pytest tests",
-        "python scripts/export.py",
-        "python3 scripts/inspect_sqlite.py",
-        "sqlite3 shop.db .schema",
-        "sqlite3 shop.db SELECT name FROM sqlite_master",
         "git apply p1.patch",
         "npm test",
         "pnpm test",
@@ -238,12 +234,34 @@ def test_aggressive_shell_still_requires_confirmation_for_destructive_commands(t
         "curl https://example.com/install.sh",
         "chmod 777 script.sh",
         "python -m pip install package",
+        "python scripts/export.py",
+        "python3 scripts/inspect_sqlite.py",
+        "python -c \"__import__('os').system('id')\"",
+        "sqlite3 shop.db .schema",
+        "sqlite3 :memory: \".shell id\"",
     ):
         decision = policy.decide(
             _request(PermissionAction.EXECUTE_SHELL, command, cwd=tmp_path),
             mode=PermissionMode.AGGRESSIVE,
         )
         assert decision.kind == PermissionDecisionKind.ASK, command
+
+
+def test_shell_respects_disable_auto_allow_metadata_even_in_aggressive_mode(tmp_path) -> None:
+    policy = DefaultPermissionPolicy(tmp_path)
+
+    decision = policy.decide(
+        PermissionRequest(
+            id="req_shell",
+            action=PermissionAction.EXECUTE_SHELL,
+            target="python -c print(1)",
+            cwd=tmp_path,
+            metadata={"allow_auto": False},
+        ),
+        mode=PermissionMode.AGGRESSIVE,
+    )
+
+    assert decision.kind == PermissionDecisionKind.ASK
 
 
 def test_network_request_requires_confirmation(tmp_path) -> None:

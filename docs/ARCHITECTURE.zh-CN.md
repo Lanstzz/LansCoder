@@ -188,7 +188,7 @@ agent.loop.AgentLoop
        直接改文件：先生成可信 prewrite diff；standard 走权限确认，已允许/aggressive 走仅 review 的 Apply
        allow：执行；追加 tool result 事实
   7. 按 AgentLoopLimits settle；验证结果作为证据返回模型
-  8. 模型自然停止但当前任务仍有未完成 Todo 时，最多发送一次不落盘的临时 system 对账指令
+  8. 模型自然停止但当前 TaskPlan 仍有未完成任务时，最多发送一次不落盘的临时 system 对账指令
   │
   ▼
 runtime 事件 → AgentChatRunner → TUI 转写 / 活动流 / 权限 UI
@@ -201,13 +201,13 @@ runtime 事件 → AgentChatRunner → TUI 转写 / 活动流 / 权限 UI
 | `.firstcoder/sessions/<id>.jsonl` 事实 | `SessionRuntimeState` |
 | `.firstcoder/attachments/<session-id>/` 暂存的附件字节 | composer 里的待发送附件 chip |
 | 权限 grants 文件（`permissions.json`） | pending permission 的原始 tool_call |
-| 回放到 `SessionView.todos` 的 `todo_updated` 快照 | 当前 review 卡片的展开状态 |
+| 回放到 `SessionView.task_plan` 的 `task_plan_updated` 快照 | 当前 review 卡片的展开状态 |
 | 磁盘上的 skill 文件 | prompt prefix cache |
 | MCP 服务器配置 | 存活的 MCP 连接 |
 
 Resume 通过回放 JSONL 尽量重建。跨重启不能丢的东西必须是事实或显式 grant——不能只活在 Python 对象里。
 
-Todo 工具成功结果也会发出运行时事件，让 TUI 立即刷新；恢复时再从同一份完整 `todo_updated` 快照投影。TUI 将其标记为模型上报状态，不会根据命令、文件修改或测试成功自动推断完成。
+成功的 TaskPlan 变更会发出运行时工具事件，让 TUI 立即刷新；恢复时再从同一份 `task_plan_updated` 快照投影。`linear` 按稳定 order 推导顺序，`dag` 使用显式依赖；普通变更按稳定任务 ID 和当前 revision 定位。遇到 revision 冲突时先 `task_list` 再重试，不能靠替换整个计划解决。TUI 将其标记为模型上报状态，不会根据命令、文件修改或测试成功自动推断完成。
 
 ### 跨边界关键对象
 
@@ -285,7 +285,7 @@ SessionBootstrap
 | `agent/tool_execution.py` | 执行与记录 tool call |
 | `agent/tool_flow.py` | 工具批次的流程控制 |
 | `agent/tool_settlement.py` | 把工具结果 settle 进本轮 |
-| `agent/todo_policy.py` | 当前任务 Todo 读取与一次性结束对账 |
+| `agent/task_plan_policy.py` | 当前 TaskPlan 读取与一次性结束对账 |
 | `agent/task_boundary_classifier.py` | 任务边界分类 |
 | `agent/loop_limits.py` | 预算与停止原因枚举 |
 

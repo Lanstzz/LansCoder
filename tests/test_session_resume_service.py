@@ -56,10 +56,10 @@ def test_resume_service_resumes_existing_session_and_reads_agents_md(tmp_path: P
     assert result.session.current_turn == 1
 
 
-def test_resume_service_restores_session_todo_state(tmp_path: Path) -> None:
+def test_resume_service_restores_session_task_plan(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
-    writer = SessionEventWriter(store=store, session_id="sess_todos")
-    writer.append_session_created(title="todo demo")
+    writer = SessionEventWriter(store=store, session_id="sess_task_plan")
+    writer.append_session_created(title="task plan demo")
     plan = TaskPlan(
         mode="linear",
         revision=1,
@@ -72,7 +72,7 @@ def test_resume_service_restores_session_todo_state(tmp_path: Path) -> None:
         snapshot=plan,
     )
 
-    result = ResumeService(store=store, project_root=tmp_path).resume("sess_todos")
+    result = ResumeService(store=store, project_root=tmp_path).resume("sess_task_plan")
 
     assert result.session.rebuild_view().task_plan == plan
 

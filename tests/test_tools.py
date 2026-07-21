@@ -52,7 +52,6 @@ def test_builtin_tool_descriptions_are_agent_facing_english(tmp_path):
     assert "Prefer this for multi-file edits" in descriptions["apply_patch"]
     assert descriptions["shell"].startswith("Run a shell command")
     assert "Prefer dedicated tools" in descriptions["shell"]
-    assert "todo" not in descriptions
     assert "evidence returned to the model" in descriptions["diagnostics"]
 
 
@@ -170,8 +169,6 @@ def test_session_registry_adds_four_authoritative_task_plan_tools(tmp_path):
 
     for name in ("task_create", "task_update", "task_revise", "task_list"):
         assert name in registry.names()
-    assert "todo" not in registry.names()
-    assert "task_graph" not in registry.names()
     descriptions = {definition.name: definition.description for definition in registry.definitions()}
     assert "stable task ID" in descriptions["task_update"]
     assert "wording" in descriptions["task_revise"]

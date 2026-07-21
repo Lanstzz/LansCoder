@@ -9,7 +9,7 @@ import time
 import pytest
 
 from firstcoder.agent.loop import AgentLoop, ToolExecutionEvent
-from firstcoder.agent import loop as agent_loop
+from firstcoder.agent.task_boundary_classifier import CLASSIFICATION_PROMPT
 from firstcoder.agent.loop_limits import AgentLoopLimits
 from firstcoder.agent.user_input import AgentTurnStatus
 from firstcoder.agent.session import AgentSession
@@ -440,31 +440,6 @@ def _echo_tool() -> Tool:
                 "type": "object",
                 "properties": {"text": {"type": "string"}},
                 "required": ["text"],
-            },
-        ),
-        executor=execute,
-    )
-
-
-def _legacy_plan_fixture_tool() -> Tool:
-    """Temporary old-protocol fixture until Task 10 migrates these loop tests."""
-
-    def execute(todos):
-        return ToolResult(
-            name="todo",
-            ok=True,
-            content="Todo updated",
-            data={"todos": todos, "count": len(todos)},
-        )
-
-    return Tool(
-        definition=ToolDefinition(
-            name="todo",
-            description="Temporary legacy planning fixture.",
-            parameters={
-                "type": "object",
-                "properties": {"todos": {"type": "array", "items": {"type": "object"}}},
-                "required": ["todos"],
             },
         ),
         executor=execute,
@@ -1443,30 +1418,72 @@ def test_task_boundary_tool_result_append_preserves_stable_window_metadata(tmp_p
     assert event.payload["created_at"] == result.data["created_at"]
 
 
-def test_agent_session_persists_successful_todo_result_as_native_state_event(tmp_path) -> None:
+def test_task_plan_tool_writes_one_native_state_event_without_session_inference(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(store=store, session_id="sess_todo_state", tools=[_legacy_plan_fixture_tool()])
-    session.runtime_state.active_task_hash = "task_current"
+    session = AgentSession.create(store=store, session_id="sess_task_plan_state")
     tool_call = ToolCall(
-        id="call_todo",
-        name="todo",
+        id="call_plan_create",
+        name="task_create",
         arguments={
-            "todos": [
-                {"content": "读代码", "status": "in_progress"},
-            ]
+            "mode": "linear",
+            "expected_revision": 0,
+            "tasks": [{"id": "inspect", "content": "读代码", "status": "in_progress"}],
         },
     )
 
     result = session.execute_tool_call(tool_call)
     session.append_tool_result(tool_call=tool_call, result=result)
 
-    events = store.list_events("sess_todo_state")
-    todo_event = next(event for event in events if event.type == "todo_updated")
-    assert todo_event.payload == {
-        "todos": [{"content": "读代码", "status": "in_progress"}],
-        "task_hash": "task_current",
+    events = [event for event in store.list_events("sess_task_plan_state") if event.type == "task_plan_updated"]
+    assert len(events) == 1
+    assert events[0].payload["previous_revision"] == 0
+    assert events[0].payload["revision"] == 1
+    assert events[0].payload["snapshot"] == {
+        "mode": "linear",
+        "revision": 1,
+        "tasks": [
+            {
+                "id": "inspect",
+                "content": "读代码",
+                "status": "in_progress",
+                "depends_on": [],
+                "owner": None,
+                "order": 0,
+            }
+        ],
     }
-    assert session.rebuild_view().todos == todo_event.payload["todos"]
+    assert session.rebuild_view().task_plan is not None
+    assert session.rebuild_view().task_plan.revision == 1
+
+
+def test_task_plan_noop_update_does_not_write_an_event(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_task_plan_noop")
+    create = ToolCall(
+        id="call_plan_create",
+        name="task_create",
+        arguments={
+            "mode": "linear",
+            "expected_revision": 0,
+            "tasks": [{"id": "inspect", "content": "读代码", "status": "completed"}],
+        },
+    )
+    noop = ToolCall(
+        id="call_plan_noop",
+        name="task_update",
+        arguments={
+            "expected_revision": 1,
+            "updates": [{"id": "inspect", "status": "completed"}],
+        },
+    )
+
+    for tool_call in (create, noop):
+        session.append_tool_result(tool_call=tool_call, result=session.execute_tool_call(tool_call))
+
+    events = [event for event in store.list_events("sess_task_plan_noop") if event.type == "task_plan_updated"]
+    assert len(events) == 1
+    assert session.rebuild_view().task_plan is not None
+    assert session.rebuild_view().task_plan.revision == 1
 
 
 def test_agent_loop_does_not_persist_unexecuted_tool_calls_after_round_limit(tmp_path) -> None:
@@ -1540,7 +1557,7 @@ def test_agent_loop_skips_classification_for_initial_task(tmp_path) -> None:
 
 
 def test_task_boundary_classification_prompt_defines_same_and_uncertain() -> None:
-    prompt = agent_loop._TASK_BOUNDARY_CLASSIFICATION_PROMPT
+    prompt = CLASSIFICATION_PROMPT
 
     assert "continuation or follow-up of the active task" in prompt
     assert "Use \"uncertain\" only when the conversation does not provide enough information" in prompt
@@ -1632,14 +1649,9 @@ def test_agent_loop_streaming_classifies_boundary_without_emitting_stream_events
     assert provider.stream_requests[1].tool_choice == "auto"
 
 
-def test_agent_loop_runs_todo_self_check_before_final_answer(tmp_path) -> None:
+def test_agent_loop_runs_task_plan_reconciliation_before_final_answer(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(
-        store=store,
-        session_id="sess_todo_self_check",
-        agents_md="",
-        tools=[_legacy_plan_fixture_tool()],
-    )
+    session = AgentSession.create(store=store, session_id="sess_task_plan_self_check", agents_md="")
     provider = FakeProvider(
         [
             ChatResponse(
@@ -1648,12 +1660,14 @@ def test_agent_loop_runs_todo_self_check_before_final_answer(tmp_path) -> None:
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_set",
-                        name="todo",
+                        id="call_plan_create",
+                        name="task_create",
                         arguments={
-                            "todos": [
-                                {"content": "读代码", "status": "completed", "priority": "medium"},
-                                {"content": "跑测试", "status": "pending", "priority": "medium"},
+                            "mode": "linear",
+                            "expected_revision": 0,
+                            "tasks": [
+                                {"id": "inspect", "content": "读代码", "status": "completed"},
+                                {"id": "test", "content": "跑测试", "status": "pending"},
                             ],
                         },
                     )
@@ -1675,12 +1689,12 @@ def test_agent_loop_runs_todo_self_check_before_final_answer(tmp_path) -> None:
     assert len(provider.requests) == 3
     reconciliation = provider.requests[2].messages
     assert any(
-        message.role == "system" and "unfinished Todo" in message.content
+        message.role == "system" and "unfinished linear task plan" in message.content
         for message in reconciliation
     )
     assert all(
-        "unfinished Todo" not in part.content
-        for message in store.rebuild_session_view("sess_todo_self_check").messages
+        "unfinished linear task plan" not in part.content
+        for message in store.rebuild_session_view("sess_task_plan_self_check").messages
         for part in message.parts
     )
 
@@ -1697,16 +1711,16 @@ def test_runtime_instruction_is_ephemeral_and_only_applies_to_one_request(tmp_pa
     )
     loop = AgentLoop(session=session, provider=provider)
 
-    loop._complete_once(runtime_instruction="Reconcile Todo state")
+    loop._complete_once(runtime_instruction="Reconcile task plan state")
     loop._complete_once()
 
     assert any(
-        message.role == "system" and message.content == "Reconcile Todo state"
+        message.role == "system" and message.content == "Reconcile task plan state"
         for message in provider.requests[0].messages
     )
-    assert all(message.content != "Reconcile Todo state" for message in provider.requests[1].messages)
+    assert all(message.content != "Reconcile task plan state" for message in provider.requests[1].messages)
     assert all(
-        "Reconcile Todo state" not in part.content
+        "Reconcile task plan state" not in part.content
         for message in session.rebuild_view().messages
         for part in message.parts
     )
@@ -1728,24 +1742,19 @@ def test_runtime_instruction_survives_prompt_too_long_retry(tmp_path) -> None:
         context_manager=PromptTooLongSuccessContextManager(),
     )
 
-    response = loop._complete_once_with_recovery(runtime_instruction="Reconcile Todo state")
+    response = loop._complete_once_with_recovery(runtime_instruction="Reconcile task plan state")
 
     assert response.content == "ok"
     assert len(provider.requests) == 2
     assert all(
-        any(message.role == "system" and message.content == "Reconcile Todo state" for message in request.messages)
+        any(message.role == "system" and message.content == "Reconcile task plan state" for message in request.messages)
         for request in provider.requests
     )
 
 
-def test_agent_loop_skips_todo_self_check_when_all_todos_done(tmp_path) -> None:
+def test_agent_loop_skips_task_plan_reconciliation_when_all_tasks_done(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(
-        store=store,
-        session_id="sess_todo_self_check_done",
-        agents_md="",
-        tools=[_legacy_plan_fixture_tool()],
-    )
+    session = AgentSession.create(store=store, session_id="sess_task_plan_self_check_done", agents_md="")
     provider = FakeProvider(
         [
             ChatResponse(
@@ -1754,12 +1763,14 @@ def test_agent_loop_skips_todo_self_check_when_all_todos_done(tmp_path) -> None:
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_set",
-                        name="todo",
+                        id="call_plan_create",
+                        name="task_create",
                         arguments={
-                            "todos": [
-                                {"content": "读代码", "status": "completed", "priority": "medium"},
-                                {"content": "跑测试", "status": "completed", "priority": "medium"},
+                            "mode": "linear",
+                            "expected_revision": 0,
+                            "tasks": [
+                                {"id": "inspect", "content": "读代码", "status": "completed"},
+                                {"id": "test", "content": "跑测试", "status": "completed"},
                             ],
                         },
                     )
@@ -1780,14 +1791,9 @@ def test_agent_loop_skips_todo_self_check_when_all_todos_done(tmp_path) -> None:
     assert len(provider.requests) == 2
 
 
-def test_agent_loop_skips_todo_self_check_when_all_todos_completed(tmp_path) -> None:
+def test_agent_loop_skips_task_plan_reconciliation_when_all_tasks_completed(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(
-        store=store,
-        session_id="sess_todo_self_check_completed",
-        agents_md="",
-        tools=[_legacy_plan_fixture_tool()],
-    )
+    session = AgentSession.create(store=store, session_id="sess_task_plan_self_check_completed", agents_md="")
     provider = FakeProvider(
         [
             ChatResponse(
@@ -1796,12 +1802,14 @@ def test_agent_loop_skips_todo_self_check_when_all_todos_completed(tmp_path) -> 
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_set",
-                        name="todo",
+                        id="call_plan_create",
+                        name="task_create",
                         arguments={
-                            "todos": [
-                                {"content": "读代码", "status": "completed", "priority": "medium"},
-                                {"content": "跑测试", "status": "completed", "priority": "medium"},
+                            "mode": "linear",
+                            "expected_revision": 0,
+                            "tasks": [
+                                {"id": "inspect", "content": "读代码", "status": "completed"},
+                                {"id": "test", "content": "跑测试", "status": "completed"},
                             ],
                         },
                     )
@@ -1822,13 +1830,13 @@ def test_agent_loop_skips_todo_self_check_when_all_todos_completed(tmp_path) -> 
     assert len(provider.requests) == 2
 
 
-def test_agent_loop_executes_tool_calls_after_todo_self_check(tmp_path) -> None:
+def test_agent_loop_executes_incremental_task_plan_updates_after_reconciliation(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
         store=store,
-        session_id="sess_todo_self_check_tools",
+        session_id="sess_task_plan_self_check_tools",
         agents_md="",
-        tools=[_legacy_plan_fixture_tool(), _echo_tool()],
+        tools=[_echo_tool()],
     )
     provider = FakeProvider(
         [
@@ -1838,10 +1846,12 @@ def test_agent_loop_executes_tool_calls_after_todo_self_check(tmp_path) -> None:
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_set",
-                        name="todo",
+                        id="call_plan_create",
+                        name="task_create",
                         arguments={
-                            "todos": [{"content": "跑测试", "status": "pending", "priority": "medium"}],
+                            "mode": "linear",
+                            "expected_revision": 0,
+                            "tasks": [{"id": "test", "content": "跑测试", "status": "pending"}],
                         },
                     )
                 ],
@@ -1861,10 +1871,11 @@ def test_agent_loop_executes_tool_calls_after_todo_self_check(tmp_path) -> None:
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_done",
-                        name="todo",
+                        id="call_plan_done",
+                        name="task_update",
                         arguments={
-                            "todos": [{"content": "跑测试", "status": "completed", "priority": "medium"}]
+                            "expected_revision": 1,
+                            "updates": [{"id": "test", "status": "completed"}],
                         },
                     )
                 ],
@@ -1881,23 +1892,25 @@ def test_agent_loop_executes_tool_calls_after_todo_self_check(tmp_path) -> None:
     ).run_user_turn("做一个多步骤任务")
 
     assert response.content == "现在完成了"
-    view = store.rebuild_session_view("sess_todo_self_check_tools")
+    view = store.rebuild_session_view("sess_task_plan_self_check_tools")
     tool_result_ids = [
         part.metadata["tool_call_id"]
         for message in view.messages
         for part in message.parts
         if part.kind == "tool_result"
     ]
-    assert tool_result_ids == ["call_todo_set", "call_echo", "call_todo_done"]
+    assert tool_result_ids == ["call_plan_create", "call_echo", "call_plan_done"]
+    plan_events = [event for event in store.list_events("sess_task_plan_self_check_tools") if event.type == "task_plan_updated"]
+    assert [event.payload["revision"] for event in plan_events] == [1, 2]
 
 
-def test_agent_loop_runs_todo_reconciliation_at_most_once_per_user_turn(tmp_path) -> None:
+def test_agent_loop_runs_task_plan_reconciliation_at_most_once_per_user_turn(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
         store=store,
-        session_id="sess_todo_reconciliation_once",
+        session_id="sess_task_plan_reconciliation_once",
         agents_md="",
-        tools=[_legacy_plan_fixture_tool(), _echo_tool()],
+        tools=[_echo_tool()],
     )
     provider = FakeProvider(
         [
@@ -1907,9 +1920,13 @@ def test_agent_loop_runs_todo_reconciliation_at_most_once_per_user_turn(tmp_path
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_set",
-                        name="todo",
-                        arguments={"todos": [{"content": "跑测试", "status": "pending"}]},
+                        id="call_plan_create",
+                        name="task_create",
+                        arguments={
+                            "mode": "linear",
+                            "expected_revision": 0,
+                            "tasks": [{"id": "test", "content": "跑测试", "status": "pending"}],
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -1932,19 +1949,53 @@ def test_agent_loop_runs_todo_reconciliation_at_most_once_per_user_turn(tmp_path
     reconciliation_requests = [
         request
         for request in provider.requests
-        if any(message.role == "system" and "unfinished Todo" in message.content for message in request.messages)
+        if any(message.role == "system" and "unfinished linear task plan" in message.content for message in request.messages)
     ]
     assert len(reconciliation_requests) == 1
 
 
-def test_agent_loop_does_not_reconcile_todo_after_tool_round_limit(tmp_path) -> None:
+def test_agent_loop_resets_task_plan_reconciliation_for_each_user_turn(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(
-        store=store,
-        session_id="sess_todo_tool_limit",
-        agents_md="",
-        tools=[_legacy_plan_fixture_tool()],
+    session = AgentSession.create(store=store, session_id="sess_task_plan_reconciliation_reset", agents_md="")
+    create_call = ToolCall(
+        id="call_plan_create",
+        name="task_create",
+        arguments={
+            "mode": "linear",
+            "expected_revision": 0,
+            "tasks": [{"id": "test", "content": "跑测试", "status": "pending"}],
+        },
     )
+    assert session.execute_tool_call(create_call).ok
+    provider = FakeProvider(
+        [
+            ChatResponse(provider="fake", model="fake-model", content="第一轮先总结"),
+            ChatResponse(provider="fake", model="fake-model", content="第一轮仍有未完成任务"),
+            ChatResponse(provider="fake", model="fake-model", content="第二轮先总结"),
+            ChatResponse(provider="fake", model="fake-model", content="第二轮仍有未完成任务"),
+        ]
+    )
+    loop = AgentLoop(session=session, provider=provider)
+
+    first = loop.run_user_turn("第一轮继续任务")
+    second = loop.run_user_turn("第二轮继续任务")
+
+    assert first.content == "第一轮仍有未完成任务"
+    assert second.content == "第二轮仍有未完成任务"
+    reconciliation_requests = [
+        request
+        for request in provider.requests
+        if any(
+            message.role == "system" and "unfinished linear task plan" in message.content
+            for message in request.messages
+        )
+    ]
+    assert len(reconciliation_requests) == 2
+
+
+def test_agent_loop_does_not_reconcile_task_plan_after_tool_round_limit(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_task_plan_tool_limit", agents_md="")
     provider = FakeProvider(
         [
             ChatResponse(
@@ -1953,9 +2004,13 @@ def test_agent_loop_does_not_reconcile_todo_after_tool_round_limit(tmp_path) -> 
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_set",
-                        name="todo",
-                        arguments={"todos": [{"content": "跑测试", "status": "pending"}]},
+                        id="call_plan_create",
+                        name="task_create",
+                        arguments={
+                            "mode": "linear",
+                            "expected_revision": 0,
+                            "tasks": [{"id": "test", "content": "跑测试", "status": "pending"}],
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -1973,14 +2028,9 @@ def test_agent_loop_does_not_reconcile_todo_after_tool_round_limit(tmp_path) -> 
     assert len(provider.requests) == 1
 
 
-def test_agent_loop_converts_provider_limit_during_todo_reconciliation_to_stop_response(tmp_path) -> None:
+def test_agent_loop_converts_provider_limit_during_task_plan_reconciliation_to_stop_response(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(
-        store=store,
-        session_id="sess_todo_provider_limit",
-        agents_md="",
-        tools=[_legacy_plan_fixture_tool()],
-    )
+    session = AgentSession.create(store=store, session_id="sess_task_plan_provider_limit", agents_md="")
     provider = FakeProvider(
         [
             ChatResponse(
@@ -1989,9 +2039,13 @@ def test_agent_loop_converts_provider_limit_during_todo_reconciliation_to_stop_r
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_set",
-                        name="todo",
-                        arguments={"todos": [{"content": "跑测试", "status": "pending"}]},
+                        id="call_plan_create",
+                        name="task_create",
+                        arguments={
+                            "mode": "linear",
+                            "expected_revision": 0,
+                            "tasks": [{"id": "test", "content": "跑测试", "status": "pending"}],
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -2010,14 +2064,9 @@ def test_agent_loop_converts_provider_limit_during_todo_reconciliation_to_stop_r
     assert len(provider.requests) == 2
 
 
-def test_agent_loop_converts_timeout_during_todo_reconciliation_to_stop_response(tmp_path) -> None:
+def test_agent_loop_converts_timeout_during_task_plan_reconciliation_to_stop_response(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(
-        store=store,
-        session_id="sess_todo_timeout",
-        agents_md="",
-        tools=[_legacy_plan_fixture_tool()],
-    )
+    session = AgentSession.create(store=store, session_id="sess_task_plan_timeout", agents_md="")
     provider = FakeProvider(
         [
             ChatResponse(
@@ -2026,9 +2075,13 @@ def test_agent_loop_converts_timeout_during_todo_reconciliation_to_stop_response
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_set",
-                        name="todo",
-                        arguments={"todos": [{"content": "跑测试", "status": "pending"}]},
+                        id="call_plan_create",
+                        name="task_create",
+                        arguments={
+                            "mode": "linear",
+                            "expected_revision": 0,
+                            "tasks": [{"id": "test", "content": "跑测试", "status": "pending"}],
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -2048,14 +2101,9 @@ def test_agent_loop_converts_timeout_during_todo_reconciliation_to_stop_response
     assert len(provider.requests) == 2
 
 
-def test_agent_loop_converts_cancellation_during_todo_reconciliation_to_interrupted_response(tmp_path) -> None:
+def test_agent_loop_converts_cancellation_during_task_plan_reconciliation_to_interrupted_response(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(
-        store=store,
-        session_id="sess_todo_cancelled",
-        agents_md="",
-        tools=[_legacy_plan_fixture_tool()],
-    )
+    session = AgentSession.create(store=store, session_id="sess_task_plan_cancelled", agents_md="")
     token = CancellationToken()
     provider = CancellingProvider(
         responses=[
@@ -2065,9 +2113,13 @@ def test_agent_loop_converts_cancellation_during_todo_reconciliation_to_interrup
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_set",
-                        name="todo",
-                        arguments={"todos": [{"content": "跑测试", "status": "pending"}]},
+                        id="call_plan_create",
+                        name="task_create",
+                        arguments={
+                            "mode": "linear",
+                            "expected_revision": 0,
+                            "tasks": [{"id": "test", "content": "跑测试", "status": "pending"}],
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -2087,13 +2139,13 @@ def test_agent_loop_converts_cancellation_during_todo_reconciliation_to_interrup
     assert len(provider.requests) == 2
 
 
-def test_agent_loop_propagates_prewrite_review_from_todo_self_check_without_duplicate_call(tmp_path) -> None:
+def test_agent_loop_propagates_prewrite_review_from_task_plan_reconciliation_without_duplicate_call(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path / ".firstcoder")
     session = AgentSession.from_project(
         store=store,
-        session_id="sess_todo_review_pause",
+        session_id="sess_task_plan_review_pause",
         project_root=tmp_path,
-        tools=[_legacy_plan_fixture_tool(), create_write_tool(tmp_path)],
+        tools=[create_write_tool(tmp_path)],
     )
     provider = FakeProvider(
         [
@@ -2103,10 +2155,12 @@ def test_agent_loop_propagates_prewrite_review_from_todo_self_check_without_dupl
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_set",
-                        name="todo",
+                        id="call_plan_create",
+                        name="task_create",
                         arguments={
-                            "todos": [{"content": "写文件", "status": "pending", "priority": "medium"}],
+                            "mode": "linear",
+                            "expected_revision": 0,
+                            "tasks": [{"id": "write_readme", "content": "写文件", "status": "pending"}],
                         },
                     )
                 ],
@@ -2132,10 +2186,11 @@ def test_agent_loop_propagates_prewrite_review_from_todo_self_check_without_dupl
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_done_after_write",
-                        name="todo",
+                        id="call_plan_done_after_write",
+                        name="task_update",
                         arguments={
-                            "todos": [{"content": "写文件", "status": "completed", "priority": "medium"}]
+                            "expected_revision": 1,
+                            "updates": [{"id": "write_readme", "status": "completed"}],
                         },
                     )
                 ],
@@ -2153,7 +2208,7 @@ def test_agent_loop_propagates_prewrite_review_from_todo_self_check_without_dupl
     assert result.pending_input.payload["pending_tool_call"]["id"] == "call_write_from_self_check"
     call_ids = [
         part.metadata["tool_call_id"]
-        for message in store.rebuild_session_view("sess_todo_review_pause").messages
+        for message in store.rebuild_session_view("sess_task_plan_review_pause").messages
         for part in message.parts
         if part.kind == "tool_call"
     ]
@@ -2165,20 +2220,20 @@ def test_agent_loop_propagates_prewrite_review_from_todo_self_check_without_dupl
     assert resumed.response is not None
     assert resumed.response.content == "写入完成"
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "hello"
-    assert [message.role for message in store.rebuild_session_view("sess_todo_review_pause").messages][-3:] == [
+    assert [message.role for message in store.rebuild_session_view("sess_task_plan_review_pause").messages][-3:] == [
         "assistant",
         "tool",
         "assistant",
     ]
 
 
-def test_permission_resume_does_not_repeat_todo_reconciliation_for_same_user_turn(tmp_path) -> None:
+def test_permission_resume_does_not_repeat_task_plan_reconciliation_for_same_user_turn(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path / ".firstcoder")
     session = AgentSession.from_project(
         store=store,
-        session_id="sess_todo_review_once",
+        session_id="sess_task_plan_review_once",
         project_root=tmp_path,
-        tools=[_legacy_plan_fixture_tool(), create_write_tool(tmp_path)],
+        tools=[create_write_tool(tmp_path)],
     )
     provider = FakeProvider(
         [
@@ -2188,9 +2243,13 @@ def test_permission_resume_does_not_repeat_todo_reconciliation_for_same_user_tur
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_set",
-                        name="todo",
-                        arguments={"todos": [{"content": "写文件", "status": "pending"}]},
+                        id="call_plan_create",
+                        name="task_create",
+                        arguments={
+                            "mode": "linear",
+                            "expected_revision": 0,
+                            "tasks": [{"id": "write_readme", "content": "写文件", "status": "pending"}],
+                        },
                     )
                 ],
                 finish_reason="tool_calls",
@@ -2209,7 +2268,7 @@ def test_permission_resume_does_not_repeat_todo_reconciliation_for_same_user_tur
                 ],
                 finish_reason="tool_calls",
             ),
-            ChatResponse(provider="fake", model="fake-model", content="写入完成，但 Todo 尚未更新"),
+            ChatResponse(provider="fake", model="fake-model", content="写入完成，但任务计划尚未更新"),
             ChatResponse(provider="fake", model="fake-model", content="不应再次对账"),
         ]
     )
@@ -2220,22 +2279,22 @@ def test_permission_resume_does_not_repeat_todo_reconciliation_for_same_user_tur
     resumed = loop.resume_with_user_input(paused.pending_input.id, "allow_once")
 
     assert resumed.response is not None
-    assert resumed.response.content == "写入完成，但 Todo 尚未更新"
+    assert resumed.response.content == "写入完成，但任务计划尚未更新"
     reconciliation_requests = [
         request
         for request in provider.requests
-        if any(message.role == "system" and "unfinished Todo" in message.content for message in request.messages)
+        if any(message.role == "system" and "unfinished linear task plan" in message.content for message in request.messages)
     ]
     assert len(reconciliation_requests) == 1
 
 
-def test_agent_loop_streaming_propagates_prewrite_review_from_todo_self_check_without_duplicate_call(tmp_path) -> None:
+def test_agent_loop_streaming_propagates_prewrite_review_from_task_plan_reconciliation_without_duplicate_call(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path / ".firstcoder")
     session = AgentSession.from_project(
         store=store,
-        session_id="sess_stream_todo_review_pause",
+        session_id="sess_stream_task_plan_review_pause",
         project_root=tmp_path,
-        tools=[_legacy_plan_fixture_tool(), create_write_tool(tmp_path)],
+        tools=[create_write_tool(tmp_path)],
     )
     provider = StreamingProvider(
         [
@@ -2245,10 +2304,12 @@ def test_agent_loop_streaming_propagates_prewrite_review_from_todo_self_check_wi
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_set",
-                        name="todo",
+                        id="call_plan_create",
+                        name="task_create",
                         arguments={
-                            "todos": [{"content": "写文件", "status": "pending", "priority": "medium"}],
+                            "mode": "linear",
+                            "expected_revision": 0,
+                            "tasks": [{"id": "write_readme", "content": "写文件", "status": "pending"}],
                         },
                     )
                 ],
@@ -2278,7 +2339,7 @@ def test_agent_loop_streaming_propagates_prewrite_review_from_todo_self_check_wi
     assert pending.payload["pending_tool_call"]["id"] == "call_stream_write_from_self_check"
     call_ids = [
         part.metadata["tool_call_id"]
-        for message in store.rebuild_session_view("sess_stream_todo_review_pause").messages
+        for message in store.rebuild_session_view("sess_stream_task_plan_review_pause").messages
         for part in message.parts
         if part.kind == "tool_call"
     ]
@@ -2324,13 +2385,13 @@ def test_agent_loop_injects_guidance_before_next_provider_call(tmp_path) -> None
     assert guidance == []
 
 
-def test_agent_loop_does_not_inject_periodic_todo_user_messages(tmp_path) -> None:
+def test_agent_loop_does_not_persist_task_plan_reconciliation_as_user_message(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
         store=store,
-        session_id="sess_no_todo_reminders",
+        session_id="sess_no_task_plan_reminders",
         agents_md="",
-        tools=[create_todo_tool(), _echo_tool()],
+        tools=[_echo_tool()],
     )
     provider = FakeProvider(
         [
@@ -2340,12 +2401,14 @@ def test_agent_loop_does_not_inject_periodic_todo_user_messages(tmp_path) -> Non
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo",
-                        name="todo",
+                        id="call_plan_create",
+                        name="task_create",
                         arguments={
-                            "todos": [
-                                {"content": "检查实现", "status": "in_progress"},
-                                {"content": "运行测试", "status": "pending"},
+                            "mode": "linear",
+                            "expected_revision": 0,
+                            "tasks": [
+                                {"id": "inspect", "content": "检查实现", "status": "in_progress"},
+                                {"id": "test", "content": "运行测试", "status": "pending"},
                             ]
                         },
                     )
@@ -2368,12 +2431,13 @@ def test_agent_loop_does_not_inject_periodic_todo_user_messages(tmp_path) -> Non
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="call_todo_done",
-                        name="todo",
+                        id="call_plan_done",
+                        name="task_update",
                         arguments={
-                            "todos": [
-                                {"content": "检查实现", "status": "completed"},
-                                {"content": "运行测试", "status": "completed"},
+                            "expected_revision": 1,
+                            "updates": [
+                                {"id": "inspect", "status": "completed"},
+                                {"id": "test", "status": "completed"},
                             ]
                         },
                     )
@@ -2392,8 +2456,7 @@ def test_agent_loop_does_not_inject_periodic_todo_user_messages(tmp_path) -> Non
         for message in request.messages
         if message.role == "user"
     ]
-    assert all("Todo planning reminder" not in text for text in projected_user_messages)
-    assert all("Todo progress reminder" not in text for text in projected_user_messages)
+    assert all("unfinished linear task plan" not in text for text in projected_user_messages)
     assert [message.role for message in session.rebuild_view().messages].count("user") == 1
 
 
@@ -3574,3 +3637,108 @@ def test_agent_loop_permission_resume_ignores_nested_ui_argument_tampering(tmp_p
 
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "safe"
     assert not (tmp_path / "pwned.txt").exists()
+
+
+def test_agent_loop_reconciles_unfinished_dag_task_plan_before_final_answer(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_dag_task_plan_self_check", agents_md="")
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_plan_create",
+                        name="task_create",
+                        arguments={
+                            "mode": "dag",
+                            "expected_revision": 0,
+                            "tasks": [
+                                {"id": "research", "content": "Research", "status": "completed"},
+                                {
+                                    "id": "code",
+                                    "content": "Code",
+                                    "status": "pending",
+                                    "depends_on": ["research"],
+                                },
+                            ],
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="我完成了"),
+            ChatResponse(provider="fake", model="fake-model", content="还需要完成 Code 节点。"),
+        ]
+    )
+
+    response = AgentLoop(
+        session=session,
+        provider=provider,
+        limits=AgentLoopLimits(max_tool_rounds=5, max_provider_calls=5, max_turn_seconds=None),
+    ).run_user_turn("做一个有依赖的任务")
+
+    assert response.content == "还需要完成 Code 节点。"
+    assert len(provider.requests) == 3
+    reconciliation = provider.requests[2].messages
+    assert any(
+        message.role == "system" and "unfinished dag task plan" in message.content
+        for message in reconciliation
+    )
+    assert all(
+        "unfinished dag task plan" not in part.content
+        for message in store.rebuild_session_view("sess_dag_task_plan_self_check").messages
+        for part in message.parts
+    )
+
+
+def test_agent_loop_runs_dag_task_plan_reconciliation_at_most_once_per_user_turn(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(
+        store=store,
+        session_id="sess_dag_task_plan_reconcile_once",
+        agents_md="",
+        tools=[_echo_tool()],
+    )
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_plan_create",
+                        name="task_create",
+                        arguments={
+                            "mode": "dag",
+                            "expected_revision": 0,
+                            "tasks": [{"id": "code", "content": "Code", "status": "pending"}],
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="我完成了"),
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[ToolCall(id="call_echo", name="echo", arguments={"text": "check"})],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="仍有未完成图节点"),
+        ]
+    )
+
+    response = AgentLoop(session=session, provider=provider).run_user_turn("执行 DAG 任务")
+
+    assert response.content == "仍有未完成图节点"
+    reconciliation_requests = [
+        request
+        for request in provider.requests
+        if any(message.role == "system" and "unfinished dag task plan" in message.content for message in request.messages)
+    ]
+    assert len(reconciliation_requests) == 1

@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import re
+import ipaddress
 from pathlib import Path
+from urllib.parse import urlparse
 
 from firstcoder.permissions.types import (
     PermissionAction,
@@ -38,7 +40,6 @@ _AGGRESSIVE_ALLOWED_COMMANDS = (
     "cargo test",
     "make test",
 )
-_AGGRESSIVE_ALLOWED_EXECUTABLES = ("python", "python3", "sqlite3")
 _DANGEROUS_SHELL_PREFIXES = (
     "rm",
     "sudo",
@@ -76,15 +77,17 @@ class DefaultPermissionPolicy:
         if request.action == PermissionAction.EXECUTE_SHELL:
             return self._decide_shell(request, mode=mode)
         if request.action == PermissionAction.NETWORK_REQUEST:
+            if _is_private_network_target(request.target):
+                return self._ask("访问本机、内网或链路本地地址需要用户确认。")
             return self._ask("网络请求需要用户确认。")
         if request.action == PermissionAction.MCP_TOOL:
             return self._ask("MCP 工具调用需要用户确认。")
         return self._ask("未知权限请求需要用户确认。")
 
     def _decide_path(self, request: PermissionRequest, *, mode: PermissionMode) -> PermissionDecision:
-        target = self._resolve_path(request.target, cwd=request.cwd)
-        inside_root = self._is_inside_project(target)
-        sensitive = self._is_sensitive_path(target)
+        targets = self._resolve_paths(request.target, cwd=request.cwd)
+        inside_root = all(self._is_inside_project(target) for target in targets)
+        sensitive = any(self._is_sensitive_path(target) for target in targets)
 
         if request.action == PermissionAction.READ_PATH:
             if inside_root and not sensitive:
@@ -128,6 +131,8 @@ class DefaultPermissionPolicy:
         command = request.target.strip()
         if _has_shell_control_operator(command):
             return self._ask("包含 shell 控制符的命令需要用户确认。")
+        if not bool(request.metadata.get("allow_auto", True)):
+            return self._ask("该 shell 操作需要用户确认。")
         if mode == PermissionMode.AGGRESSIVE and self._request_cwd_inside_root(request):
             if _is_dangerous_shell_command(command):
                 return self._ask("高风险 shell 命令需要用户确认。")
@@ -140,6 +145,12 @@ class DefaultPermissionPolicy:
         if not path.is_absolute():
             path = (cwd or self.project_root) / path
         return path.resolve()
+
+    def _resolve_paths(self, value: str, *, cwd: Path | None) -> list[Path]:
+        values = [part.strip() for part in value.splitlines() if part.strip()]
+        if not values:
+            values = [part.strip() for part in value.split(", ") if part.strip()]
+        return [self._resolve_path(part, cwd=cwd) for part in values or [value]]
 
     def _is_inside_project(self, path: Path) -> bool:
         return path == self.project_root or self.project_root in path.parents
@@ -178,9 +189,7 @@ def _command_matches_prefix(command: str, prefix: str) -> bool:
 
 
 def _is_aggressive_allowed_shell_command(command: str) -> bool:
-    if any(_command_matches_prefix(command, prefix) for prefix in _AGGRESSIVE_ALLOWED_COMMANDS):
-        return True
-    return _first_token(command) in _AGGRESSIVE_ALLOWED_EXECUTABLES
+    return any(_command_matches_prefix(command, prefix) for prefix in _AGGRESSIVE_ALLOWED_COMMANDS)
 
 
 def _is_dangerous_shell_command(command: str) -> bool:
@@ -194,3 +203,23 @@ def _first_token(command: str) -> str:
 
 def _has_shell_control_operator(command: str) -> bool:
     return bool(_SHELL_CONTROL_PATTERN.search(command))
+
+
+def _is_private_network_target(target: str) -> bool:
+    parsed = urlparse(target)
+    hostname = parsed.hostname or target.split("/", 1)[0].split(":", 1)[0]
+    hostname = hostname.rstrip(".").lower()
+    if hostname in {"localhost", "ip6-localhost"} or hostname.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname.strip("[]"))
+    except ValueError:
+        return False
+    return (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_unspecified
+        or address.is_reserved
+    )

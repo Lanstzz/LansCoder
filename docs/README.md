@@ -47,6 +47,7 @@ mental model, not memorize a directory tree.
 | How can long conversations fit a model context window? | [Context Management Design](CONTEXT_MANAGEMENT_DESIGN.md) / [中文](CONTEXT_MANAGEMENT_DESIGN.zh-CN.md) |
 | Why does a write or shell call need approval? | [Permissions Design](PERMISSIONS_DESIGN.md) / [中文](PERMISSIONS_DESIGN.zh-CN.md) |
 | How are function schemas and executors connected? | [Tools Design](TOOLS_DESIGN.md) / [中文](TOOLS_DESIGN.zh-CN.md) |
+| How does incremental task tracking work? | [Unified TaskPlan implementation plan](superpowers/plans/2026-07-21-unified-task-plan.md) |
 | How are OpenAI-compatible and Anthropic protocols normalized? | [Providers Design](PROVIDERS_DESIGN.md) / [中文](PROVIDERS_DESIGN.zh-CN.md) |
 | How are local skills found and safely loaded? | [Skill System Design](SKILL_SYSTEM_DESIGN.md) / [中文](SKILL_SYSTEM_DESIGN.zh-CN.md) |
 | How are external MCP tools configured and permissioned? | [MCP Client](MCP.md) / [中文](MCP.zh-CN.md) |

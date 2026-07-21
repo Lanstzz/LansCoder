@@ -258,7 +258,7 @@ def test_task_hash_event_records_stable_window_state() -> None:
     observation = service.observe(state, decision=TaskBoundaryDecision.NEW, basis_message_id="msg_new")
     event = service.to_event(session_id="sess_test", observation=observation)
 
-    assert event.payload["event_version"] == "v1"
+    assert event.payload["event_version"] == "v2"
     assert event.payload["strategy_version"] == "v1"
     assert event.payload["active_hash"] == "task_active"
     assert event.payload["active_task_hash"] == "task_active"

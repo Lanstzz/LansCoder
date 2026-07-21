@@ -95,16 +95,20 @@ def test_bypass_mode_lets_existing_tools_access_outside_project(tmp_path) -> Non
         sandbox_access=access,
     )
 
-    denied = session.tool_registry.execute("view", {"path": str(outside)})
+    confirmation = session.tool_registry.execute("view", {"path": str(outside)})
     session.set_permission_mode(PermissionMode.BYPASS)
     allowed = session.tool_registry.execute("view", {"path": str(outside)})
     session.set_permission_mode(PermissionMode.STANDARD)
-    denied_again = session.tool_registry.execute("view", {"path": str(outside)})
+    confirmation_again = session.tool_registry.execute("view", {"path": str(outside)})
 
-    assert denied.ok is False
+    assert confirmation.ok is True
+    assert confirmation.data["requires_user_input"] is True
+    assert confirmation.data["permission_request"]["action"] == "read_path"
     assert allowed.ok is True
     assert "secret" in allowed.content
-    assert denied_again.ok is False
+    assert confirmation_again.ok is True
+    assert confirmation_again.data["requires_user_input"] is True
+    assert confirmation_again.data["permission_request"]["action"] == "read_path"
 
 
 def test_permission_mode_command_rejects_unknown_mode(tmp_path) -> None:

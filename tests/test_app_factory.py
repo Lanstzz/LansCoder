@@ -1,7 +1,10 @@
 from dataclasses import dataclass, field
 from pathlib import Path
+import threading
 
+from firstcoder.agent.loop import AgentLoop
 from firstcoder.agent.loop_limits import AgentLoopLimits
+from firstcoder.agent.session import AgentSession
 from firstcoder.app.factory import create_firstcoder_app
 from firstcoder.app.model_state import ModelStateStore
 from firstcoder.app.router import CompositeCommandHandler
@@ -12,7 +15,7 @@ from firstcoder.context.llm_compact import LlmCompactService
 from firstcoder.providers.base import ChatProvider
 from firstcoder.providers.types import ChatRequest, ChatResponse, ProviderCapabilities, ToolCall
 from firstcoder.tools.write import create_write_tool
-from firstcoder.tools.types import Tool
+from firstcoder.tools.types import Tool, make_text_result
 from firstcoder.providers.types import ToolDefinition
 from firstcoder.mcp.models import McpServerStatus, McpToolDescription
 
@@ -494,6 +497,56 @@ def test_create_firstcoder_app_can_use_default_builtin_tools(tmp_path: Path) -> 
     assert "shell" in names
     assert "fetch" in names
     assert "web_search" in names
+
+
+def test_factory_background_controls_remain_session_scoped(tmp_path: Path) -> None:
+    app = create_firstcoder_app(
+        project_root=tmp_path,
+        data_root=tmp_path / ".firstcoder",
+        provider=FakeProvider([]),
+        session_id="sess_factory_a",
+    )
+    manager = app.chat_runner.background_manager
+    assert manager is not None
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    session_a = app.current_session.session
+    session_b = AgentSession.create(
+        store=store,
+        session_id="sess_factory_b",
+        tools=list(app.chat_runner.tools or []),
+    )
+    loop_a = AgentLoop(session=session_a, provider=FakeProvider([]), background_manager=manager)
+    loop_b = AgentLoop(session=session_b, provider=FakeProvider([]), background_manager=manager)
+    started = threading.Event()
+    release = threading.Event()
+    try:
+        manager.start(
+            lambda: (started.set(), release.wait(5), make_text_result("shell", "done"))[2],
+            session_id=session_a.session_id,
+            tool_name="shell",
+        )
+        assert started.wait(timeout=5) is True
+
+        assert session_b.tool_registry.execute("background_status", {}).data["jobs"] == []
+        assert session_b.tool_registry.execute("background_cancel", {"job_id": "bg_0001"}).ok is False
+
+        release.set()
+        assert manager.wait(timeout=5) is True
+        loop_b._append_background_notifications()
+        assert not any(
+            message.role == "user" and "<task_notification>" in message.parts[0].content
+            for message in session_b.rebuild_view().messages
+        )
+
+        loop_a._append_background_notifications()
+        assert sum(
+            1
+            for message in session_a.rebuild_view().messages
+            if message.role == "user" and "<task_notification>" in message.parts[0].content
+        ) == 1
+    finally:
+        release.set()
+        manager.shutdown()
 
 
 def test_create_firstcoder_app_hides_task_boundary_from_main_model(tmp_path: Path) -> None:

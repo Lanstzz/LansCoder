@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from urllib import error, parse, request
 
 from firstcoder.permissions.types import PermissionAction
@@ -23,6 +24,8 @@ def create_fetch_tool() -> Tool:
         parsed = parse.urlparse(url)
         if parsed.scheme not in ("http", "https"):
             return make_error_result("fetch", "只支持 http 和 https URL")
+        if _is_private_or_local_url(parsed):
+            return make_error_result("fetch", "拒绝访问本机、内网或链路本地地址")
         if timeout_seconds <= 0:
             return make_error_result("fetch", "timeout_seconds 必须大于 0")
         if max_chars <= 0:
@@ -56,3 +59,23 @@ def create_fetch_tool() -> Tool:
         reason="网络请求需要用户确认。",
     )
     return tool
+
+
+def _is_private_or_local_url(parsed: parse.ParseResult) -> bool:
+    hostname = (parsed.hostname or "").rstrip(".").lower()
+    if not hostname:
+        return True
+    if hostname in {"localhost", "ip6-localhost"} or hostname.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname.strip("[]"))
+    except ValueError:
+        return False
+    return (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_unspecified
+        or address.is_reserved
+    )

@@ -347,3 +347,51 @@ def test_context_builder_accepts_parallel_tool_calls_split_across_tool_messages(
     assert messages[0].tool_calls[1].id == "call_2"
     assert messages[1].tool_call_id == "call_1"
     assert messages[2].tool_call_id == "call_2"
+
+
+def test_session_registry_adds_task_plan_tools_for_live_sessions(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
+
+    assert "task_boundary" in session.tool_registry.names()
+    assert {"task_create", "task_update", "task_revise", "task_list"}.issubset(
+        session.tool_registry.names()
+    )
+
+
+def test_agent_session_task_plan_tool_writes_one_event_before_tool_result(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_task_plan_capture", agents_md="")
+    tool_call = ToolCall(
+        id="call_plan",
+        name="task_create",
+        arguments={
+            "mode": "dag",
+            "expected_revision": 0,
+            "tasks": [
+                {"id": "research", "content": "Research", "status": "completed"},
+                {"id": "code", "content": "Code", "depends_on": ["research"]},
+            ],
+        },
+    )
+
+    result = session.tool_registry.execute(tool_call.name, tool_call.arguments)
+    before_tool_result = [
+        event for event in store.list_events("sess_task_plan_capture")
+        if event.type == "task_plan_updated"
+    ]
+    session.append_tool_result(tool_call=tool_call, result=result)
+    plan_events = [
+        event for event in store.list_events("sess_task_plan_capture")
+        if event.type == "task_plan_updated"
+    ]
+    view = store.rebuild_session_view("sess_task_plan_capture")
+
+    assert result.ok is True
+    assert len(before_tool_result) == 1
+    assert len(plan_events) == 1
+    assert view.task_plan is not None
+    assert view.task_plan.revision == 1
+    assert [task.id for task in view.task_plan.tasks] == ["research", "code"]
+    assert view.messages[-1].role == "tool"
+    assert view.messages[-1].parts[0].metadata["tool_name"] == "task_create"

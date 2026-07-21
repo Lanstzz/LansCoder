@@ -33,6 +33,7 @@
 | 长对话怎样放进模型上下文窗口？ | [上下文管理](CONTEXT_MANAGEMENT_DESIGN.zh-CN.md) / [English](CONTEXT_MANAGEMENT_DESIGN.md) |
 | 为什么写文件、执行 shell 要确认？ | [权限设计](PERMISSIONS_DESIGN.zh-CN.md) / [English](PERMISSIONS_DESIGN.md) |
 | 函数 schema 和本地执行器怎样对应？ | [工具设计](TOOLS_DESIGN.zh-CN.md) / [English](TOOLS_DESIGN.md) |
+| 增量任务跟踪怎样工作？ | [统一 TaskPlan 实施计划](superpowers/plans/2026-07-21-unified-task-plan.md) |
 | 多家模型协议怎样被统一？ | [Provider 设计](PROVIDERS_DESIGN.zh-CN.md) / [English](PROVIDERS_DESIGN.md) |
 | 本地 Skill 怎样发现、路由和安全加载？ | [Skill 系统设计](SKILL_SYSTEM_DESIGN.zh-CN.md) / [English](SKILL_SYSTEM_DESIGN.md) |
 | 外部 MCP 工具怎样配置并经过权限控制？ | [MCP 客户端](MCP.zh-CN.md) / [English](MCP.md) |

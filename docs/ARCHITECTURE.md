@@ -209,8 +209,9 @@ agent.loop.AgentLoop
          permission, allowed/aggressive paths ask for review-only Apply
        on allow: execute; append tool result fact
   7. settle according to AgentLoopLimits; verification results return to the model as evidence
-  8. if the model stops with unfinished active-task Todos, send one ephemeral
-     system instruction to reconcile them; it is neither a user message nor a durable fact
+  8. if the model stops with unfinished active-task-plan work, send one
+     ephemeral system instruction to reconcile it; it is neither a user message
+     nor a durable fact
   │
   ▼
 runtime events → AgentChatRunner → TUI transcript / activity / permission UI
@@ -223,17 +224,25 @@ runtime events → AgentChatRunner → TUI transcript / activity / permission UI
 | `.firstcoder/sessions/<id>.jsonl` facts | `SessionRuntimeState` |
 | `.firstcoder/attachments/<session-id>/` staged attachment bytes | pending attachment chips in the composer |
 | permission grants file (`permissions.json`) | pending permission original tool_call |
-| `todo_updated` snapshots replayed into `SessionView.todos` | current review-card expansion state |
+| `task_plan_updated` snapshots replayed into `SessionView.task_plan` | current review-card expansion state |
 | skill files on disk | prompt prefix cache |
 | MCP server configs | live MCP connections |
 
 Resume rebuilds what it can by replaying JSONL. Anything that must not be lost
 across restarts must be a fact or an explicit grant—not only a Python object.
 
-Successful Todo tool results also emit runtime tool events so the TUI refreshes
-immediately. Replay later projects the same complete `todo_updated` snapshot;
-the UI labels it as model-reported state and does not infer completion from
-commands, file mutations, or passing tests.
+Successful TaskPlan mutations emit runtime tool events so the TUI refreshes
+immediately. Replay later projects the same `task_plan_updated` snapshot; the
+UI labels it as model-reported state and does not infer completion from commands,
+file mutations, or passing tests. `linear` plans derive their sequence from
+stable order; `dag` plans use explicit dependencies. All ordinary mutations
+address stable task IDs and carry the current revision. A revision conflict is
+resolved by reading `task_list` and retrying; it is never resolved by replacing
+the whole plan.
+
+TaskPlan sessions use a strict schema boundary. Resume and fork reject old,
+missing-version, and future-version event schemas before rebuilding state. There
+is no migration, legacy-event fallback, or tool-result reconstruction path.
 
 ### Key objects that cross boundaries
 
@@ -317,7 +326,7 @@ Related modules (splits of loop concerns):
 | `agent/tool_flow.py` | Flow control around tool batches |
 | `agent/tool_settlement.py` | Settling tool outcomes into the turn |
 | `agent/task_boundary_classifier.py` | Task-boundary classification |
-| `agent/todo_policy.py` | Active-task Todo lookup and one-time final reconciliation instruction |
+| `agent/task_plan_policy.py` | Active TaskPlan lookup and one-time final reconciliation instruction |
 | `agent/loop_limits.py` | Budgets and stop-reason enums |
 
 ### Compact trigger helpers

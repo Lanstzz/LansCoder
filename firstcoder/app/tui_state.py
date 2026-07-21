@@ -48,10 +48,10 @@ class TuiToolActivity:
 
 
 @dataclass(slots=True)
-class TuiTodoItem:
-    content: str
-    status: str = "pending"
-    priority: str = "medium"
+class TuiTaskPlanPanelState:
+    """Render bookkeeping for the canonical session task plan."""
+
+    last_rendered_revision: int | None = None
 
 
 @dataclass(slots=True)
@@ -59,7 +59,6 @@ class TuiTranscript:
     entries: list[TuiTranscriptEntry] = field(default_factory=list)
     active_tool: TuiToolActivity | None = None
     recent_tools: list[TuiToolActivity] = field(default_factory=list)
-    todos: list[TuiTodoItem] = field(default_factory=list)
     _next_id: int = 1
 
     def add(
@@ -89,15 +88,3 @@ class TuiTranscript:
         self.active_tool = None
         self.recent_tools.append(activity)
         return activity
-
-    def update_todos(self, todos: list[dict[str, object]]) -> list[TuiTodoItem]:
-        self.todos = [
-            TuiTodoItem(
-                content=str(item.get("content") or ""),
-                status=str(item.get("status") or "pending"),
-                priority=str(item.get("priority") or "medium"),
-            )
-            for item in todos
-            if str(item.get("content") or "")
-        ]
-        return self.todos

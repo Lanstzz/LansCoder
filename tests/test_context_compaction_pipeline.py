@@ -152,7 +152,7 @@ def test_compaction_event_records_full_schema(tmp_path: Path) -> None:
         )
     )
 
-    assert result.event.event_version == "v1"
+    assert result.event.event_version == "v2"
     assert result.event.strategy_version == "v2"
     assert result.event.reason in {"l1", "l2", "l3", "not_reached"}
     assert result.event.target_tokens == 1

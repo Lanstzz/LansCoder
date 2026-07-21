@@ -1,10 +1,10 @@
-"""Activity-line, tool-event, and todo rendering helpers."""
+"""Activity-line, tool-event, and task-plan rendering helpers."""
 
 from __future__ import annotations
 
-from rich.markup import escape
+from collections.abc import Mapping
 
-from firstcoder.app.tui_state import TuiTodoItem
+from rich.markup import escape
 
 
 def activity_markup(text: str) -> str:
@@ -98,18 +98,90 @@ def post_tool_reasoning_text(name: str) -> str:
     return f"reading {name} result"
 
 
-def todo_panel_text(todos: list[TuiTodoItem]) -> str:
-    lines = ["Todo · model reported"]
-    for item in todos:
-        marker = "[ ]"
-        if item.status in {"completed", "done"}:
-            marker = "[✓]"
-        elif item.status == "in_progress":
-            marker = "[~]"
-        elif item.status == "cancelled":
-            marker = "[-]"
-        lines.append(f"{marker} {item.content}")
+def task_plan_panel_text(projection: Mapping[str, object]) -> str:
+    """Render one canonical task-plan projection without retaining plan data."""
+
+    mode = str(projection["mode"])
+    tasks = _task_lookup(projection.get("tasks"))
+    ready = _task_id_set(projection.get("ready_task_ids"))
+    blocked = _task_id_set(projection.get("blocked_task_ids"))
+
+    if mode == "linear":
+        lines = ["Task Plan · linear"]
+        for task_id, task in sorted(tasks.items(), key=_task_order_key):
+            lines.append(f"{_task_marker(task_id, task, ready, blocked)} {task['content']}")
+        return "\n".join(lines)
+
+    lines = ["Task Plan · dag"]
+    for level_index, level in enumerate(_topological_levels(projection.get("topological_levels"))):
+        suffix = " · parallel" if len(level) > 1 else ""
+        lines.append(f"Level {level_index}{suffix}")
+        for task_id in level:
+            task = tasks[task_id]
+            dependency_text = _dependency_text(task)
+            lines.append(
+                f"  {_task_marker(task_id, task, ready, blocked)} {task['content']} ({task_id}){dependency_text}"
+            )
     return "\n".join(lines)
+
+
+def _task_lookup(value: object) -> dict[str, dict[str, object]]:
+    if not isinstance(value, list):
+        return {}
+    return {
+        str(task["id"]): dict(task)
+        for task in value
+        if isinstance(task, Mapping) and isinstance(task.get("id"), str) and isinstance(task.get("content"), str)
+    }
+
+
+def _task_id_set(value: object) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {task_id for task_id in value if isinstance(task_id, str)}
+
+
+def _task_order_key(item: tuple[str, dict[str, object]]) -> tuple[int, str]:
+    task_id, task = item
+    order = task.get("order")
+    return (order if isinstance(order, int) else 0, task_id)
+
+
+def _topological_levels(value: object) -> list[list[str]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        [task_id for task_id in level if isinstance(task_id, str)]
+        for level in value
+        if isinstance(level, list)
+    ]
+
+
+def _task_marker(
+    task_id: str,
+    task: Mapping[str, object],
+    ready: set[str],
+    blocked: set[str],
+) -> str:
+    status = task.get("status")
+    if status == "completed":
+        return "[✓]"
+    if status == "cancelled":
+        return "[-]"
+    if status == "in_progress":
+        return "[~]"
+    if task_id in ready:
+        return "[→]"
+    if task_id in blocked:
+        return "[!]"
+    return "[ ]"
+
+
+def _dependency_text(task: Mapping[str, object]) -> str:
+    dependencies = task.get("depends_on")
+    if not isinstance(dependencies, list) or not dependencies:
+        return ""
+    return " · depends on: " + ", ".join(str(dependency) for dependency in dependencies)
 
 
 def tool_status_text(event) -> str:

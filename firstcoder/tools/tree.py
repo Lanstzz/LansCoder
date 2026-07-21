@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from firstcoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
+from firstcoder.permissions.types import PermissionAction
+from firstcoder.tools.path_permissions import read_path_target
+from firstcoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result, make_text_result
 from firstcoder.utils.introspection import tool_from_function
 from firstcoder.utils.sandbox import PathSandbox
 from firstcoder.utils.sandbox_access import SandboxAccess
@@ -33,7 +35,13 @@ def create_tree_tool(root: str | Path, *, access: SandboxAccess | None = None) -
         content = "\n".join(lines) if lines else "目录为空。"
         return make_text_result("tree", content, entries=entries, truncated=truncated)
 
-    return tool_from_function(tree)
+    tool = tool_from_function(tree)
+    tool.permission = ToolPermissionSpec(
+        action=PermissionAction.READ_PATH,
+        target_builder=read_path_target,
+        reason="读取目录树需要权限检查。",
+    )
+    return tool
 
 
 def _walk_tree(

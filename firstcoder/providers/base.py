@@ -41,7 +41,7 @@ class ChatProvider(ABC):
 
         return await asyncio.to_thread(self.complete, request)
 
-    async def astream(self, request: ChatRequest) -> AsyncIterator[ChatStreamEvent]:
+    def astream(self, request: ChatRequest) -> AsyncIterator[ChatStreamEvent]:
         """异步流式生成回复。
 
         不是所有 provider 都已经实现 streaming。默认实现给出稳定的内部错误语义，
@@ -49,9 +49,12 @@ class ChatProvider(ABC):
         iterator，错误会在调用方开始消费事件时抛出。
         """
 
-        raise ProviderError(
-            ProviderErrorKind.UNSUPPORTED,
-            f"provider {self.name} 还没有实现 streaming",
-        )
-        if False:
-            yield  # pragma: no cover
+        async def unsupported_stream() -> AsyncIterator[ChatStreamEvent]:
+            for event in ():
+                yield event
+            raise ProviderError(
+                ProviderErrorKind.UNSUPPORTED,
+                f"provider {self.name} 还没有实现 streaming",
+            )
+
+        return unsupported_stream()

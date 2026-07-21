@@ -14,13 +14,16 @@ from firstcoder.runtime.cancellation import AgentCancelledError, CancellationTok
 from firstcoder.agent.ports import ContextManagerLike
 from firstcoder.agent.loop_limits import AgentLoopLimits, AgentLoopStopReason
 from firstcoder.agent.session import AgentSession, PendingPermissionExecution
-from firstcoder.agent.task_boundary_classifier import (
-    CLASSIFICATION_PROMPT as _TASK_BOUNDARY_CLASSIFICATION_PROMPT,
-    TaskBoundaryClassifier,
-)
-from firstcoder.agent.todo_policy import TodoPolicy
+from firstcoder.agent.task_boundary_classifier import TaskBoundaryClassifier
+from firstcoder.agent.task_plan_policy import TaskPlanPolicy
 from firstcoder.agent.tool_execution import ToolExecutionEvent, ToolExecutor
 from firstcoder.agent.tool_settlement import ToolCallSettlement
+from firstcoder.agent.background import (
+    DEFAULT_BACKGROUND_TOOL_NAMES,
+    BackgroundJobManager,
+    render_task_notification,
+    with_background_controls,
+)
 from firstcoder.agent.user_input import (
     AgentTurnResult,
     AgentTurnStatus,
@@ -44,6 +47,9 @@ from firstcoder.tools.permission_results import (
     make_prewrite_review_failed_result,
     make_prewrite_review_stale_result,
 )
+from firstcoder.tools.background import create_background_cancel_tool, create_background_status_tool
+from firstcoder.agent.subagent import SubagentRunner
+from firstcoder.tools.delegate import create_delegate_tool
 from firstcoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from firstcoder.tools.types import Tool, ToolResult
 
@@ -82,10 +88,13 @@ class AgentLoop:
         guidance_provider: Callable[[], list[str]] | None = None,
         cancellation_token: CancellationToken | None = None,
         request_options: MainRequestOptions | None = None,
+        background_manager: BackgroundJobManager | None = None,
+        background_tool_names: frozenset[str] | None = None,
+        enable_delegate_tool: bool = True,
     ) -> None:
         self.session = session
         self.tool_settlement = ToolCallSettlement(session)
-        self.todo_policy = TodoPolicy(session)
+        self.task_plan_policy = TaskPlanPolicy(session)
         self.provider = provider
         self.request_options = request_options or MainRequestOptions()
         self.context_builder = context_builder or ContextBuilder()
@@ -103,8 +112,13 @@ class AgentLoop:
         self.tool_event_handler = tool_event_handler
         self.guidance_provider = guidance_provider
         self.cancellation_token = cancellation_token
+        self.background_manager = background_manager
+        self.background_tool_names = (
+            background_tool_names if background_tool_names is not None else DEFAULT_BACKGROUND_TOOL_NAMES
+        )
+        self.enable_delegate_tool = enable_delegate_tool
         self._skills_prepared_for_turn: int | None = None
-        self._todo_reconciliation_attempted = False
+        self._task_plan_reconciliation_attempted = False
         self._tool_rounds_completed = 0
         self.task_boundary_classifier = TaskBoundaryClassifier(
             session=session,
@@ -124,6 +138,8 @@ class AgentLoop:
             cancellation_token=self.cancellation_token,
             tag_task_boundary_messages=self._tag_task_boundary_messages_with_active_hash,
             emit_settlements=self._emit_settlements,
+            background_manager=self.background_manager,
+            background_tool_names=self.background_tool_names,
         )
         # session 创建时通常已经注册了 session-scoped 工具。这里允许调用方再传入一批
         # 测试或临时工具，但避免重复注册同名工具导致模型 schema 不稳定。
@@ -131,6 +147,8 @@ class AgentLoop:
             for tool in tools:
                 if tool.name not in self.session.tool_registry.names():
                     self.session.tool_registry.register(tool)
+        self._ensure_background_control_tools()
+        self._ensure_delegate_tool()
 
     def run_user_turn(
         self,
@@ -510,6 +528,7 @@ class AgentLoop:
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
         self._append_pending_guidance()
+        self._append_background_notifications()
         self._prepare_skills_for_current_turn()
         definitions = self._provider_tool_definitions()
         messages = self._request_messages(runtime_instruction=runtime_instruction)
@@ -619,6 +638,7 @@ class AgentLoop:
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
         self._append_pending_guidance()
+        self._append_background_notifications()
         self._prepare_skills_for_current_turn()
         definitions = self._provider_tool_definitions()
         messages = self._request_messages(runtime_instruction=runtime_instruction)
@@ -713,7 +733,7 @@ class AgentLoop:
             if pending_input is not None:
                 return self._pending_turn_result(pending_input)
             if response.finish_reason != AgentLoopStopReason.TOOL_ROUND_LIMIT.value:
-                response, pending_input, _ = self._run_todo_self_check_if_needed(
+                response, pending_input, _ = self._run_task_plan_reconciliation_if_needed(
                     response,
                     complete_once,
                     tool_rounds,
@@ -755,7 +775,7 @@ class AgentLoop:
             if pending_input is not None:
                 return self._pending_turn_result(pending_input)
             if response.finish_reason != AgentLoopStopReason.TOOL_ROUND_LIMIT.value:
-                response, pending_input, _ = await self._run_todo_self_check_if_needed_async(
+                response, pending_input, _ = await self._run_task_plan_reconciliation_if_needed_async(
                     response,
                     complete_once,
                     tool_rounds,
@@ -816,13 +836,13 @@ class AgentLoop:
             response = self._drop_unsupported_tool_calls(complete_once())
         return response, None, tool_rounds
 
-    def _run_todo_self_check_if_needed(
+    def _run_task_plan_reconciliation_if_needed(
         self,
         response: ChatResponse,
         complete_once,
         tool_rounds: int,
     ) -> tuple[ChatResponse, UserInputRequest | None, int]:
-        instruction = self._todo_reconciliation_instruction()
+        instruction = self._final_reconciliation_instruction()
         if instruction is None:
             return response, None, tool_rounds
         response = self._drop_unsupported_tool_calls(
@@ -830,13 +850,13 @@ class AgentLoop:
         )
         return self._continue_tool_loop_from_response(response, complete_once, tool_rounds)
 
-    async def _run_todo_self_check_if_needed_async(
+    async def _run_task_plan_reconciliation_if_needed_async(
         self,
         response: ChatResponse,
         complete_once,
         tool_rounds: int,
     ) -> tuple[ChatResponse, UserInputRequest | None, int]:
-        instruction = self._todo_reconciliation_instruction()
+        instruction = self._final_reconciliation_instruction()
         if instruction is None:
             return response, None, tool_rounds
         response = self._drop_unsupported_tool_calls(
@@ -844,13 +864,13 @@ class AgentLoop:
         )
         return await self._continue_tool_loop_from_response_async(response, complete_once, tool_rounds)
 
-    def _todo_reconciliation_instruction(self) -> str | None:
-        if self._todo_reconciliation_attempted:
+    def _final_reconciliation_instruction(self) -> str | None:
+        if self._task_plan_reconciliation_attempted:
             return None
-        instruction = self.todo_policy.final_reconciliation_instruction()
+        instruction = self.task_plan_policy.final_reconciliation_instruction()
         if instruction is None:
             return None
-        self._todo_reconciliation_attempted = True
+        self._task_plan_reconciliation_attempted = True
         return instruction
 
     async def _continue_tool_loop_from_response_async(
@@ -900,6 +920,7 @@ class AgentLoop:
             "denied",
             "skipped",
             "interrupted",
+            "background_started",
         ],
         tool_call: ToolCall,
         *,
@@ -1002,16 +1023,73 @@ class AgentLoop:
         if capabilities is not None and not capabilities.supports_tools:
             return []
         return [
-            definition
+            self._augment_tool_definition(definition)
             for definition in self.session.tool_registry.definitions()
             if definition.name not in HIDDEN_TOOL_STATUS_NAMES
         ]
+
+    def _augment_tool_definition(self, definition):
+        """给后台可用工具的 schema 附加 run_in_background/background_label 控制字段。
+
+        只有在启用了 background_manager 且工具在允许列表里时才增强，避免向模型暴露它
+        无法真正使用的控制字段。
+        """
+
+        if self.background_manager is None:
+            return definition
+        if definition.name not in self.background_tool_names:
+            return definition
+        return with_background_controls(definition)
+
+    def _ensure_background_control_tools(self) -> None:
+        """Register background_status/background_cancel whenever background runtime exists."""
+
+        if self.background_manager is None:
+            return
+        names = set(self.session.tool_registry.names())
+        if "background_status" not in names:
+            self.session.tool_registry.register(
+                create_background_status_tool(self.background_manager, session_id=self.session.session_id)
+            )
+        if "background_cancel" not in names:
+            self.session.tool_registry.register(
+                create_background_cancel_tool(self.background_manager, session_id=self.session.session_id)
+            )
+
+    def _ensure_delegate_tool(self) -> None:
+        """Register the parent-facing delegate tool with a non-recursive child runner."""
+
+        if not self.enable_delegate_tool:
+            return
+        if "delegate" in self.session.tool_registry.names():
+            return
+        project_root = None
+        if self.session.permission_manager is not None:
+            project_root = self.session.permission_manager.policy.project_root
+        runner = SubagentRunner(
+            store=self.session.store,
+            provider=self.provider,
+            tools=[tool for tool in self.session.tool_registry.tools() if tool.name != "delegate"],
+            project_root=project_root,
+            agents_md=self.session.agents_md,
+            skill_catalog=self.session.skill_catalog,
+            permission_manager=self.session.permission_manager,
+            sandbox_access=self.session.sandbox_access,
+            request_options=self.request_options,
+        )
+        self.session.tool_registry.register(
+            create_delegate_tool(
+                runner,
+                parent_session_id=self.session.session_id,
+                parent_task_hash=self.session.runtime_state.active_task_hash,
+            )
+        )
 
     def _begin_turn(self, *, new_user_turn: bool = True) -> None:
         if new_user_turn:
             self.provider_call_count = 0
             self.turn_started_at = self.clock()
-            self._todo_reconciliation_attempted = False
+            self._task_plan_reconciliation_attempted = False
             self._tool_rounds_completed = 0
 
     def _append_pending_guidance(self) -> None:
@@ -1022,6 +1100,26 @@ class AgentLoop:
             text = content.strip()
             if text:
                 self.session.append_user_message(text)
+
+    def _append_background_notifications(self) -> None:
+        """Drain finished background jobs into the history before calling the provider.
+
+        Each completion becomes one independent ``background_notification`` user
+        message.  It never reuses the original ``tool_call_id``, so the provider
+        still sees exactly one tool result per assistant tool call.
+        """
+
+        if self.background_manager is None:
+            return
+        for notification in self.background_manager.collect_completed(session_id=self.session.session_id):
+            self.session.append_background_notification(
+                content=render_task_notification(notification),
+                job_id=notification.job_id,
+                tool_name=notification.tool_name,
+                status=notification.status,
+                task_id=notification.task_id,
+                observed_revision=notification.observed_revision,
+            )
 
     def _check_provider_call_limit(self) -> None:
         limit = self.limits.max_provider_calls

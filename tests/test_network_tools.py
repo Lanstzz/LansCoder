@@ -45,6 +45,23 @@ def test_fetch_rejects_unsupported_scheme(tmp_path):
     assert result.error == "只支持 http 和 https URL"
 
 
+def test_fetch_rejects_private_and_local_targets(tmp_path):
+    registry = create_builtin_registry(tmp_path, include_network_tools=True)
+
+    for url in (
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://10.0.0.1",
+        "http://172.16.0.1",
+        "http://192.168.1.1",
+        "http://169.254.169.254/latest/meta-data",
+        "http://[::1]/",
+    ):
+        result = registry.execute("fetch", {"url": url})
+        assert result.ok is False, url
+        assert result.error == "拒绝访问本机、内网或链路本地地址"
+
+
 def _fake_web_search_response(body: str):
     """辅助：创建一个返回指定 text 的 fake urlopen。"""
     payload = web_search_module.dumps_json(

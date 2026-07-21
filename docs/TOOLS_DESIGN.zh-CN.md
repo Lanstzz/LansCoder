@@ -62,7 +62,10 @@ assistant(tool_call id=call_1) -> tool(tool_call_id=call_1)
 
 ## 特殊工具
 
-- `todo` 替换完整的可见计划；成功调用会追加 `todo_updated` 快照，因此 `SessionView.todos`、resume/fork 与 TUI 共用一份持久事实模型；
+- TaskPlan 有四个模型可见工具：`task_list` 读取权威快照和 revision；`task_create` 创建计划或追加任务；`task_update` 按稳定任务 ID 原子修改 status、owner 或依赖；`task_revise` 仅在任务语义内容变化时修改措辞。三个写工具都需要 `expected_revision`；
+- `linear` 按稳定 order 推导执行顺序，`dag` 使用显式依赖。模型不会提交 ready/blocked 派生状态，也不能为汇报普通进度而替换整份计划；
+- 成功的 TaskPlan 变更恰好追加一个 `task_plan_updated` 快照，因此 `SessionView.task_plan`、resume/fork 与 TUI 共用一份持久事实模型。发生 revision 冲突时，先 `task_list` 再用其 revision 重试；
+- session schema 是严格兼容边界：resume/fork 会拒绝旧版本、缺少版本或未来版本的日志；不存在旧工具结果迁移或 fallback；
 - `think` 记录结构化 reasoning，不改工作区；
 - `task_boundary` 是隐藏分类器专用的内部控制工具；hash 由程序生成，主模型不能调用；
 - `retrieve_archive` 仅能有界读取当前 session 的归档内容；

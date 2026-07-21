@@ -87,9 +87,9 @@ where every CLI option wins.
 ## What the TUI Actually Renders
 
 `FirstCoderApp` in `app/tui.py` renders a transcript-oriented state model from
-`app/tui_state.py`: entries, tool activity, todo items, provider/session state,
-and a pending input prompt. It buffers streaming text before flushing it so a
-token stream does not cause a widget update per token.
+`app/tui_state.py`: entries, tool activity, the current TaskPlan projection,
+provider/session state, and a pending input prompt. It buffers streaming text
+before flushing it so a token stream does not cause a widget update per token.
 
 When a path or `file://` URI is pasted into the composer, `input.attachments`
 resolves an existing file and stages it instead of inserting the path as prompt
@@ -113,9 +113,11 @@ There are two event lanes:
 `prewrite_review` is also a local event. It renders a bounded trusted diff card
 for direct file mutations. The review's Apply/deny/reject reply belongs to the
 same pending-input path as permission confirmation; `review all`, `review
-<path>`, and `review clear` only change local card expansion state. Todo items
-are replayed from session `todo_updated` events, so a resumed TUI restores the
-latest list instead of treating it as a transient widget.
+<path>`, and `review clear` only change local card expansion state. TaskPlan is
+replayed from session `task_plan_updated` events, so a resumed TUI restores the
+latest plan instead of treating it as a transient widget. The panel reads one
+projection: `linear` is shown in stable order and `dag` by dependency levels.
+The TUI does not derive or mutate task state itself.
 
 Keeping them distinct lets the UI say “a shell command is running” even while
 the provider has produced no further text. Do not represent a local tool run as
