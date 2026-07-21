@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, BrokenBarrierError
 
 import pytest
 
@@ -176,6 +178,55 @@ def test_each_mutation_replays_current_view_so_stale_revision_writes_nothing(
     assert caught.value.actual == 1
     assert stale.current() == created.plan
     assert len(_plan_events(store)) == before
+
+
+def test_concurrent_services_atomically_compare_revision_and_append(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = JsonlSessionStore(tmp_path)
+    writer_a = SessionEventWriter(store=store, session_id="sess_plan")
+    writer_a.append_session_created()
+    writer_b = SessionEventWriter(store=store, session_id="sess_plan")
+    service_a = TaskPlanService(store=store, writer=writer_a)
+    service_b = TaskPlanService(store=store, writer=writer_b)
+
+    import firstcoder.planning.service as service_module
+
+    original_create_tasks = service_module.create_tasks
+    rendezvous = Barrier(2)
+
+    def synchronized_create_tasks(**kwargs):
+        try:
+            rendezvous.wait(timeout=0.25)
+        except BrokenBarrierError:
+            pass
+        return original_create_tasks(**kwargs)
+
+    monkeypatch.setattr(service_module, "create_tasks", synchronized_create_tasks)
+
+    def create(service: TaskPlanService, task_id: str):
+        try:
+            return service.create(
+                mode="linear",
+                expected_revision=0,
+                tasks=[{"id": task_id, "content": task_id}],
+            )
+        except TaskPlanRevisionConflict as error:
+            return error
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda item: create(*item),
+                ((service_a, "a"), (service_b, "b")),
+            )
+        )
+
+    assert sum(isinstance(result, TaskPlanMutation) for result in results) == 1
+    assert sum(isinstance(result, TaskPlanRevisionConflict) for result in results) == 1
+    assert len(_plan_events(store)) == 1
+    assert store.rebuild_session_view("sess_plan").task_plan is not None
 
 
 def test_invalid_batch_is_atomic_and_writes_no_event(tmp_path) -> None:

@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterator
+
+import fcntl
 
 from firstcoder.context.store import JsonlSessionStore
 from firstcoder.context.writer import SessionEventWriter
@@ -15,6 +22,10 @@ from firstcoder.planning.reducer import (
     revise_tasks,
     update_tasks,
 )
+
+
+_THREAD_LOCKS_GUARD = threading.Lock()
+_THREAD_LOCKS: dict[str, threading.RLock] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,18 +61,19 @@ class TaskPlanService:
         expected_revision: int,
         tasks: object,
     ) -> TaskPlanMutation:
-        current_plan = self.current()
-        result = create_tasks(
-            current_plan=current_plan,
-            expected_revision=expected_revision,
-            mode=mode,
-            tasks=tasks,
-        )
-        return self._finish(
-            operation="create",
-            previous_revision=current_plan.revision if current_plan is not None else 0,
-            result=result,
-        )
+        with self._mutation_lock():
+            current_plan = self.current()
+            result = create_tasks(
+                current_plan=current_plan,
+                expected_revision=expected_revision,
+                mode=mode,
+                tasks=tasks,
+            )
+            return self._finish(
+                operation="create",
+                previous_revision=current_plan.revision if current_plan is not None else 0,
+                result=result,
+            )
 
     def update(
         self,
@@ -69,17 +81,18 @@ class TaskPlanService:
         expected_revision: int,
         updates: object,
     ) -> TaskPlanMutation:
-        current_plan = self._require_current_plan("update")
-        result = update_tasks(
-            plan=current_plan,
-            expected_revision=expected_revision,
-            updates=updates,
-        )
-        return self._finish(
-            operation="update",
-            previous_revision=current_plan.revision,
-            result=result,
-        )
+        with self._mutation_lock():
+            current_plan = self._require_current_plan("update")
+            result = update_tasks(
+                plan=current_plan,
+                expected_revision=expected_revision,
+                updates=updates,
+            )
+            return self._finish(
+                operation="update",
+                previous_revision=current_plan.revision,
+                result=result,
+            )
 
     def revise(
         self,
@@ -87,17 +100,38 @@ class TaskPlanService:
         expected_revision: int,
         revisions: object,
     ) -> TaskPlanMutation:
-        current_plan = self._require_current_plan("revise")
-        result = revise_tasks(
-            plan=current_plan,
-            expected_revision=expected_revision,
-            revisions=revisions,
+        with self._mutation_lock():
+            current_plan = self._require_current_plan("revise")
+            result = revise_tasks(
+                plan=current_plan,
+                expected_revision=expected_revision,
+                revisions=revisions,
+            )
+            return self._finish(
+                operation="revise",
+                previous_revision=current_plan.revision,
+                result=result,
+            )
+
+    @contextmanager
+    def _mutation_lock(self) -> Iterator[None]:
+        session_key = str(
+            (self._store.sessions_dir / f"{self._writer.session_id}.jsonl").resolve()
         )
-        return self._finish(
-            operation="revise",
-            previous_revision=current_plan.revision,
-            result=result,
-        )
+        with _THREAD_LOCKS_GUARD:
+            thread_lock = _THREAD_LOCKS.setdefault(session_key, threading.RLock())
+
+        digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()
+        lock_dir = Path(self._store.root) / "locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = lock_dir / f"task-plan-{digest}.lock"
+
+        with thread_lock, lock_path.open("a+b") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def _require_current_plan(self, operation: str) -> TaskPlan:
         plan = self.current()
