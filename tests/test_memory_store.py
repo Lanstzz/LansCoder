@@ -65,3 +65,35 @@ def test_list_skips_malformed_and_index(tmp_path: Path) -> None:
 def test_write_rejects_invalid_record(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         _store(tmp_path).write(MemoryRecord(name="bad name", description="d", type="project", body="b"))
+
+
+def _memory_text(name: str) -> str:
+    return f"---\nname: {name}\ndescription: d\nmetadata:\n  type: project\n---\n\nbody\n"
+
+
+def _traversal_store(tmp_path: Path) -> MemoryStore:
+    # Root is two levels deep so "../../escape" resolves to tmp_path/escape.md:
+    # a file outside the memory root but inside the per-test directory. The
+    # directories must exist for the OS to resolve the ".." traversal.
+    root = tmp_path / "nested" / "mem"
+    root.mkdir(parents=True, exist_ok=True)
+    return MemoryStore(root, MemoryScope.PROJECT)
+
+
+def test_get_traversal_name_returns_none(tmp_path: Path) -> None:
+    store = _traversal_store(tmp_path)
+    outside = tmp_path / "escape.md"
+    outside.write_text(_memory_text("escape"), encoding="utf-8")
+    assert store.get("../../escape") is None
+
+
+def test_delete_traversal_name_returns_false_and_keeps_file(tmp_path: Path) -> None:
+    store = _traversal_store(tmp_path)
+    outside = tmp_path / "escape.md"
+    outside.write_text(_memory_text("escape"), encoding="utf-8")
+    assert store.delete("../../escape") is False
+    assert outside.exists()
+
+
+def test_exists_subdir_name_is_false(tmp_path: Path) -> None:
+    assert _store(tmp_path).exists("a/b") is False

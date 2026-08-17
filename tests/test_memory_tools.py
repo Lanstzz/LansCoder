@@ -105,3 +105,28 @@ def test_no_writer_skips_event(tmp_path: Path) -> None:
     result = registry.execute("remember", {"name": "x", "description": "d", "body": "b"})
     assert result.ok
     assert manager.get(MemoryScope.PROJECT, "x") is not None
+
+
+def test_read_memory_traversal_is_not_found(tmp_path: Path) -> None:
+    registry, _, _ = _registry(tmp_path)
+    result = registry.execute("read_memory", {"name": "../../escape"})
+    assert result.ok
+    assert "not found" in result.content
+
+
+def test_forget_traversal_is_not_found(tmp_path: Path) -> None:
+    registry, _, _ = _registry(tmp_path)
+    result = registry.execute("forget", {"name": "../../escape"})
+    assert result.ok
+    assert "not found" in result.content
+
+
+def test_search_memory_empty_query_returns_nothing(tmp_path: Path) -> None:
+    registry, _, _ = _registry(tmp_path)
+    registry.execute("remember", {"name": "build-commands", "description": "How to build", "body": "Run pytest."})
+    registry.execute("remember", {"name": "user-prefs", "description": "Prefers Chinese", "body": "用中文", "scope": "user"})
+    result = registry.execute("search_memory", {"query": ""})
+    assert result.ok
+    assert result.data.get("count") == 0
+    assert "build-commands" not in result.content
+    assert "user-prefs" not in result.content
