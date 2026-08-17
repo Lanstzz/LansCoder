@@ -162,6 +162,8 @@ def _search_memory_tool(manager: MemoryManager) -> Tool:
             scopes = _search_scopes(scope)
         except ValueError as exc:
             return make_error_result("search_memory", f"Unable to search memory: {exc}")
+        if not query.strip():
+            return make_text_result("search_memory", f"No memories match '{query}'.", query=query, count=0)
         needle = query.lower()
         matches: list[tuple[MemoryScope, MemoryRecord]] = []
         for candidate_scope in scopes:

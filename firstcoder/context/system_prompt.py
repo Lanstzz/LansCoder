@@ -17,7 +17,7 @@ from firstcoder.context.versions import SYSTEM_PROMPT_VERSION
 from firstcoder.providers.types import ChatMessage
 
 MEMORY_PROTOCOL = (
-    "Persistent memory is available as named files. The index above lists project-level "
+    "Persistent memory is available as named files. The index below lists project-level "
     "and user-level memories. Read a full memory with read_memory before acting on it. "
     "Use remember to save durable facts: project scope for repo-specific facts, user scope "
     "for cross-project preferences."

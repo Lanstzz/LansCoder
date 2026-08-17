@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from firstcoder.memory.index import MemoryIndex
-from firstcoder.memory.models import MemoryRecord, MemoryScope, deserialize, file_content, validate_record
+from firstcoder.memory.models import MemoryRecord, MemoryScope, deserialize, file_content, valid_name, validate_record
 
 
 class MemoryStore:
@@ -16,6 +16,8 @@ class MemoryStore:
         self.scope = scope
 
     def _path(self, name: str) -> Path:
+        if not valid_name(name):
+            raise ValueError(f"Invalid memory name: {name!r}")
         return self.root / f"{name}.md"
 
     def list(self) -> list[MemoryRecord]:
@@ -35,6 +37,8 @@ class MemoryStore:
         return records
 
     def get(self, name: str) -> MemoryRecord | None:
+        if not valid_name(name):
+            return None
         path = self._path(name)
         if not path.exists():
             return None
@@ -55,6 +59,8 @@ class MemoryStore:
         self._refresh_index()
 
     def delete(self, name: str) -> bool:
+        if not valid_name(name):
+            return False
         path = self._path(name)
         if not path.exists():
             return False
@@ -63,6 +69,8 @@ class MemoryStore:
         return True
 
     def exists(self, name: str) -> bool:
+        if not valid_name(name):
+            return False
         return self._path(name).exists()
 
     def _refresh_index(self) -> None:
