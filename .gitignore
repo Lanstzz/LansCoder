@@ -35,3 +35,7 @@ benchmark/topic_selfplay/runs/
 *.docx
 *.docm
 ~$*.docx
+
+# Local tool data and course site (not part of the repo)
+.codojo/
+firstcoder-course/

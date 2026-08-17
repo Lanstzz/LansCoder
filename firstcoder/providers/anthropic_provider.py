@@ -113,7 +113,7 @@ class AnthropicProvider(ChatProvider):
     def complete(self, request: ChatRequest) -> ChatResponse:
         """调用 Anthropic Messages API，并转换为统一响应。"""
 
-        params = self._build_message_params(request)
+        params = self._build_message_params(request) # 把项目内部的 chatRequest 转为 anthropic api 需要的参数
         try:
             response = self._client.messages.create(**params)
         except Exception as exc:

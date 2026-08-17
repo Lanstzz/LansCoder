@@ -14,7 +14,6 @@ from firstcoder.providers.openai_compatible import OpenAICompatibleProvider
 from firstcoder.providers.presets import PROVIDER_PRESETS
 from firstcoder.providers.types import ProviderCapabilities
 
-
 class ProviderConfigError(ValueError):
     """provider 配置缺失或不合法时抛出的异常。"""
 

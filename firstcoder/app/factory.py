@@ -22,7 +22,6 @@ from typing import Protocol
 
 from firstcoder.agent.loop_limits import AgentLoopLimits
 from firstcoder.app.commands import ContextCommandHandler
-from firstcoder.app.stats_commands import StatsCommandHandler
 from firstcoder.app.help_commands import HelpCommandHandler
 from firstcoder.app.mcp_commands import McpCommandHandler
 from firstcoder.app.memory_commands import MemoryCommandHandler
@@ -337,7 +336,6 @@ def create_firstcoder_app(
             ModelCommandHandler(model_switcher),
             session_handler,
             context_handler,
-            StatsCommandHandler(session=current, budget_provider=chat_runner.context_budget),
             permission_handler,
             skill_handler,
             memory_handler,

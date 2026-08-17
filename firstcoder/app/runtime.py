@@ -4,6 +4,20 @@ Textual widget 只负责显示和输入；这里把“当前 session 可被 resu
 调用 AgentLoop”封成很薄的一层，避免 UI 直接持有 agent 编排细节。
 """
 
+# ============================================================================
+# 阅读路径导航 (Reading Path Guide)
+# ============================================================================
+# 这是 UI 层 (TUI/CLI) 和 Agent 层之间的薄代理层 (thin proxy layer)。
+# 两个核心类：
+#   CurrentSessionState — 可替换的当前 session 代理，/resume 命令通过 set_session()
+#                         替换内部 session，所有命令处理器自动看到新会话
+#   AgentChatRunner     — 聊天入口，把用户消息交给 AgentLoop 执行
+# 关键调用链：
+#   UI → AgentChatRunner.run_user_turn() → AgentLoop.run_user_turn() → provider
+# → 上一步阅读：firstcoder/app/factory.py (create_firstcoder_app 中创建 AgentChatRunner)
+# → 下一步阅读：firstcoder/agent/loop.py (AgentLoop)
+# ============================================================================
+
 from __future__ import annotations
 
 from firstcoder.input.attachments import UserAttachment
@@ -35,6 +49,15 @@ from firstcoder.providers.types import ChatResponse, ChatStreamEvent, MainReques
 from firstcoder.tools.types import Tool
 
 
+# ----------------------------------------------------------------------------
+# "可替换代理"模式 (swappable proxy pattern)
+# ----------------------------------------------------------------------------
+# 为什么不直接把 AgentSession 传给 ContextCommandHandler / UI widget？
+# 因为 /resume 命令需要在运行时热替换当前会话：用户选中一个历史 session，
+# 把整个应用切到那个 session 上继续工作。如果各处都直接持有 AgentSession 引用，
+# 替换就必须通知每一个持有者。通过 CurrentSessionState 这一层间接，
+# 只需调用一次 set_session()，所有通过代理访问 session 的组件自动看到新会话。
+# ----------------------------------------------------------------------------
 @dataclass(slots=True)
 class CurrentSessionState:
     """可替换的当前 session 代理。
@@ -72,6 +95,24 @@ class CurrentSessionState:
         return self.session.set_permission_mode(mode)
 
 
+# ----------------------------------------------------------------------------
+# 用户 turn 的统一入口 (unified entry for user turns)
+# ----------------------------------------------------------------------------
+# 所有用户消息——普通聊天、权限确认恢复——都经过这个类。它负责：
+#   1. 组装一次 AgentLoop 所需的依赖（session, provider, tools, limits, ...）
+#   2. 通过 _start_turn() / _resume_turn() 开启或恢复一轮
+#   3. 把 AgentTurnResult 整理成 UI 可消费的 ChatResponse
+# 关键字段：
+#   current_session      — 可替换代理，/resume 时 set_session() 替换内部 session
+#   provider             — ChatProvider 实例，来自 factory.py::create_provider_for_model()
+#   tools / tools_provider
+#                        — 静态工具列表，或每次 turn 动态解析工具的 callable
+#   limits               — AgentLoopLimits：tool 轮次/超时/provider 调用上限
+#   use_streaming        — 是否使用 provider 的 streaming 响应
+#   last_pending_input   — 上一次暂停留下的权限确认请求 (UserInputRequest)
+#   _pending_permission_loop
+#                        — 暂停时保留的 AgentLoop，权限恢复时复用而不是新建
+# ----------------------------------------------------------------------------
 @dataclass(slots=True)
 class AgentChatRunner:
     """普通聊天入口，把当前 session 交给 AgentLoop 执行一轮。"""
@@ -154,7 +195,13 @@ class AgentChatRunner:
             if self._active_cancellation_token is token:
                 self._active_cancellation_token = None
 
+    # ------------------------------------------------------------------
+    # _start_turn: 开启一轮新聊天，创建全新 AgentLoop。
+    # _resume_turn: 恢复暂停的权限确认，复用 _pending_permission_loop 以保留
+    #               AgentLoop 内部的 budget/state，只替换 cancellation token 和 handlers。
+    # ------------------------------------------------------------------
     def _start_turn(self, *, streaming: bool = False) -> tuple[int, CancellationToken, AgentLoop]:
+        # before_count 记录本轮开始前的消息数，结束后用它切片出"本轮新增消息"
         before_count = len(self.current_session.rebuild_view().messages)
         self.last_pending_input = None
         token = self._begin_cancellable_turn()
@@ -192,6 +239,12 @@ class AgentChatRunner:
         messages = self.current_session.rebuild_view().messages[before_count:]
         self.last_display_lines = _display_lines_from_messages(messages)
 
+    # ------------------------------------------------------------------
+    # 同步外层入口 (sync outer boundary)
+    # ------------------------------------------------------------------
+    # CLI 调用者使用。内部通过 asyncio.run() 桥接到异步版本 arun_user_turn()。
+    # Textual 已经运行在 asyncio event loop 里，所以 UI 侧应直接 await arun_user_turn()，
+    # 不要再走这一层。
     def run_user_turn(
         self,
         content: str,
@@ -202,6 +255,14 @@ class AgentChatRunner:
 
         return asyncio.run(self.arun_user_turn(content, attachments=attachments))
 
+    # ------------------------------------------------------------------
+    # 权限确认恢复入口 (resume after permission prompt)
+    # ------------------------------------------------------------------
+    # 为什么需要这个独立入口，而不是把回答当作下一条用户消息？
+    # 因为权限确认时 AgentLoop 已经发出了一个 tool_call，正在等待对应的 tool_result。
+    # 必须用本地存储的原始 tool_call（request_id）恢复，不能让模型重发。
+    # 委托给异步版本 aresume_with_user_input()，参见 AgentLoop.resume_with_user_input()
+    # (firstcoder/agent/loop.py)。
     def resume_with_user_input(self, request_id: str, answer: str) -> ChatResponse:
         """恢复等待中的权限确认。
 
@@ -211,6 +272,15 @@ class AgentChatRunner:
 
         return asyncio.run(self.aresume_with_user_input(request_id, answer))
 
+    # ------------------------------------------------------------------
+    # 异步聊天入口 (async chat entry)
+    # ------------------------------------------------------------------
+    # 流程：
+    #   _start_turn()          → 创建新 AgentLoop + CancellationToken，记录当前消息数
+    #   loop.run_user_turn()   → 实际跑一轮 agent loop（见 firstcoder/agent/loop.py）
+    #   _finish_agent_result() → 把 AgentTurnResult 转成 ChatResponse，保存显示行
+    # 用 anyio.to_thread.run_sync + _run_coroutine_in_thread 把协程丢到独立线程运行，
+    # 这样 Textual 的 event loop 不会被阻塞，同时 cancellation 可以从外部触发。
     async def arun_user_turn(
         self,
         content: str,
@@ -237,6 +307,8 @@ class AgentChatRunner:
             self._finish_cancellable_turn(cancellation_token)
         return self._finish_agent_result(before_count, loop, result)
 
+    # 异步权限恢复入口，流程同 arun_user_turn()，但走 _resume_turn() 复用
+    # 暂停的 AgentLoop，调用 AgentLoop.resume_with_user_input()。
     async def aresume_with_user_input(self, request_id: str, answer: str) -> ChatResponse:
         before_count, cancellation_token, loop = self._resume_turn(streaming=self.use_streaming)
         try:
@@ -252,6 +324,13 @@ class AgentChatRunner:
             self._finish_cancellable_turn(cancellation_token)
         return self._finish_agent_result(before_count, loop, result)
 
+    # ------------------------------------------------------------------
+    # 收尾一轮 turn：把 AgentTurnResult 转成 ChatResponse。
+    #   - 保存 pending_input（如果有权限确认等待中）
+    #   - 记住暂停的 AgentLoop，供下次 resume 复用
+    #   - 从 loop 的 stream events + 新增消息生成 last_display_lines 给 TUI 显示
+    #   - 如果 result.response 为空，回退到"等待用户输入"的占位响应
+    # ------------------------------------------------------------------
     def _finish_agent_result(self, before_count: int, loop: AgentLoop, result) -> ChatResponse:
         self.last_pending_input = result.pending_input
         self._remember_pending_permission_loop(loop)
@@ -271,7 +350,16 @@ class AgentChatRunner:
         loop = self.loops[-1] if self.loops else self._create_loop(CancellationToken())
         return loop.context_budget_for_view(view)
 
+    # ------------------------------------------------------------------
+    # AgentLoop 工厂 (per-turn loop factory)
+    # ------------------------------------------------------------------
+    # 每次 turn 创建一个新的 AgentLoop 实例，把 runner 上攒的所有依赖
+    # （session, provider, tools, limits, handlers, cancellation_token, ...）
+    # 传递过去。这是 factory 组装的 runner 状态 → AgentLoop 运行期状态的传递点。
+    # 创建的 loop 追加到 self.loops，便于调试/事后查看历史。
     def _create_loop(self, cancellation_token: CancellationToken, *, streaming: bool = False) -> AgentLoop:
+        # 组装 AgentLoop 构造参数；streaming=False 时不传 stream handler，
+        # 避免 AgentLoop 内部做无用的 stream 分发。
         kwargs = {
             "session": self.current_session.session,
             "provider": self.provider,
