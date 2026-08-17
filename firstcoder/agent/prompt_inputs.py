@@ -107,6 +107,7 @@ def build_system_prompt_inputs(
     provider_capability_overrides: dict[str, Any] | None = None,
     permission_policy: dict[str, Any] | None = None,
     mode: str = "default",
+    memory_index: str = "",
 ) -> SystemPromptInputs:
     """组装 `SystemPromptInputs`，保证调用侧不用手写分散字段。"""
 
@@ -130,4 +131,5 @@ def build_system_prompt_inputs(
         provider_capabilities=capabilities,
         permission_policy=resolved_permission_policy,
         mode=mode,
+        memory_index=memory_index,
     )

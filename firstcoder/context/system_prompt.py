@@ -16,6 +16,13 @@ from firstcoder.context.identity import content_fingerprint, stable_json_hash
 from firstcoder.context.versions import SYSTEM_PROMPT_VERSION
 from firstcoder.providers.types import ChatMessage
 
+MEMORY_PROTOCOL = (
+    "Persistent memory is available as named files. The index above lists project-level "
+    "and user-level memories. Read a full memory with read_memory before acting on it. "
+    "Use remember to save durable facts: project scope for repo-specific facts, user scope "
+    "for cross-project preferences."
+)
+
 
 @dataclass(frozen=True, slots=True)
 class SystemPromptInputs:
@@ -34,6 +41,7 @@ class SystemPromptInputs:
     skill_catalog_summary: str = ""
     benchmark_task: str = ""
     mode: str = "default"
+    memory_index: str = ""
     prompt_version: str = SYSTEM_PROMPT_VERSION
 
 
@@ -58,6 +66,7 @@ class SystemPromptBuilder:
             "provider_capabilities": inputs.provider_capabilities,
             "permission_policy": inputs.permission_policy,
             "mode": inputs.mode,
+            "memory_index_hash": content_fingerprint(inputs.memory_index),
         }
         return stable_json_hash(value)
 
@@ -73,6 +82,7 @@ class SystemPromptBuilder:
                 _format_section("Available skills", inputs.skill_catalog_summary),
                 _format_section("Provider", _format_provider(inputs)),
                 _format_section("Permission policy", _format_json(inputs.permission_policy)),
+                _format_memory_section(inputs),
             ]
             if section
         )
@@ -112,6 +122,13 @@ def _format_section(title: str, content: str) -> str:
     if not content:
         return ""
     return f"{title}:\n{content}"
+
+
+def _format_memory_section(inputs: SystemPromptInputs) -> str:
+    index = inputs.memory_index.strip()
+    if not index:
+        return ""
+    return f"Memory:\n{MEMORY_PROTOCOL}\n\n{index}"
 
 
 def _agent_instructions(benchmark_task: str = "") -> str:
