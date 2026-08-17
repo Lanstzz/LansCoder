@@ -1,5 +1,25 @@
 """Agent 主循环最小闭环。"""
 
+# ============================================================================
+# 阅读路径导航 (Reading Path Guide)
+# ============================================================================
+# 这是 FirstCoder 的核心编排器 (orchestrator)。
+# AgentLoop 把用户输入、上下文投影 (projection)、provider 调用和工具执行串成一轮会话。
+#
+# 核心闭环 (一个 turn 的生命周期)：
+#   1. 用户消息 → session.append_user_message() 写入 JSONL
+#   2. session.rebuild_view() → ContextBuilder 投影成 provider messages
+#   3. provider.complete(ChatRequest) → 模型返回 ChatResponse
+#   4. 如果 response 有 tool_calls → ToolExecutor 执行 → tool_result 写回 JSONL
+#   5. 回到步骤 2，直到模型不再调用工具 / 达到限制 / 需要用户输入
+#
+# AgentLoop 只协调"模型想做什么"和"会话事实怎样落库"，
+# 具体协议转换交给 provider/context 层，具体工具执行交给 tools 层。
+#
+# → 上一步阅读：firstcoder/app/runtime.py (AgentChatRunner 创建 AgentLoop)
+# → 下游依赖：providers/, context/, tools/, permissions/
+# ============================================================================
+
 from __future__ import annotations
 
 import time
@@ -50,6 +70,16 @@ from firstcoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from firstcoder.tools.types import Tool, ToolResult, make_error_result
 
 
+# ============================================================================
+# PreparedMainRequest — 一次 provider 请求的准备结果
+# ============================================================================
+# 把"构造 provider 请求"和"真正调用 provider"拆开，便于在调用前后做追踪/去重/诊断。
+# - request: 最终交给 provider.complete() 的 ChatRequest
+# - request_id: 用于追踪这一次调用，写入 session 的 provider_projection_consumed 记录
+# - projection_fingerprint: 消息+工具定义的哈希，用于诊断"同一份投影被调用了几次"
+# - tool_result_part_ids: 本次投影消费了哪些 tool_result part，便于后续 compact 判断哪些
+#   tool_result 已经"被模型看过了"，可以安全压缩
+# ============================================================================
 @dataclass(frozen=True, slots=True)
 class PreparedMainRequest:
     request: ChatRequest
@@ -93,29 +123,53 @@ class AgentLoop:
         background_tool_names: frozenset[str] | None = None,
         enable_delegate_tool: bool = True,
     ) -> None:
+        # -------- 阶段 1：核心依赖 (session / provider / 工具元数据) --------
+        # session: 持久化 JSONL 写入与视图重建，是所有"事实落库"的入口
+        # provider: 模型适配器，屏蔽 OpenAI/Anthropic/本地模型的协议差异
+        # tool_settlement: 追踪哪些 tool_call 已被执行/跳过，避免重复结算
+        # task_plan_policy: 任务计划策略，决定何时提示模型回顾任务进度
         self.session = session
         self.tool_settlement = ToolCallSettlement(session)
         self.task_plan_policy = TaskPlanPolicy(session)
         self.provider = provider
         self.request_options = request_options or MainRequestOptions()
         self.context_window = context_window
+
+        # -------- 阶段 2：上下文投影 (projection) 与压缩 (compact) --------
+        # context_builder: 把 session 视图投影成 provider 能理解的 messages
+        # context_manager: 当投影超过 context_window 时，触发 compact（摘要/裁剪）
         self.context_builder = context_builder or ContextBuilder()
         self.context_manager = context_manager
+
+        # -------- 阶段 3：循环上限控制 (limits) --------
+        # max_tool_rounds: 一次 turn 最多允许模型调用多少轮工具，防止无限循环
+        # provider_call_count: 当前 turn 已调用 provider 的次数，受 limits.max_provider_calls 约束
+        # turn_started_at: turn 开始时间，用于 check_turn_timeout 超时检测
         self.limits = limits or AgentLoopLimits.default()
         self.max_tool_rounds = self.limits.max_tool_rounds
         self.clock = clock
         self.provider_call_count = 0
         self.turn_started_at: float | None = None
+
+        # -------- 阶段 4：事件流回调（UI 层注入，AgentLoop 本身不消费）--------
         self.last_stream_events: list[ChatStreamEvent] = []
         self.stream_event_handler = stream_event_handler
         self.tool_event_handler = tool_event_handler
         self.guidance_provider = guidance_provider
         self.cancellation_token = cancellation_token
+
+        # -------- 阶段 5：后台任务管理 (background jobs) --------
+        # background_manager: 管理长时运行的后台工具（如 grep 大仓库），可被取消/查询状态
+        # background_tool_names: 哪些工具被视为"后台工具"，默认包含 background_run 等
         self.background_manager = background_manager
         self.background_tool_names = background_tool_names if background_tool_names is not None else DEFAULT_BACKGROUND_TOOL_NAMES
         self.enable_delegate_tool = enable_delegate_tool
         self._task_plan_reconciliation_attempted = False
         self._tool_rounds_completed = 0
+
+        # -------- 阶段 6：任务边界分类器 --------
+        # TaskBoundaryClassifier 判断新消息是否开启新任务，必要时触发 compact
+        # → 见 firstcoder/agent/task_boundary_classifier.py::TaskBoundaryClassifier
         self.task_boundary_classifier = TaskBoundaryClassifier(
             session=session,
             provider=provider,
@@ -126,6 +180,8 @@ class AgentLoop:
             check_turn_timeout=self._check_turn_timeout,
             tag_task_boundary_messages=self._tag_task_boundary_messages_with_active_hash,
         )
+
+        # -------- 阶段 7：工具注册（去重）--------
         # session 创建时通常已经注册了 session-scoped 工具。这里允许调用方再传入一批
         # 测试或临时工具，但避免重复注册同名工具导致模型 schema 不稳定。
         if tools:
@@ -138,6 +194,10 @@ class AgentLoop:
             if name.startswith("mcp__")
         }
         self._active_mcp_tool_names: set[str] = set()
+
+        # -------- 阶段 8：ToolExecutor 创建 --------
+        # ToolExecutor 负责真正把 tool_call 变成 tool_result：权限检查、沙盒执行、事件回报
+        # → 见 firstcoder/agent/tool_execution.py::ToolExecutor
         self.tool_executor = ToolExecutor(
             session=session,
             settlement=self.tool_settlement,
@@ -151,9 +211,19 @@ class AgentLoop:
             background_manager=self.background_manager,
             background_tool_names=self.background_tool_names,
         )
+
+        # -------- 阶段 9：背景控制工具 + delegate 工具注册 --------
+        # _ensure_background_control_tools(): 注册 background_status / background_cancel
+        # _ensure_delegate_tool(): 注册 delegate 工具（让模型能启动子 agent）
+        # → 见 firstcoder/tools/delegate.py::create_delegate_tool
         self._ensure_background_control_tools()
         self._ensure_delegate_tool()
 
+    # ----------------------------------------------------------------------------
+    # run_user_turn — 异步统一入口
+    # ----------------------------------------------------------------------------
+    # 一个 turn = "用户说一句话 → 模型回答（可能带多轮工具调用）→ 返回最终 response"。
+    # 根据 streaming 参数分流到流式实现或同步实现（在 worker 线程中跑，避免阻塞事件循环）。
     async def run_user_turn(
         self,
         content: str,
@@ -178,6 +248,18 @@ class AgentLoop:
     def clear_stream_events(self) -> None:
         self.last_stream_events = []
 
+    # ============================================================================
+    # _run_user_turn_sync — 同步路径的完整 turn 启动流程
+    # ============================================================================
+    # 1. 检查 pending_permission_execution：上一轮可能因权限确认暂停，
+    #    此时历史里已经有 assistant tool_call 等待 tool_result，不能再追加用户消息。
+    # 2. _begin_turn()：重置 provider_call_count / turn_started_at 等 turn 级计数器。
+    # 3. _repair_interrupted_tool_calls_before_provider_request()：修复上一轮意外中断
+    #    留下的"有 tool_call 但缺 tool_result"的非法序列（补一条 canceled tool_result）。
+    # 4. append_user_message()：把用户输入写入 JSONL。
+    # 5. 任务边界分类 (TaskBoundaryClassifier.classify)：判断是否开启新任务，
+    #    必要时触发 compact，避免上下文漂移。
+    # 6. 进入 _run_tool_loop_interactive 核心循环（见下方）。
     def _run_user_turn_sync(
         self,
         content: str,
@@ -195,10 +277,10 @@ class AgentLoop:
                 pending_input=self.tool_executor.permission_input_request_from_pending(pending),
             )
 
-        self._begin_turn()
+        self._begin_turn() # provider_call_count = 0, _tool_rounds_completed=0
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
-        message_id = self.session.append_user_message(content, attachments=attachments)
+        message_id = self.session.append_user_message(content, attachments=attachments) # 把用户消息写进jsonl
         try:
             if self._initialize_active_task_if_missing(message_id) is None:
                 self._classify_task_boundary(message_id)
@@ -207,10 +289,20 @@ class AgentLoop:
         except AgentCancelledError:
             return self._complete_turn(self._interrupted_response())
 
+        # run_tool_loop_interactive 是核心循环的外壳, 它负责捕获异常
         return self._run_tool_loop_interactive(
             self._complete_once_with_recovery,
         )
 
+    # ============================================================================
+    # resume_with_user_input — 权限确认恢复的异步入口
+    # ============================================================================
+    # 为什么权限恢复不能走普通用户消息路径？
+    #   - 普通用户消息：追加一条新的 role=user 消息到历史。
+    #   - 权限恢复：原始 tool_call 已经在历史里等待匹配的 tool_result，
+    #     必须用 session 保存的原始 tool_call 来补齐 tool_result，不信任 UI 回传的参数。
+    #     否则攻击者可以通过伪造 UI 回传让工具执行越权参数。
+    # ============================================================================
     async def resume_with_user_input(
         self,
         request_id: str,
@@ -218,7 +310,7 @@ class AgentLoop:
         *,
         streaming: bool = False,
     ) -> AgentTurnResult:
-        """Resume a paused turn through the single asynchronous result API."""
+        """ Resume a paused turn through the single asynchronous result API. """
 
         if streaming:
             return await self._resume_with_user_input_streaming(request_id, answer)
@@ -226,10 +318,21 @@ class AgentLoop:
             lambda: self._resume_with_user_input_sync(request_id, answer)
         )
 
+    # ----------------------------------------------------------------------------
+    # _resume_with_user_input_sync — 用用户的权限答复恢复暂停的 turn
+    # ----------------------------------------------------------------------------
+    # 关键步骤：
+    #   1. 校验超时 / 取消 / pending 状态存在
+    #   2. _prepare_permission_resume：根据用户答复决定 allow / deny / 预览过期
+    #   3. _execute_resumed_permission_tool_call：用 session 保存的原始 tool_call 执行
+    #      （注意：绝对不能相信 UI 回传的 tool_call 参数，防止参数篡改攻击）
+    #   4. _finish_permission_resume：把 tool_result 写入 JSONL，清理 pending 状态
+    #   5. _begin_turn(new_user_turn=False)：重置 turn 计时但不重置 turn 序号
+    #   6. 进入 _run_tool_loop_interactive 继续工具循环
     def _resume_with_user_input_sync(self, request_id: str, answer: str) -> AgentTurnResult:
         """用用户回答恢复一个暂停中的权限确认。
 
-        普通 `ask_user` 第一版仍通过“下一条用户消息”继续；权限确认不能这样做，
+        普通 `ask_user` 第一版仍通过”下一条用户消息”继续；权限确认不能这样做，
         因为模型原始 tool_call 已经在历史里等待一个匹配的 tool_result。这里必须先
         用本地 pending 状态补齐最终 tool_result，再继续下一次 provider 调用。
         """
@@ -485,6 +588,20 @@ class AgentLoop:
             request=pending.permission_request,
         )
 
+    # ============================================================================
+    # _complete_once — 单次 provider 调用（不处理工具循环）
+    # ============================================================================
+    # 这是”问模型一次”的最小单元，拆出来后：
+    #   - 同步调用、streaming 调用、prompt-too-long 恢复都能复用同一套上下文构造
+    #   - 调用前后有明确的”检查点”序列，便于插入超时/取消/追踪逻辑
+    #
+    # 流程：
+    #   1. _prepare_main_provider_request：构造 ChatRequest（含 projection / budget / compact）
+    #   2. _reserve_provider_call：检查是否达到 max_provider_calls 上限
+    #   3. _check_turn_timeout / _check_cancelled：超时或取消则抛异常提前退出
+    #   4. provider.complete(prepared.request)：实际调用模型 API
+    #   5. _record_projection_consumed：记录本次投影被哪些 tool_result part 消费，
+    #      便于后续 compact 判断哪些 tool_result 已经”被模型看过了”
     def _complete_once(
         self,
         *,
@@ -493,7 +610,7 @@ class AgentLoop:
     ) -> ChatResponse:
         """构造一次 provider 请求并获得模型响应。
 
-        这一步只负责“问模型一次”，不处理工具循环。拆开后，同步调用、streaming 调用、
+        这一步只负责”问模型一次”，不处理工具循环。拆开后，同步调用、streaming 调用、
         prompt-too-long 恢复都可以复用同一套上下文构造逻辑。
         """
 
@@ -633,6 +750,28 @@ class AgentLoop:
             del self.last_stream_events[start_event_count:]
             raise
 
+    # ============================================================================
+    # _run_tool_loop_interactive — 核心工具循环（本文件最关键的函数）
+    # ============================================================================
+    # 退出条件（三类，互斥）：
+    #   (a) 模型返回的 response 没有 tool_calls：最终回答，直接 _complete_turn
+    #   (b) 命中 max_tool_rounds：返回 tool_round_limit 响应
+    #   (c) 某个工具需要用户输入 / 权限确认：返回 WAITING_FOR_USER_INPUT，等 UI 恢复
+    #
+    # 循环体（每一轮）：
+    #   complete_once() → 得到 ChatResponse
+    #     ├─ 如果无 tool_calls → 退出循环，这就是最终回答
+    #     └─ 有 tool_calls → _continue_tool_loop_from_response 内循环
+    #          1. 写 assistant tool_call 到 JSONL
+    #          2. ToolExecutor.execute_interactive 执行所有 tool_call
+    #          3. 写 tool_result 到 JSONL
+    #          4. 递增 tool_rounds
+    #          5. 再次 complete_once()，让模型基于工具结果继续
+    #
+    # 异常处理：
+    #   - _AgentLoopLimitReached：达到 provider 调用上限 / turn 超时 → 优雅退出
+    #   - AgentCancelledError：被外部 CancellationToken 取消 → 补中断 tool_result 后退出
+    # ============================================================================
     def _run_tool_loop_interactive(self, complete_once, *, initial_tool_choice="auto") -> AgentTurnResult:
         """核心工具循环：问模型，执行工具，再把工具结果回喂给模型。
 
@@ -725,10 +864,24 @@ class AgentLoop:
     def _pending_turn_result(pending_input: UserInputRequest) -> AgentTurnResult:
         return AgentTurnResult(status=AgentTurnStatus.WAITING_FOR_USER_INPUT, pending_input=pending_input)
 
+    # ----------------------------------------------------------------------------
+    # _complete_turn — turn 结束：把最终 response 写入 session，返回 AgentTurnResult
+    # ----------------------------------------------------------------------------
+    # 这是所有退出路径（正常回答 / 工具轮次上限 / 取消 / 超时）的统一出口。
+    # append_assistant_response 把模型的最终回答落到 JSONL，保证会话可恢复。
     def _complete_turn(self, response: ChatResponse) -> AgentTurnResult:
         self.session.append_assistant_response(response)
         return AgentTurnResult(status=AgentTurnStatus.COMPLETED, response=response)
 
+    # ----------------------------------------------------------------------------
+    # _continue_tool_loop_from_response — 工具循环的内循环体
+    # ----------------------------------------------------------------------------
+    # 给定一个已包含 tool_calls 的 response，持续执行工具并回问模型，
+    # 直到模型不再调用工具 / 命中轮次上限 / 需要用户输入。
+    #
+    # 关键顺序（L745 附近）：必须先写 assistant tool_call，再写对应 tool_result。
+    # 这是 provider 消息序列的合法性要求——OpenAI/Anthropic 都要求每条 tool result
+    # 前面必须有对应的 assistant tool_call，否则下一次 complete 会报 400。
     def _continue_tool_loop_from_response(
         self,
         response: ChatResponse,
@@ -743,6 +896,8 @@ class AgentLoop:
             # 关键顺序：必须先写 assistant tool_call，再写对应 tool_result。provider 后续
             # 才能看到合法的 “assistant(tool_calls) -> tool(result)” 消息序列。
             self.session.append_assistant_response(response)
+            # ToolExecutor.execute_interactive: 逐个执行 tool_call，
+            # 如果某个工具需要用户输入 → 返回 pending_input 暂停循环
             execution = self.tool_executor.execute_interactive(response.tool_calls)
             if execution.pending_input is not None:
                 return response, execution.pending_input, tool_rounds
@@ -754,6 +909,7 @@ class AgentLoop:
             if self.max_tool_rounds is not None and tool_rounds >= self.max_tool_rounds:
                 return self._tool_round_limit_response(response), None, tool_rounds
             self._check_cancelled()
+            # 把工具结果回喂给模型，得到下一轮 response
             response = self._drop_unsupported_tool_calls(complete_once())
         return response, None, tool_rounds
 
@@ -856,6 +1012,26 @@ class AgentLoop:
             )
         )
 
+    # ============================================================================
+    # _prepare_main_provider_request — 构造一次 provider 请求的全过程
+    # ============================================================================
+    # 这是"问模型"之前的所有准备工作。每一步都有明确副作用（写入 session / 触发 compact），
+    # 顺序不能乱：
+    #
+    #   1. _repair_interrupted_tool_calls_before_provider_request：修复上一轮意外中断
+    #      留下的非法 tool_call/tool_result 配对（补 canceled 结果）。
+    #   2. _check_cancelled：协作式取消检查。
+    #   3. _append_pending_guidance：把用户/系统通过 guidance_provider 注入的运行时提示
+    #      作为 user 消息追加到历史（例如 "你现在的任务是…"）。
+    #   4. _append_background_notifications：把后台任务完成/失败的通知作为 user 消息追加，
+    #      让模型能感知到长时任务的进展。
+    #   5. _provider_tool_definitions：从 session.tool_registry 取出当前可用工具的 schema。
+    #   6. session.rebuild_view()：从 JSONL 重建当前会话视图（messages 列表）。
+    #   7. _context_budget_for_view：计算当前视图占用的 token 预算。
+    #   8. context_manager.compact_if_needed：如果预算超窗，触发自动 compact
+    #      （摘要旧消息 / 裁剪 tool_result），再 rebuild 一次视图。
+    #   9. _request_messages：把视图投影成 provider 能理解的 messages 列表。
+    #  10. 构造 ChatRequest 并返回 PreparedMainRequest（含 request_id / fingerprint）。
     def _prepare_main_provider_request(
         self,
         *,
@@ -1240,6 +1416,14 @@ class AgentLoop:
         )
 
 
+# ----------------------------------------------------------------------------
+# _AgentLoopLimitReached — 内部异常，用于在嵌套调用中传递"停止原因"
+# ----------------------------------------------------------------------------
+# 以 _ 前缀表示模块私有。当 _reserve_provider_call / _check_turn_timeout 发现
+# 达到 limits 上限时抛出，由 _run_tool_loop_interactive 的外层 except 捕获，
+# 转换成优雅退出的 _limit_response(reason)。这样可以把"为什么停"的语义
+# （PROVIDER_CALL_LIMIT / TURN_TIMEOUT / TOOL_ROUND_LIMIT）从深层调用栈
+# 传回到 turn 出口，而不需要在每一层函数签名里加 reason 参数。
 class _AgentLoopLimitReached(Exception):
     def __init__(self, reason: AgentLoopStopReason) -> None:
         super().__init__(reason.value)

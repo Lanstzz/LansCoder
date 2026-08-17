@@ -1,5 +1,17 @@
 """Command-line entry point for single-turn FirstCoder runs."""
 
+# ============================================================================
+# 阅读路径导航 (Reading Path Guide)
+# ============================================================================
+# 这是 FirstCoder 的最外层入口。核心流程：
+#   main() → 解析参数 → 选择运行模式
+#     ├─ TUI/交互模式 → create_cli_app() → create_firstcoder_app()
+#     └─ 单次执行     → create_cli_app() → run_single_turn()
+# 组装后的核心调用链：
+#   AgentChatRunner.run_user_turn() → AgentLoop → provider.complete()
+# → 下一步阅读：firstcoder/app/factory.py (create_firstcoder_app)
+# ============================================================================
+
 from __future__ import annotations
 from firstcoder.app.ports import ChatRunnerLike
 
@@ -17,6 +29,14 @@ from firstcoder.mcp.config_store import McpConfigStore, McpConfigStoreError
 from firstcoder.permissions.types import PermissionMode
 
 
+# ----------------------------------------------------------------------------
+# CliConfig: CLI 层传给下层的配置快照
+# ----------------------------------------------------------------------------
+# 注意：它只保存命令行解析出来的参数（session、message、model_spec 等）。
+# provider/model 的真正配置在 firstcoder.config.load_config() 里加载，
+# 由 create_firstcoder_app() 内部消费，不会出现在这里。
+# 所以 CliConfig 是 "用户这次想跑什么"，不是 "系统怎么连 LLM"。
+# ----------------------------------------------------------------------------
 @dataclass(frozen=True, slots=True)
 class CliConfig:
     project_root: Path
@@ -87,6 +107,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# ----------------------------------------------------------------------------
+# main(): CLI 顶层路由
+# ----------------------------------------------------------------------------
+# 三分支路由（按优先级从高到低）：
+#   1. 子命令分支  → config / mcp（直接处理并返回，不进 agent loop）
+#   2. TUI 模式    → --tui 或无 --message 且 stdin 是 tty → 启动 Textual 界面
+#   3. 交互模式    → --interactive → run_repl() 行式 REPL
+#   4. 单次执行    → 兜底：读一条 message → run_single_turn()
+# 所有需要 agent 的分支都走 create_cli_app() 组装应用（→ 见下方函数）。
+# ----------------------------------------------------------------------------
 def main(
     argv: list[str] | None = None,
     *,
@@ -105,6 +135,8 @@ def main(
     if args.command == "mcp":
         return run_mcp_command(args)
 
+    # 分支 1 — TUI 模式：显式 --tui，或无 message 且 stdin 是 tty 且非交互
+    #   → create_cli_app() 组装 → app.run() 启动 Textual 事件循环
     if args.tui or (args.message is None and stdin_text is None and sys.stdin.isatty() and not args.interactive):
         config = CliConfig(
             project_root=Path(args.project),
@@ -125,6 +157,8 @@ def main(
             return 1
         return 0
 
+    # 分支 2 — 交互模式：显式 --interactive
+    #   → create_cli_app() 组装 → run_repl() 走行式 stdin 循环
     if args.interactive:
         config = CliConfig(
             project_root=Path(args.project),
@@ -151,6 +185,7 @@ def main(
         print("error: message is required via --message or stdin", file=sys.stderr)
         return 2
 
+    # 分支 3 — 单次执行（兜底）：读一条 message，跑一个 turn 就退出
     config = CliConfig(
         project_root=Path(args.project),
         data_root=Path(args.data_root) if args.data_root is not None else None,
@@ -162,6 +197,7 @@ def main(
         benchmark=args.benchmark,
         resume_session=args.resume_session,
     )
+    # runner 可注入用于测试；默认走 run_single_turn()
     run = runner or run_single_turn
     try:
         output = run(config)
@@ -173,27 +209,62 @@ def main(
     return 0
 
 
+# ----------------------------------------------------------------------------
+# run_single_turn(): 单次 turn 执行路径
+# ----------------------------------------------------------------------------
+# 这是 main() 单次执行分支的最终落点。
+# 通过 create_cli_app() 拿到组装好的 App，再用 app.chat_runner（即
+# AgentChatRunner）跑一个 turn。
+# ★ 想跟踪 "一个 turn 怎么跑"：入口是 AgentChatRunner.run_user_turn()
+#   → 见 firstcoder/agent/chat_runner.py
+# benchmark 模式走特殊分支 run_benchmark_turn()，bypass 权限。
+# ----------------------------------------------------------------------------
 def run_single_turn(config: CliConfig) -> str:
     if config.benchmark:
         return run_benchmark_turn(config)
     app = create_cli_app(config)
+    # ★ 跟踪一个 turn 的核心入口：ChatRunner.run_user_turn()
     response = app.chat_runner.run_user_turn(config.message)
     return response.content
 
 
+# ----------------------------------------------------------------------------
+# run_benchmark_turn(): benchmark 模式特殊处理
+# ----------------------------------------------------------------------------
+# Harbor benchmark 要求无人值守跑完一个 turn，所以这里：
+#   • 权限模式切到 BYPASS       — 不再弹确认，直接 allow_once
+#   • 关掉 prewrite review      — 避免 HITL 卡住
+#   • 设置 benchmark task       — session 记录当前任务文本
+#   • 用 swe_lite limits        — 工具轮次/上下文按 benchmark 规范收紧
+# 任何 Harbor 任务都走这条路径；非 benchmark 请走 run_single_turn() 的正常分支。
+# ----------------------------------------------------------------------------
 def run_benchmark_turn(config: CliConfig) -> str:
     """Run Harbor's non-interactive turn with benchmark-safe session settings."""
 
     app = create_cli_app(config)
+    # benchmark 无人值守：权限全部 bypass
     app.current_session.set_permission_mode(PermissionMode.BYPASS)
+    # 关掉写文件前的 HITL review，避免卡住 verifier
     app.current_session.session.require_prewrite_review = False
+    # 让 session 知道当前 benchmark task 文本（用于日志/恢复）
     app.current_session.session.set_benchmark_task(config.message)
+    # 用 swe_lite 预设 limits，保证与 benchmark 协议对齐
     app.chat_runner.limits = _benchmark_limits(config.max_tool_rounds)
     response = app.chat_runner.run_user_turn(config.message)
     return response.content
 
 
+# ----------------------------------------------------------------------------
+# create_cli_app(): CLI → factory 的桥梁
+# ----------------------------------------------------------------------------
+# 把 CliConfig 翻译成 create_firstcoder_app() 需要的参数，再把 CLI 专属
+# 的两个覆盖项（--max-tool-rounds、--reasoning-effort）应用到组装好的 app 上。
+#   ★ 实际组装函数是 create_firstcoder_app()
+#     → 见 firstcoder/app/factory.py:create_firstcoder_app()
+# 调用方：main() 三个需要 agent 的分支、run_single_turn()、run_benchmark_turn()
+# ----------------------------------------------------------------------------
 def create_cli_app(config: CliConfig):
+    # ★ 真正的组装在这里：构建 session、chat_runner、provider、tool registry
     app = create_firstcoder_app(
         project_root=config.project_root,
         data_root=config.data_root,
@@ -201,8 +272,10 @@ def create_cli_app(config: CliConfig):
         model_spec=config.model_spec,
         resume_session=config.resume_session,
     )
+    # CLI 覆盖项 1：--max-tool-rounds 改写 agent loop 的工具轮次上限
     if config.max_tool_rounds is not None:
         app.chat_runner.limits = AgentLoopLimits.default().with_max_tool_rounds(config.max_tool_rounds)
+    # CLI 覆盖项 2：--reasoning-effort 注入到 provider 请求的 extra_body
     if config.reasoning_effort is not None:
         effort = config.reasoning_effort.strip()
         if not effort:
@@ -210,6 +283,7 @@ def create_cli_app(config: CliConfig):
         options = app.chat_runner.request_options
         extra_body = dict(options.extra_body)
         extra_body["reasoning_effort"] = effort
+        # dataclasses.replace() 返回新的 RequestOptions，不破坏原对象
         app.chat_runner.request_options = replace(options, extra_body=extra_body)
     return app
 
