@@ -94,6 +94,7 @@ class AgentSession:
     known_message_ids: set[str] = field(default_factory=set)
     turn_counter: int = 0
     mode: str = "default"
+    memory_manager: MemoryManager | None = None
     benchmark_task: str = ""
     require_prewrite_review: bool = True
     pending_permission_execution: PendingPermissionExecution | None = None
@@ -111,6 +112,7 @@ class AgentSession:
         tools: list[Tool] | None = None,
         permission_manager: PermissionManager | None = None,
         sandbox_access: SandboxAccess | None = None,
+        memory_manager: MemoryManager | None = None,
     ) -> "AgentSession":
         """创建全新 session，并初始化 session-scoped 工具。
 
@@ -133,6 +135,7 @@ class AgentSession:
             store=store,
             writer=writer,
             skill_catalog=(skill_catalog or SkillCatalog()).resolved(),
+            memory_manager=memory_manager,
         )
         session = cls(
             session_id=session_id,
@@ -147,6 +150,7 @@ class AgentSession:
             sandbox_access=sandbox_access or SandboxAccess(),
             turn_counter=0,
             mode=permission_manager.mode.value if permission_manager is not None else "default",
+            memory_manager=memory_manager,
         )
         session._sync_sandbox_access_with_mode()
         session.append_session_created()
@@ -162,6 +166,7 @@ class AgentSession:
         tools: list[Tool] | None = None,
         permission_manager: PermissionManager | None = None,
         sandbox_access: SandboxAccess | None = None,
+        memory_manager: MemoryManager | None = None,
     ) -> "AgentSession":
         """从项目根目录创建 session。
 
@@ -183,6 +188,7 @@ class AgentSession:
             tools=tools,
             permission_manager=permission_manager,
             sandbox_access=sandbox_access,
+            memory_manager=memory_manager,
         )
 
     @classmethod
@@ -196,6 +202,7 @@ class AgentSession:
         tools: list[Tool] | None = None,
         permission_manager: PermissionManager | None = None,
         sandbox_access: SandboxAccess | None = None,
+        memory_manager: MemoryManager | None = None,
     ) -> "AgentSession":
         """从 JSONL 会话日志恢复运行期 session。
 
@@ -221,6 +228,7 @@ class AgentSession:
             store=store,
             writer=writer,
             skill_catalog=(skill_catalog or SkillCatalog()).resolved(),
+            memory_manager=memory_manager,
         )
         session = cls(
             session_id=session_id,
@@ -235,6 +243,7 @@ class AgentSession:
             sandbox_access=sandbox_access or SandboxAccess(),
             turn_counter=turn_counter,
             mode=permission_manager.mode.value if permission_manager is not None else "default",
+            memory_manager=memory_manager,
             _tool_result_message_ids=_tool_result_message_ids_from_view(view),
         )
         session._sync_sandbox_access_with_mode()
@@ -341,6 +350,7 @@ class AgentSession:
             provider_capability_overrides=self.provider_capability_overrides,
             permission_policy=self.permission_policy,
             mode=self.mode,
+            memory_index=self.memory_manager.render_index_text() if self.memory_manager is not None else "",
         )
         entry = self.prompt_cache.get_or_build(inputs, self.prompt_builder)
         self.runtime_state.system_prompt_fingerprint = entry.fingerprint
