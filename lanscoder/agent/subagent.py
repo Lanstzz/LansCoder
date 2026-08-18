@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from lanscoder.agent.background import BackgroundJobManager, current_job_id
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.session import AgentSession
 from lanscoder.agent.worktree import Worktree, WorktreeDiff, WorktreeError, WorktreeManager
@@ -146,6 +147,7 @@ class SubagentRunner:
         sandbox_access: SandboxAccess | None = None,
         request_options: MainRequestOptions | None = None,
         limits: AgentLoopLimits | None = None,
+        background_manager: BackgroundJobManager | None = None,
     ) -> None:
         self.store = store
         self.provider = provider
@@ -157,6 +159,7 @@ class SubagentRunner:
         self.sandbox_access = sandbox_access or SandboxAccess()
         self.request_options = request_options or MainRequestOptions()
         self.limits = limits or AgentLoopLimits(max_tool_rounds=20, max_provider_calls=40, max_turn_seconds=600)
+        self.background_manager = background_manager
         self.profile_map = SUBAGENT_PROFILES
 
     def profile(self, role: str) -> SubagentProfile | None:
@@ -219,6 +222,7 @@ class SubagentRunner:
             request_options=self.request_options,
             background_manager=None,
             enable_delegate_tool=False,
+            progress_callback=self._make_progress_callback(),
         )
         try:
             result = asyncio.run(loop.run_user_turn(prompt))
@@ -294,6 +298,7 @@ class SubagentRunner:
                 request_options=self.request_options,
                 background_manager=None,
                 enable_delegate_tool=False,
+                progress_callback=self._make_progress_callback(),
             )
             try:
                 result = asyncio.run(loop.run_user_turn(prompt))
@@ -419,6 +424,26 @@ class SubagentRunner:
             worktree_branch=worktree.branch,
         )
         return child
+
+    def _make_progress_callback(self):
+        """Return a progress callback that updates the current background job.
+
+        Uses the thread-local ``current_job_id()`` to discover which background
+        job this subagent belongs to, then writes progress data into
+        ``BackgroundJob.progress`` for the TUI to read.
+        """
+        if self.background_manager is None:
+            return None
+        job_id = current_job_id()
+        if job_id is None:
+            return None
+
+        def _report(state: dict[str, Any]) -> None:
+            job = self.background_manager.get(job_id)
+            if job is not None:
+                job.progress = state
+
+        return _report
 
     def _child_permission_manager_for_inline(self) -> PermissionManager | None:
         """Clone the parent permission manager with a NETWORK_REQUEST grant added.

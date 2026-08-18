@@ -122,6 +122,7 @@ class AgentLoop:
         background_manager: BackgroundJobManager | None = None,
         background_tool_names: frozenset[str] | None = None,
         enable_delegate_tool: bool = True,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         # -------- 阶段 1：核心依赖 (session / provider / 工具元数据) --------
         # session: 持久化 JSONL 写入与视图重建，是所有"事实落库"的入口
@@ -157,6 +158,8 @@ class AgentLoop:
         self.tool_event_handler = tool_event_handler
         self.guidance_provider = guidance_provider
         self.cancellation_token = cancellation_token
+        self.progress_callback = progress_callback
+        self._total_tokens = 0
 
         # -------- 阶段 5：后台任务管理 (background jobs) --------
         # background_manager: 管理长时运行的后台工具（如 grep 大仓库），可被取消/查询状态
@@ -663,6 +666,7 @@ class AgentLoop:
         self._check_cancelled()
         response = self.provider.complete(prepared.request)
         self._record_projection_consumed(prepared)
+        self._report_progress(response)
         return response
 
     def _main_chat_request(self, messages, definitions, tool_choice) -> ChatRequest:
@@ -734,6 +738,7 @@ class AgentLoop:
                 "provider stream ended without message_completed event",
             )
         self._record_projection_consumed(prepared)
+        self._report_progress(final_response)
         return final_response
 
     async def _stream_once_with_recovery(
@@ -1130,6 +1135,24 @@ class AgentLoop:
             model=self.provider.model,
         )
 
+    def _report_progress(self, response: ChatResponse) -> None:
+        """Notify the progress callback (if set) after each provider call.
+
+        Accumulates total token usage across the turn so the TUI can show
+        real-time subagent progress.
+        """
+        if self.progress_callback is None:
+            return
+        usage = response.usage
+        if usage is not None and usage.total_tokens is not None:
+            self._total_tokens += usage.total_tokens
+        self.progress_callback(
+            {
+                "provider_calls": self.provider_call_count,
+                "total_tokens": self._total_tokens,
+            }
+        )
+
     def _context_budget_for_view(
         self,
         view,
@@ -1291,6 +1314,7 @@ class AgentLoop:
             permission_manager=self.session.permission_manager,
             sandbox_access=self.session.sandbox_access,
             request_options=self.request_options,
+            background_manager=self.background_manager,
         )
         self.session.tool_registry.register(
             create_delegate_tool(
