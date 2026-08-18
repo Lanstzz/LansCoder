@@ -99,7 +99,7 @@ ScrollBarCorner {
 .activity-line {
     height: 1;
     margin: 0 3;
-    color: #527c3b;
+    color: #2b5fd9;
 }
 
 .task-plan-panel {
@@ -109,7 +109,7 @@ ScrollBarCorner {
     padding: 0 1;
     color: #cfd1d6;
     background: #0f1014;
-    border-left: solid #7bba55;
+    border-left: solid #4f8cff;
 }
 
 .task-plan-panel.hidden {
@@ -145,22 +145,27 @@ ScrollBarCorner {
 .user-message {
     color: #cfd1d6;
     background: #0f1014;
-    border-left: solid #50b7c2;
+    border-left: solid #ffffff;
 }
 
 .assistant-message {
     color: #cfd1d6;
     background: #0f1014;
-    border-left: solid #7bba55;
+    border-left: solid #4f8cff;
 }
 
 .assistant-message MarkdownBlock {
     margin: 0;
 }
 
+/* 助手消息第一段是标签行（LansCoder），染成品牌蓝，正文段落保持默认色。 */
+.assistant-message MarkdownParagraph:first-of-type {
+    color: #4f8cff;
+}
+
 .reasoning-message {
-    color: #527c3b;
-    border-left: solid #7bba55;
+    color: #2b5fd9;
+    border-left: solid #4f8cff;
 }
 
 .permission-message,
@@ -177,5 +182,5 @@ ScrollBarCorner {
 }
 
 .streaming {
-    border-left: solid #7bba55;
+    border-left: solid #4f8cff;
 }

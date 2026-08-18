@@ -4,8 +4,10 @@ import threading
 from unittest.mock import Mock
 
 import pytest
+from markdown_it import MarkdownIt
 from rich.text import Text
 from textual import events
+from textual.color import Color
 from textual.widgets import Markdown
 from textual.widgets import TextArea
 
@@ -25,8 +27,9 @@ from firstcoder.app.tui import _plain_static
 from firstcoder.app.tui import _observe_markdown_update
 from firstcoder.app.picker import TuiPickerItem, TuiPickerState, render_picker
 from firstcoder.app.picker_adapters import render_picker_item
+from firstcoder.app import theme
 from firstcoder.app.activity_view import task_plan_panel_text, tool_event_label, tool_event_status, turn_metrics_text
-from firstcoder.app.welcome import welcome_renderable
+from firstcoder.app.welcome import WELCOME_LOGO_PIXELS, welcome_renderable
 from firstcoder.app.transcript_view import entry_classes, tool_event_entry_kind
 from firstcoder.app.tui_state import TuiEntryKind, TuiTaskPlanPanelState, TuiTranscript
 from firstcoder.app.tui_state import TuiTranscriptEntry
@@ -242,7 +245,7 @@ def test_command_picker_renderable_colors_selected_cursor() -> None:
     assert isinstance(rendered, Text)
     assert rendered.plain == "Select:\n> 1. first\n  2. second"
     assert any(span.start == len("Select:\n") and span.end == len("Select:\n>") for span in rendered.spans)
-    assert any(span.style == "#7bba55 bold" for span in rendered.spans)
+    assert any(span.style == "#4f8cff bold" for span in rendered.spans)
 
 
 def test_picker_rerender_updates_existing_command_widget_without_full_rerender(monkeypatch) -> None:
@@ -458,11 +461,11 @@ def test_firstcoder_app_topbar_colors_each_permission_mode(mode, color) -> None:
     session.mode = mode
     app = FirstCoderApp(current_session=session)
 
-    assert app._topbar_text() == ("[#7bba55]FirstCoder[/]   [#303238]·[/]   [#7bba55]idle · ready[/]   " f"[#303238]·[/]   [{color}]{mode}[/]")
+    assert app._topbar_text() == ("[#4f8cff]LansCoder[/]   [#303238]·[/]   [#4f8cff]idle · ready[/]   " f"[#303238]·[/]   [{color}]{mode}[/]")
     assert "sess_test" not in app._topbar_text()
 
 
-def test_firstcoder_app_topbar_shows_yurenapi_glow_and_hides_session_id() -> None:
+def test_firstcoder_app_topbar_shows_model_glow_and_hides_session_id() -> None:
     app = FirstCoderApp(
         current_session=FakeSession(),
         config=FirstCoderTuiConfig(
@@ -474,7 +477,7 @@ def test_firstcoder_app_topbar_shows_yurenapi_glow_and_hides_session_id() -> Non
 
     text = app._topbar_text()
 
-    assert Text.from_markup(text).plain == "FirstCoder   ·   idle · ready   ·   yurenapi/gpt-5.5   ·   standard   ·   cwd FirstCoder"
+    assert Text.from_markup(text).plain == "LansCoder   ·   idle · ready   ·   yurenapi/gpt-5.5   ·   standard   ·   cwd FirstCoder"
     assert "[#7eb6ff]r[/]" in text
     assert "sess_test" not in text
 
@@ -494,31 +497,36 @@ def test_firstcoder_app_topbar_shows_yurenapi_glow_and_hides_session_id() -> Non
         ("claude-opus-4-8", "#ff6f61"),
         ("claude-sonnet-5", "#f0b36a"),
         ("claude-sonnet-4-6", "#f0a18c"),
+        ("deepseek-v4-pro", "#143aa0"),
+        ("deepseek-v4-flash", "#94c9ff"),
     ],
 )
-def test_supported_yuren_models_use_distinct_moving_colour_bands(model: str, colour: str) -> None:
-    first = _provider_model_markup("Yuren", model, glow_frame=0)
-    next_frame = _provider_model_markup("Yuren", model, glow_frame=1)
+def test_supported_models_use_distinct_moving_colour_bands_for_any_provider(model: str, colour: str) -> None:
+    first = _provider_model_markup("OpenAI", model, glow_frame=0)
+    next_frame = _provider_model_markup("OpenAI", model, glow_frame=1)
 
-    assert Text.from_markup(first).plain == f"Yuren/{model}"
+    assert Text.from_markup(first).plain == f"OpenAI/{model}"
     assert first != next_frame
     assert f"[{colour}]" in first
     assert "[#6e6d72]/[/]" in first
 
 
-def test_other_provider_names_keep_the_standard_green() -> None:
-    assert _provider_name_markup("OpenAI", glow_frame=4) == "[#7bba55]OpenAI[/]"
-    assert _provider_model_markup("OpenAI", "gpt-5.6", glow_frame=4) == "[#7bba55]OpenAI[/][#6e6d72]/gpt-5.6[/]"
-    yurenapi_glow = _provider_model_markup("yurenapi", "gpt-5.5", glow_frame=0)
-    assert Text.from_markup(yurenapi_glow).plain == "yurenapi/gpt-5.5"
-    assert yurenapi_glow != "[#7bba55]yurenapi[/][#6e6d72]/gpt-5.5[/]"
-    assert _provider_model_markup("OpenAI", "grok-4.5", glow_frame=0) == ("[#7bba55]OpenAI[/][#6e6d72]/grok-4.5[/]")
+def test_unknown_models_keep_the_standard_accent_for_any_provider() -> None:
+    assert _provider_name_markup("OpenAI", glow_frame=4) == "[#4f8cff]OpenAI[/]"
+    assert _provider_model_markup("OpenAI", "gpt-5.6", glow_frame=4) == "[#4f8cff]OpenAI[/][#6e6d72]/gpt-5.6[/]"
+    assert _provider_model_markup("deepseek", "deepseek-chat", glow_frame=4) == ("[#4f8cff]deepseek[/][#6e6d72]/deepseek-chat[/]")
+    known_model_glow = _provider_model_markup("yurenapi", "gpt-5.5", glow_frame=0)
+    assert Text.from_markup(known_model_glow).plain == "yurenapi/gpt-5.5"
+    assert known_model_glow != "[#4f8cff]yurenapi[/][#6e6d72]/gpt-5.5[/]"
+    openai_grok_glow = _provider_model_markup("OpenAI", "grok-4.5", glow_frame=0)
+    assert Text.from_markup(openai_grok_glow).plain == "OpenAI/grok-4.5"
+    assert openai_grok_glow != "[#4f8cff]OpenAI[/][#6e6d72]/grok-4.5[/]"
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_yuren_provider_glow_animates_and_stops_when_the_app_unmounts() -> None:
-    app = FirstCoderApp(config=FirstCoderTuiConfig(provider_name="Yuren", provider_model="gpt-5.6-terra"))
+async def test_model_glow_animates_and_stops_when_the_app_unmounts() -> None:
+    app = FirstCoderApp(config=FirstCoderTuiConfig(provider_name="OpenAI", provider_model="gpt-5.6-terra"))
 
     async with app.run_test():
         timer = app._provider_glow_timer
@@ -534,8 +542,8 @@ async def test_yuren_provider_glow_animates_and_stops_when_the_app_unmounts() ->
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_unsupported_yuren_model_does_not_start_provider_glow() -> None:
-    app = FirstCoderApp(config=FirstCoderTuiConfig(provider_name="Yuren", provider_model="other-model"))
+async def test_unsupported_model_does_not_start_provider_glow() -> None:
+    app = FirstCoderApp(config=FirstCoderTuiConfig(provider_name="OpenAI", provider_model="other-model"))
 
     async with app.run_test():
         assert app._provider_glow_timer is None
@@ -581,6 +589,27 @@ async def test_static_and_completed_markdown_output_allow_selection() -> None:
         markdown = app.query_one("FirstCoderMarkdown", FirstCoderMarkdown)
         assert markdown.allow_select is True
         assert all(block.allow_select for block in markdown.query("*"))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_assistant_label_paragraph_renders_in_brand_blue() -> None:
+    """助手消息第一段（LansCoder 标签行）染品牌蓝，正文段落保持默认色。"""
+    app = FirstCoderApp()
+
+    async with app.run_test() as pilot:
+        box = _plain_static("", classes="assistant-message")
+        await app.mount(box)
+        paragraph_type = FirstCoderMarkdown.BLOCKS["paragraph_open"]
+        tokens = MarkdownIt().parse("LansCoder\n\nbody paragraph")
+        label = paragraph_type(Markdown("probe"), tokens[0])
+        body = paragraph_type(Markdown("probe"), tokens[2])
+        await box.mount(label)
+        await box.mount(body)
+        await pilot.pause()
+
+        assert label.styles.color == Color.parse(theme.ACCENT)
+        assert body.styles.color != Color.parse(theme.ACCENT)
 
 
 @pytest.mark.anyio
@@ -631,21 +660,34 @@ async def test_composer_selection_copy_does_not_quit(copy_key) -> None:
         assert app.is_running is True
 
 
-def test_welcome_renderable_uses_colored_full_block_pixels() -> None:
+def test_welcome_renderable_uses_colored_box_pixels() -> None:
     renderable = welcome_renderable()
     text = renderable.renderable
     next_text = welcome_renderable(particle_frame=1).renderable
 
     assert renderable.align == "center"
-    assert "██" in text.plain
-    assert "▀" not in text.plain
+    assert "█" in text.plain
     assert "FirstCoder" not in text.plain
+    assert "LansCoder" not in text.plain
     assert "Commands:" not in text.plain
-    assert any(span.style == "#81e8bb" for span in text.spans)
-    assert any(span.style == "#18cfcb" for span in text.spans)
-    assert any(span.style == "#f5fcfa" for span in text.spans)
-    assert any(span.style == "#b8ffdf" for span in text.spans)
+    # 渐变主色（左亮 #00d4ff → 右深 #0099ff）与粒子色（白 / 浅蓝）。
+    assert any(span.style == "#00d4ff" for span in text.spans)
+    assert any(span.style == "#0099ff" for span in text.spans)
+    assert any(span.style == "#ffffff" for span in text.spans)
+    assert any(span.style == "#b0e0ff" for span in text.spans)
     assert text.plain != next_text.plain
+
+
+def test_welcome_logo_fits_compact_threshold_and_gradients_left_to_right() -> None:
+    # 全尺寸 logo 必须在 COMPACT_WELCOME_MAX_WIDTH=80 阈值之上仍能完整显示，
+    # 否则常规终端永远看不到像素字。
+    assert all(len(row) <= 80 for row in WELCOME_LOGO_PIXELS)
+    # 渐变方向：渲染时最左前景是最亮的 #00d4ff，最右前景是最深的 #0099ff。
+    text = welcome_renderable().renderable
+    bright_starts = [span.start for span in text.spans if span.style == "#00d4ff"]
+    deep_starts = [span.start for span in text.spans if span.style == "#0099ff"]
+    assert bright_starts and deep_starts
+    assert min(bright_starts) < min(deep_starts)
 
 
 @pytest.mark.anyio
@@ -658,7 +700,7 @@ async def test_firstcoder_app_shows_welcome_until_first_input() -> None:
         welcome = app.query_one("#welcome")
         content = welcome.content
         plain = getattr(getattr(content, "renderable", content), "plain", str(content))
-        assert "██" in plain
+        assert "█" in plain
         assert "Commands:" not in plain
 
         await pilot.click("#input")
@@ -695,8 +737,8 @@ async def test_firstcoder_app_uses_compact_welcome_in_an_80_by_24_terminal() -> 
         welcome = app.query_one("#welcome")
         plain = getattr(getattr(welcome.content, "renderable", welcome.content), "plain", str(welcome.content))
 
-        assert "firstcoder" in plain
-        assert "██" not in plain
+        assert "lanscoder" in plain
+        assert "█" not in plain
         assert app._welcome_particle_timer is None
         assert app.query_one("#input").display is True
 
@@ -705,7 +747,7 @@ async def test_firstcoder_app_uses_compact_welcome_in_an_80_by_24_terminal() -> 
 
         full_welcome = app.query_one("#welcome")
         full_plain = getattr(getattr(full_welcome.content, "renderable", full_welcome.content), "plain", str(full_welcome.content))
-        assert "██" in full_plain
+        assert "█" in full_plain
         assert app._welcome_particle_timer is not None
 
 
@@ -721,8 +763,8 @@ def test_firstcoder_app_topbar_uses_spacious_two_sided_layout_when_width_is_know
 
     text = app._topbar_text(width=120)
 
-    assert text.startswith("[#7bba55]FirstCoder[/]")
-    assert "[#7bba55]idle · ready[/]" in text
+    assert text.startswith("[#4f8cff]LansCoder[/]")
+    assert "[#4f8cff]idle · ready[/]" in text
     assert "sess_test" not in text
     assert "yurenapi/gpt-5.5" in Text.from_markup(text).plain
     assert "[#7eb6ff]r[/]" in text
@@ -737,7 +779,7 @@ def test_firstcoder_app_topbar_highlights_bypass_mode_and_truncates_long_session
 
     app = FirstCoderApp(current_session=BypassSession())
 
-    assert app._topbar_text() == ("[#7bba55]FirstCoder[/]   [#303238]·[/]   [#7bba55]idle · ready[/]   " "[#303238]·[/]   [#ff6b5f]bypass[/]")
+    assert app._topbar_text() == ("[#4f8cff]LansCoder[/]   [#303238]·[/]   [#4f8cff]idle · ready[/]   " "[#303238]·[/]   [#ff6b5f]bypass[/]")
 
 
 def test_firstcoder_app_topbar_includes_live_activity_status() -> None:
@@ -745,7 +787,7 @@ def test_firstcoder_app_topbar_includes_live_activity_status() -> None:
 
     app._activity_text = "thinking [.. ] planning next step..."
 
-    assert "[#7bba55]thinking [.. ] planning next step...[/]" in app._topbar_text(width=120)
+    assert "[#4f8cff]thinking [.. ] planning next step...[/]" in app._topbar_text(width=120)
 
 
 def test_firstcoder_app_topbar_truncates_long_activity_before_metadata() -> None:
@@ -761,7 +803,7 @@ def test_firstcoder_app_topbar_truncates_long_activity_before_metadata() -> None
 
     text = app._topbar_text(width=150)
 
-    assert "[#7bba55]yurenapi[/][#6e6d72]/very-long-model-name[/]" in text
+    assert "[#4f8cff]yurenapi[/][#6e6d72]/very-long-model-name[/]" in text
     assert "[#6e6d72]cwd FirstCoder[/]" in text
     assert "reading think tool result reading think tool result" not in text
     assert "thinking" in Text.from_markup(text).plain
@@ -784,14 +826,14 @@ def test_firstcoder_app_topbar_fits_narrow_width_with_long_activity_and_metadata
     assert "\n" not in plain
     assert len(plain) <= 80
     assert "sess_test" not in plain
-    assert plain.startswith("FirstCoder")
+    assert plain.startswith("LansCoder")
 
     narrow_plain = Text.from_markup(app._topbar_text(width=60)).plain
 
     assert "\n" not in narrow_plain
     assert len(narrow_plain) <= 60
     assert "sess_test" not in narrow_plain
-    assert narrow_plain.startswith("FirstCoder")
+    assert narrow_plain.startswith("LansCoder")
 
 
 def test_firstcoder_app_topbar_truncates_narrow_metadata_to_one_row() -> None:
@@ -808,7 +850,7 @@ def test_firstcoder_app_topbar_truncates_narrow_metadata_to_one_row() -> None:
 
     assert "\n" not in plain
     assert len(plain) <= 60
-    assert plain.startswith("FirstCoder")
+    assert plain.startswith("LansCoder")
     assert "idle" in plain
     assert "sess_test" not in plain
 
@@ -829,7 +871,7 @@ def test_firstcoder_app_topbar_single_line_with_multiline_thinking() -> None:
 
     assert "\n" not in plain
     assert Text(plain).cell_len <= 120
-    assert plain.startswith("FirstCoder")
+    assert plain.startswith("LansCoder")
     assert "cwd FirstCoder" in plain
 
 
@@ -846,7 +888,7 @@ def test_tui_transcript_records_structured_entries_with_stable_labels() -> None:
     )
 
     assert [entry.id for entry in transcript.entries] == [user.id, assistant.id, tool.id]
-    assert [entry.label for entry in transcript.entries] == ["you", "FirstCoder", "tool exec_command running"]
+    assert [entry.label for entry in transcript.entries] == ["you", "LansCoder", "tool exec_command running"]
     assert transcript.entries[-1].status == "running"
 
 
@@ -956,7 +998,7 @@ def test_firstcoder_app_records_rendered_messages_in_transcript(monkeypatch) -> 
 
     assert [(entry.kind, entry.label, entry.body) for entry in app.transcript.entries] == [
         (TuiEntryKind.USER, "you", "> hello"),
-        (TuiEntryKind.ASSISTANT, "FirstCoder", "**hi**"),
+        (TuiEntryKind.ASSISTANT, "LansCoder", "**hi**"),
     ]
 
 
@@ -1846,7 +1888,7 @@ async def test_streaming_markdown_becomes_selectable_only_after_final_update() -
 
         await app.wait_for_stream_finalization(markdown)
         assert markdown.allow_select is True
-        assert markdown._markdown == "FirstCoder:\n\nfinal answer"
+        assert markdown._markdown == "LansCoder:\n\nfinal answer"
         assert all(not screen._selection_is_blocked_by_streaming_markdown(block) for block in markdown.query("MarkdownBlock"))
 
 
@@ -1874,7 +1916,7 @@ async def test_closing_one_stream_segment_twice_runs_one_final_markdown_update(m
         assert markdown.allow_select is False
         await app.wait_for_stream_finalization(markdown)
 
-        assert final_updates == ["FirstCoder:\n\nfinal answer"]
+        assert final_updates == ["LansCoder:\n\nfinal answer"]
         assert markdown.allow_select is True
 
 
@@ -1951,7 +1993,7 @@ async def test_stream_segments_on_both_sides_of_tool_become_selectable() -> None
         app._close_stream_segment_for_tool()
         await app.wait_for_stream_finalization(first)
         assert first.allow_select is True
-        assert first._markdown == "FirstCoder:\n\nbefore tool"
+        assert first._markdown == "LansCoder:\n\nbefore tool"
 
         app._append_stream_text("after tool")
         app._stream_text_started = True
@@ -1963,7 +2005,7 @@ async def test_stream_segments_on_both_sides_of_tool_become_selectable() -> None
         app._write_chat_response(ChatResponse(provider="fake", model="fake", content="after tool"))
         await app.wait_for_stream_finalization(second)
         assert second.allow_select is True
-        assert second._markdown == "FirstCoder:\n\nafter tool"
+        assert second._markdown == "LansCoder:\n\nafter tool"
 
 
 def test_firstcoder_app_installs_and_restores_stream_event_handler() -> None:
@@ -1994,7 +2036,7 @@ def test_firstcoder_app_streams_text_delta_without_repeating_final_text(monkeypa
 
     assert [type(widget).__name__ for widget in output.mounted] == ["FirstCoderMarkdown"]
     assert output.mounted[0].allow_select is True
-    assert output.mounted[0].updates[-1] == "FirstCoder:\n\nhello"
+    assert output.mounted[0].updates[-1] == "LansCoder:\n\nhello"
     assert app._stream_text_buffer == "hello"
     assert runner.seen == [
         ChatStreamEvent(kind="text_delta", text="he"),
@@ -2009,7 +2051,7 @@ def test_closing_stream_segment_twice_without_event_loop_updates_final_snapshot_
 
     app._append_stream_text("final answer")
     markdown = output.mounted[0]
-    initial_snapshot = "FirstCoder:\n\nfinal answer"
+    initial_snapshot = "LansCoder:\n\nfinal answer"
     assert markdown.updates == [initial_snapshot]
 
     original_update = markdown.update
@@ -2044,7 +2086,7 @@ def test_firstcoder_app_streaming_skips_normalized_duplicate_assistant_line(monk
 
     assert [type(widget).__name__ for widget in output.mounted] == ["FirstCoderMarkdown"]
     assert output.mounted[0].allow_select is True
-    assert output.mounted[0].updates[-1] == "FirstCoder:\n\nhello"
+    assert output.mounted[0].updates[-1] == "LansCoder:\n\nhello"
 
 
 def test_firstcoder_app_streaming_skips_replaying_intermediate_assistant_lines(monkeypatch) -> None:
@@ -2068,7 +2110,7 @@ def test_firstcoder_app_streaming_skips_replaying_intermediate_assistant_lines(m
     app._restore_stream_event_handler(previous_handler)
 
     assert [type(widget).__name__ for widget in output.mounted] == ["FirstCoderMarkdown"]
-    assert output.mounted[0].updates[-1] == "FirstCoder:\n\n最终结论"
+    assert output.mounted[0].updates[-1] == "LansCoder:\n\n最终结论"
     assert [entry.body for entry in app.transcript.entries if entry.kind == TuiEntryKind.ASSISTANT] == ["最终结论"]
 
 
@@ -2086,12 +2128,12 @@ def test_firstcoder_app_paces_stream_markdown_updates(monkeypatch) -> None:
     markdown = output.mounted[0]
     assert type(markdown).__name__ == "FirstCoderMarkdown"
     assert markdown.allow_select is False
-    assert markdown.updates == ["FirstCoder:\n\n我"]
+    assert markdown.updates == ["LansCoder:\n\n我"]
     assert app._stream_text_buffer == "我在这里"
 
     app._flush_stream_text()
 
-    assert markdown.updates[-1] == "FirstCoder:\n\n我在这里"
+    assert markdown.updates[-1] == "LansCoder:\n\n我在这里"
 
 
 def test_firstcoder_app_coalesces_stream_chunks_into_one_ui_callback(monkeypatch) -> None:
@@ -2167,12 +2209,12 @@ def test_firstcoder_app_stream_markdown_update_uses_latest_snapshot(monkeypatch)
     app._append_stream_text("这里")
     app._flush_stream_text()
 
-    assert updates == ["FirstCoder:\n\n我"]
+    assert updates == ["LansCoder:\n\n我"]
 
     update_results[0].finish()
     timers[-1]()
 
-    assert updates == ["FirstCoder:\n\n我", "FirstCoder:\n\n我在这里"]
+    assert updates == ["LansCoder:\n\n我", "LansCoder:\n\n我在这里"]
 
 
 def test_firstcoder_app_does_not_scroll_stream_when_render_is_deferred(monkeypatch) -> None:
@@ -2354,7 +2396,7 @@ def test_firstcoder_app_replaces_partial_stream_when_final_response_differs(monk
     app._restore_stream_event_handler(previous_handler)
 
     assert [type(widget).__name__ for widget in output.mounted] == ["FirstCoderMarkdown"]
-    assert output.mounted[0].updates[-1] == "FirstCoder:\n\ncomplete ok"
+    assert output.mounted[0].updates[-1] == "LansCoder:\n\ncomplete ok"
     assert app._stream_text_buffer == "complete ok"
 
 
@@ -2964,8 +3006,8 @@ def test_firstcoder_app_starts_new_stream_block_after_tool_event(monkeypatch) ->
     first_markdown, _, second_markdown = output.mounted
     assert first_markdown.allow_select is True
     assert second_markdown.allow_select is False
-    assert first_markdown.updates[-1] == "FirstCoder:\n\n我先看看。"
-    assert second_markdown.updates[-1] == "FirstCoder:\n\n看完了。"
+    assert first_markdown.updates[-1] == "LansCoder:\n\n我先看看。"
+    assert second_markdown.updates[-1] == "LansCoder:\n\n看完了。"
 
 
 def test_permission_requested_tool_event_uses_permission_style() -> None:

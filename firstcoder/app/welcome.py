@@ -5,65 +5,137 @@ from __future__ import annotations
 from rich.align import Align
 from rich.text import Text
 
+# 粒子颜色（白 / 浅蓝）与保留的深色背景风格。"O" 不参与渲染（透明格渲染为空格，
+# 背景由 TUI 主题提供），仅保留配色文档用途。
 WELCOME_LOGO_PALETTE = {
-    "M": "#81e8bb",
-    "C": "#18cfcb",
-    "T": "#1ba59e",
-    "W": "#f5fcfa",
     "O": "#002630",
-    "P": "#b8ffdf",
-    "Q": "#45e6df",
+    "W": "#ffffff",
+    "B": "#b0e0ff",
 }
 
-WELCOME_LOGO_PIXELS = (
-    ".................M..CCT",
-    "..................CCCTT",
-    ".................CCCTCT",
-    "......CTTCT......CTCTT",
-    ".......TCCTT....TTTTTC",
-    ".......CTCTTT...TTTT",
-    ".........TTTT...TC",
-    "",
-    "...............M",
-    "...............M",
-    "",
-    "............WWWWWWWW",
-    ".........MWWWWWWWWWWWM",
-    "........WWWWWWWWWWWWMMM",
-    "......MWWWWWWWWWWWWWMMMC",
-    ".....MWWWWWWWWWWWWWMMMMCC",
-    "....MMWWWWWWWWWWWMMMMMMMCC",
-    "....MMMMWWWWWWWMMMMMMMMMCC",
-    "...MMMMMMMMMMMMMMMMMMMMMCCC",
-    "..MMMMMMMMMMMMMMMMMMMMMMCCC",
-    "..MMMMMMMMMMMMMMMMMMMMMMMCC",
-    ".MMMWWMMMMMMMMMWWMMMMMMMMCCC",
-    ".MMMWWMMMMMMMMMWWMMMMMMMMCCC",
-    ".MMMWWMMMMMMMMMWWMMMMMMMMCCT",
-    "MMMMMMMMMWWWWMMMMMMMMMMMMCCC",
-    "MMMMMMMMMMMMMMMMMMMMMMMMMCCC",
-    "MMMMMMMMMMMMMMMMMMMMMMMMMCCC",
-    "MMMMMMMMMMMMWMMMMMMMMMMMMCCC",
-    "MMMMMMWWMMMWWMWMMMMMMMMMCCCC",
-    "MMMMMWWMMMMWMMMWWMMMMMMMCCCC",
-    "MMMMWWMMMMMWMMMMWWMMMMMMCCC",
-    "MMMMWWMMMMWMMMMMWWMMMMMMCCC",
-    ".MMMMWWMMMWMMMMWWMMMMMMCCCC",
-    ".MMMMMWWMMWMMMWWMMMMMMMCCC.M",
-    "..MMMMMMMWMMMMMMMMMMMMCCC",
-    "..MMMMMMMMMMMMMMMMMMMMCCC",
-    "...MMMMMMMMMMMMMMMMMMCCC",
-    ".....MMMMMMMMMMMMMMMCT",
-    "......MMMMMMMMMMMMMCC",
-    ".....M...MMMMMMMMM...M",
+# 前景渐变色（左亮 #00d4ff → 右深 #0099ff），按列号取值。
+_GRADIENT_COLORS = ("#00d4ff", "#00bef6", "#00a7f0", "#0099ff")
+_GRADIENT_BAND_WIDTH = 20  # 79 列分 4 档渐变，每档约 20 列
+
+# "LansCoder" 方块体 banner（▄/▀/█ 三阶盒型笔画）。这是手调的 9 个字母位图，
+# 拼接时字母间用 1 列间隔（原始排版间隔 2-3 列，压缩到 1 列以适配 ≤80 列的
+# 全尺寸显示阈值）。每个字母 7 行，宽 8 列（r 为 7 列）。
+_LANSCODER_GLYPHS: dict[str, tuple[str, ...]] = {
+    "L": (
+        "▄▄      ",
+        "██      ",
+        "██      ",
+        "██      ",
+        "██      ",
+        "██▄▄▄▄▄▄",
+        "▀▀▀▀▀▀▀▀",
+    ),
+    "a": (
+        "        ",
+        "        ",
+        " ▄█████▄",
+        " ▀ ▄▄▄██",
+        "▄██▀▀▀██",
+        "██▄▄▄███",
+        " ▀▀▀▀ ▀▀",
+    ),
+    "n": (
+        "        ",
+        "        ",
+        "██▄████▄",
+        "██▀   ██",
+        "██    ██",
+        "██    ██",
+        "▀▀    ▀▀",
+    ),
+    "s": (
+        "        ",
+        "        ",
+        "▄▄█████▄",
+        "██▄▄▄▄ ▀",
+        " ▀▀▀▀██▄",
+        "█▄▄▄▄▄██",
+        " ▀▀▀▀▀▀ ",
+    ),
+    "C": (
+        "   ▄▄▄▄ ",
+        " ██▀▀▀▀█",
+        "██▀     ",
+        "██      ",
+        "██▄     ",
+        " ██▄▄▄▄█",
+        "   ▀▀▀▀ ",
+    ),
+    "o": (
+        "        ",
+        "        ",
+        " ▄████▄ ",
+        "██▀  ▀██",
+        "██    ██",
+        "▀██▄▄██▀",
+        "  ▀▀▀▀  ",
+    ),
+    "d": (
+        "      ▄▄",
+        "      ██",
+        " ▄███▄██",
+        "██▀  ▀██",
+        "██    ██",
+        "▀██▄▄███",
+        "  ▀▀▀ ▀▀",
+    ),
+    "e": (
+        "        ",
+        "        ",
+        " ▄████▄ ",
+        "██▄▄▄▄██",
+        "██▀▀▀▀▀▀",
+        "▀██▄▄▄▄█",
+        "  ▀▀▀▀▀ ",
+    ),
+    "r": (
+        "       ",
+        "       ",
+        "██▄████",
+        "██▀    ",
+        "██     ",
+        "██     ",
+        "▀▀     ",
+    ),
+}
+
+
+def _build_lanscoder_pixels() -> tuple[str, ...]:
+    """把 9 个字母拼成 banner 画布：字母间 1 列间隔，上下各留 3 行给粒子闪烁。"""
+
+    banner_rows: list[str] = []
+    for row_index in range(7):
+        row = ""
+        for letter_index, letter in enumerate("LansCoder"):
+            if letter_index:
+                row += " "
+            row += _LANSCODER_GLYPHS[letter][row_index]
+        banner_rows.append(row)
+
+    width = max(len(row) for row in banner_rows)
+    blank = " " * width
+    return (blank,) * 3 + tuple(banner_rows) + (blank,) * 3
+
+
+WELCOME_LOGO_PIXELS = _build_lanscoder_pixels()
+
+# 粒子只落在透明格上（welcome_renderable 的覆盖规则保证），因此坐标都取在
+# 上下留白（画布 13 行：上 3 / 字 7 / 下 3），不会盖住 "LansCoder" 本身。
+WELCOME_PARTICLE_FRAMES = (
+    ((0, 10, "W"), (12, 35, "B"), (2, 60, "W"), (10, 20, "B")),
+    ((1, 42, "B"), (11, 8, "W"), (0, 65, "W"), (12, 55, "B")),
+    ((0, 25, "W"), (10, 45, "B"), (2, 70, "B"), (11, 30, "W")),
+    ((1, 15, "B"), (12, 48, "W"), (0, 40, "W"), (10, 68, "B")),
 )
 
-WELCOME_PARTICLE_FRAMES = (
-    ((6, 3, "P"), (11, 26, "Q"), (25, 29, "P"), (37, 4, "P")),
-    ((5, 5, "Q"), (14, 1, "P"), (28, 30, "Q"), (38, 23, "P")),
-    ((4, 2, "P"), (10, 24, "P"), (21, 31, "Q"), (35, 28, "P")),
-    ((7, 1, "Q"), (16, 29, "P"), (31, 2, "P"), (39, 18, "Q")),
-)
+
+def _shade_color(column: int) -> str:
+    return _GRADIENT_COLORS[min(3, column // _GRADIENT_BAND_WIDTH)]
 
 
 def welcome_renderable(*, compact: bool = False, particle_frame: int = 0) -> Align:
@@ -71,9 +143,8 @@ def welcome_renderable(*, compact: bool = False, particle_frame: int = 0) -> Ali
     if compact:
         return Align.center(
             Text.assemble(
-                ("first", "#81e8bb bold"),
-                ("coder", "#18cfcb bold"),
-                ("\nlocal coding agent", "#6e6d72"),
+                ("lanscoder", "#00d4ff bold"),
+                ("\nlocal agent harness", "#6e6d72"),
             )
         )
     rows = [list(row) for row in WELCOME_LOGO_PIXELS]
@@ -83,15 +154,20 @@ def welcome_renderable(*, compact: bool = False, particle_frame: int = 0) -> Ali
             continue
         row = rows[row_index]
         if column_index >= len(row):
-            row.extend("." for _ in range(column_index - len(row) + 1))
-        if row[column_index] == ".":
+            row.extend(" " for _ in range(column_index - len(row) + 1))
+        if row[column_index] in (" ", "."):
             row[column_index] = pixel
 
     text = Text()
     for row_index, row in enumerate(rows):
         if row_index:
             text.append("\n")
-        for pixel in row:
+        for column, pixel in enumerate(row):
             color = WELCOME_LOGO_PALETTE.get(pixel)
-            text.append("██" if color else "  ", style=color)
+            if color is not None:
+                text.append("█", style=color)
+            elif pixel in (" ", "."):
+                text.append(" ", style=None)
+            else:
+                text.append(pixel, style=_shade_color(column))
     return Align.center(text)

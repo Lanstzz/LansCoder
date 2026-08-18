@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from rich.markup import escape
 from rich.text import Text
 
+from firstcoder.app import theme
+
 
 def single_line_activity(text: str) -> str:
     """把 activity 文本中的换行折叠成空格，保证单行 widget 不折行。
@@ -19,7 +21,7 @@ def single_line_activity(text: str) -> str:
 
 
 def activity_markup(text: str) -> str:
-    color = "#7bba55"
+    color = theme.ACCENT
     if text.startswith("waiting"):
         color = "#b28443"
     elif text.startswith("running"):

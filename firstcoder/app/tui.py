@@ -50,7 +50,7 @@ from firstcoder.app.transcript_view import (
     looks_like_tool_display_line,
     normalize_stream_text,
 )
-from firstcoder.app import yuren_topbar_themes
+from firstcoder.app import model_topbar_themes
 from firstcoder.app.activity_view import compact_tool_arguments, compact_tool_content
 from firstcoder.app.tui_state import TuiEntryKind, TuiTaskPlanPanelState, TuiTranscript, TuiTranscriptEntry
 from firstcoder.app.topbar_view import _provider_name_markup, _provider_model_markup
@@ -98,7 +98,7 @@ class FirstCoderApp(FirstCoderViewMixin, App[None]):
     ESC_INTERRUPT_WINDOW_SECONDS = 1.0
     ACTIVITY_ANIMATION_INTERVAL_SECONDS = 0.24
     WELCOME_PARTICLE_INTERVAL_SECONDS = 0.85
-    PROVIDER_GLOW_INTERVAL_SECONDS = yuren_topbar_themes.GLOW_INTERVAL_SECONDS
+    PROVIDER_GLOW_INTERVAL_SECONDS = model_topbar_themes.GLOW_INTERVAL_SECONDS
     COMPACT_WELCOME_MAX_WIDTH = 80
     COMPACT_WELCOME_MAX_HEIGHT = 24
     ACTIVITY_FRAMES = {
