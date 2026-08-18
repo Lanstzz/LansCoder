@@ -43,6 +43,18 @@ class SessionCommandHandler:
     store: JsonlSessionStore | None = None
     on_resume: Callable[[SessionRuntimeLike], None] | None = None
 
+    def commands(self) -> list[tuple[str, str]]:
+        return [
+            ("/new [title]", "Start a new session."),
+            ("/fork [title]", "Copy the current session into a new branch."),
+            ("/sessions", "List saved sessions."),
+            ("/session <session_id>", "Show one session summary."),
+            ("/resume", "Pick a session to resume."),
+            ("/resume <session_id>", "Resume a session directly."),
+            ("/share [session_id] [--tool-results]", "Export a shareable transcript."),
+            ("/rename <title>", "Rename the current session."),
+        ]
+
     def handle(self, text: str) -> CommandResult:
         command = text.strip()
         if not command.startswith("/"):

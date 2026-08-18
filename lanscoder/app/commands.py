@@ -48,6 +48,13 @@ class ContextCommandHandler:
     context_manager: ContextManagerLike | None = None
     inspector: ContextInspector = ContextInspector()
 
+    def commands(self) -> list[tuple[str, str]]:
+        return [
+            ("/context", "Inspect context state."),
+            ("/compact status", "Show compaction status."),
+            ("/compact", "Compact context now."),
+        ]
+
     def handle(self, text: str) -> CommandResult:
         command = text.strip()
         if not command.startswith("/"):

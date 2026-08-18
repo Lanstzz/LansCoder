@@ -15,6 +15,12 @@ class SkillCommandHandler:
 
     catalog_provider: Callable[[], SkillCatalog]
 
+    def commands(self) -> list[tuple[str, str]]:
+        return [
+            ("/skills", "Pick a skill to reference."),
+            ("/skill <name>", "Show skill details."),
+        ]
+
     def handle(self, text: str) -> CommandResult:
         command = text.strip()
         if not command.startswith("/"):

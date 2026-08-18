@@ -22,3 +22,11 @@ class CompositeCommandHandler:
         if text.strip().startswith("/"):
             return CommandResult(handled=True, output=f"Unknown command: {' '.join(text.strip().split())}")
         return CommandResult(handled=handled_any)
+
+    def all_commands(self) -> list[tuple[str, str]]:
+        """Collect all commands from registered handlers, sorted alphabetically."""
+        commands: list[tuple[str, str]] = []
+        for handler in self.handlers:
+            commands.extend(handler.commands())
+        commands.sort(key=lambda x: x[0].removeprefix("/").lstrip())
+        return commands

@@ -341,7 +341,6 @@ def create_lanscoder_app(
     )
     command_handler = CompositeCommandHandler(  # 路由所有 slash commands → lanscoder/app/router.py
         [
-            HelpCommandHandler(),
             McpCommandHandler(mcp_manager),
             ModelCommandHandler(model_switcher),
             session_handler,
@@ -352,6 +351,8 @@ def create_lanscoder_app(
             memory_handler,
         ]
     )
+    help_handler = HelpCommandHandler(command_handler=command_handler)
+    command_handler.handlers.insert(0, help_handler)
     return LansCoderApp(
         command_handler=command_handler,
         chat_runner=chat_runner,
