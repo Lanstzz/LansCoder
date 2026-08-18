@@ -316,3 +316,25 @@ def test_resume_command_updates_context_command_current_session(tmp_path: Path) 
     assert "Session: sess_one" in router.handle("/context").output
     assert "Resumed session: sess_two" in router.handle("/resume sess_two").output
     assert "Session: sess_two" in router.handle("/context").output
+
+
+def test_busy_rejects_session_swap(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    AgentSession.create(store=store, session_id="sess_one", agents_md="")
+    AgentSession.create(store=store, session_id="sess_two", agents_md="")
+    state = CurrentSessionState(AgentSession.resume(store=store, session_id="sess_one", agents_md=""))
+    handler = SessionCommandHandler(
+        catalog=SessionCatalog(tmp_path),
+        current_session=state.session,
+        resume_service=ResumeService(store=store, project_root=tmp_path),
+        on_resume=state.set_session,
+        busy_check=lambda: True,
+    )
+
+    for command in ("/resume sess_two", "/new", "/fork"):
+        result = handler.handle(command)
+        assert result.handled is True
+        assert "尚未结束" in result.output
+
+    # The current session must be untouched when the swap is rejected.
+    assert state.session.session_id == "sess_one"

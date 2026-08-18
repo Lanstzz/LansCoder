@@ -365,6 +365,11 @@ def create_lanscoder_app(
         ),
         on_shutdown=mcp_manager.close,
     )
+    # /recall and /resume (+ /new, /fork) hot-swap the current session; refuse
+    # them while a turn is running or paused so an in-flight loop keeps a
+    # consistent session to write into.
+    recall_handler.busy_check = lambda: app.is_turn_active()
+    session_handler.busy_check = lambda: app.is_turn_active()
     app.set_slash_commands(command_handler.all_commands())
     return app
 

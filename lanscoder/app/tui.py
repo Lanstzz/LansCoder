@@ -527,6 +527,17 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
     def _is_current_chat_turn(self, token: int) -> bool:
         return token == self._chat_turn_token
 
+    def is_turn_active(self) -> bool:
+        """True while a chat turn is running or paused for user input.
+
+        Used by command handlers to refuse session-swap/rewind operations that
+        would race an in-flight loop. ``_active_chat_turn`` is cleared only when
+        a turn ends cleanly (no pending permission/ask_user), so it also covers
+        the paused-for-input state where ``_chat_busy`` is already False.
+        """
+
+        return self._active_chat_turn is not None
+
     def _finish_chat_turn(self, token: int) -> None:
         if not self._is_current_chat_turn(token):
             return

@@ -373,6 +373,48 @@ class TestRecallCommandHandler:
         assert "Nothing to recall" in result.output
         assert result.action is None
 
+    def test_handler_busy_rejects_recall(self):
+        recalled = []
+
+        def on_recall(new_session):
+            recalled.append(new_session)
+
+        handler = RecallCommandHandler(
+            session=_FakeSessionLike("sess_test", []),
+            store=None,  # type: ignore[arg-type]
+            bootstrap=None,  # type: ignore[arg-type]
+            on_recall=on_recall,
+            busy_check=lambda: True,
+        )
+
+        for command in ("/recall", "/recall msg_03"):
+            result = handler.handle(command)
+            assert result.handled is True
+            assert "尚未结束" in result.output
+
+        # Rejected commands must not touch the store or swap the session.
+        assert recalled == []
+
+    def test_handler_not_busy_proceeds(self):
+        messages = [
+            _make_msg("msg_01", "user", "hello", 1),
+            _make_msg("msg_02", "assistant", "hi", 1),
+            _make_msg("msg_03", "user", "do something", 2),
+            _make_msg("msg_04", "assistant", "ok", 2),
+        ]
+        handler = RecallCommandHandler(
+            session=_FakeSessionLike("sess_test", messages),
+            store=None,  # type: ignore[arg-type]
+            bootstrap=None,  # type: ignore[arg-type]
+            on_recall=None,  # type: ignore[arg-type]
+        )
+
+        result = handler.handle("/recall")
+
+        assert result.handled is True
+        assert result.action is not None
+        assert result.action["type"] == "recall_picker"
+
     def test_handler_with_message_id_delegates_to_recall_to(self, tmp_path):
         """handle("/recall <message_id>") should delegate to recall_to."""
         store = JsonlSessionStore(tmp_path)
