@@ -179,7 +179,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._subagent_progress_timer: Timer | None = None
         self._pending_user_input: str | None = None
         self._pending_user_attachments: list[UserAttachment] | None = None
-        self._pending_subagent_notification: bool = False
         self.transcript = TuiTranscript()
         self.task_plan_panel_state = TuiTaskPlanPanelState()
 
@@ -270,7 +269,14 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self.call_from_thread(self._handle_subagent_completed, job)
 
     def _handle_subagent_completed(self, job) -> None:
-        """Deliver subagent completion notification to the main conversation."""
+        """Deliver a subagent completion to the main conversation.
+
+        The full result is delivered separately by the agent loop's background
+        notification drain on its next provider request, so here we only write
+        a short human-readable line to the UI and wake the main agent when it
+        is idle.  When a turn is already running, that turn consumes the result
+        itself — no redundant session write or extra reporting turn is needed.
+        """
         label = job.label or job.tool_name
         if job.status == "completed":
             ui_msg = f"✅ 子agent [{label}] 已完成"
@@ -279,27 +285,33 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         else:
             ui_msg = f"⚠️ 子agent [{label}] {job.status}"
 
-        # Write notification to the main session so the model sees it.
-        if self.chat_runner is not None:
-            session = self.chat_runner.current_session.session
-            session.append_background_notification(
-                content=ui_msg,
-                job_id=job.id,
-                tool_name=job.tool_name,
-                status=job.status,
-            )
-
-        # Write to UI output.
+        # Write to UI output only; the loop delivers the full result to the model.
         self._write_line(ui_msg, kind=TuiEntryKind.SYSTEM)
 
         # If idle, start a new turn so the model can report immediately.
         if not self._chat_busy and self.chat_runner is not None:
             self._submit_chat_text("子agent任务已完成，请查看结果并汇报。")
-        else:
-            # Turn is busy — notification is already in session and will be
-            # consumed by the next provider call.  Set flag so _finish_chat_turn
-            # can auto-start a turn if the user hasn't sent anything.
-            self._pending_subagent_notification = True
+
+    def _has_pending_background_completions(self) -> bool:
+        """Whether completed background jobs are still awaiting delivery.
+
+        Peeks the background manager's completion queue without consuming it,
+        so the loop's own drain remains the single consumer.  Used by
+        ``_finish_chat_turn`` to wake the main agent only when a subagent
+        finished after the running turn's final provider call.
+        """
+
+        if self.chat_runner is None:
+            return False
+        manager = getattr(self.chat_runner, "background_manager", None)
+        if manager is None:
+            return False
+        peek = getattr(manager, "pending_completions", None)
+        if peek is None:
+            return False
+        current = getattr(self.chat_runner, "current_session", None)
+        session_id = getattr(current, "session_id", None)
+        return bool(peek(session_id=session_id))
 
     def set_slash_commands(self, commands: list[tuple[str, str]]) -> None:
         """Set the full command list for the slash-command autocomplete dropdown."""
@@ -533,9 +545,11 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             self._submit_chat_text(pending_input, attachments=pending_attachments)
             return
 
-        # 2. Then process pending subagent notification.
-        if self._pending_subagent_notification:
-            self._pending_subagent_notification = False
+        # 2. Then wake the main agent for background results that completed
+        #    while no turn was around to drain them.  A running turn already
+        #    drains completions on its next provider request, so this only
+        #    fires when something is genuinely still undelivered.
+        if self._has_pending_background_completions():
             self._submit_chat_text("子agent任务已完成，请查看结果并汇报。")
             return
 

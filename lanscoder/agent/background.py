@@ -366,6 +366,21 @@ class BackgroundJobManager:
         with self._lock:
             return [job for job in self._jobs.values() if job.status == STATUS_RUNNING]
 
+    def pending_completions(self, *, session_id: str | None = None) -> list[BackgroundJob]:
+        """Return completed jobs that have not yet been collected.
+
+        Unlike :meth:`collect_completed`, this peeks without consuming the
+        ``_completed`` queue.  The TUI uses it to decide whether to wake the
+        main agent after a turn finishes while background results are still
+        undelivered.  The loop's own drain stays the single consumer.
+        """
+
+        with self._lock:
+            return [
+                job for job in self._completed
+                if session_id is None or job.session_id == session_id
+            ]
+
     def cancel(self, job_id: str, *, session_id: str | None = None) -> BackgroundJob | None:
         """尽力取消一个后台任务。
 

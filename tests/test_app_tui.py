@@ -11,6 +11,7 @@ from textual.color import Color
 from textual.widgets import Markdown
 from textual.widgets import TextArea
 
+from lanscoder.agent.background import BackgroundJob
 from lanscoder.agent.loop import ToolExecutionEvent
 from lanscoder.app.commands import CommandResult
 from lanscoder.app.commands import ContextCommandHandler
@@ -1222,6 +1223,62 @@ class BlockingGuidanceAsyncChatRunner(BlockingAsyncChatRunner):
 
     def add_guidance(self, content: str) -> None:
         self.guidance.append(content)
+
+
+class RecordingSession:
+    """Tiny session stand-in that records background-notification writes."""
+
+    def __init__(self) -> None:
+        self.writes: list[tuple[str, str, str, str]] = []
+        self.session_id = "sess_test"
+
+    def append_background_notification(self, *, content, job_id, tool_name, status, task_id=None, observed_revision=None):
+        self.writes.append((content, job_id, tool_name, status))
+        return "msg_x"
+
+
+class FakeCurrentSession:
+    def __init__(self) -> None:
+        self.session = RecordingSession()
+
+    @property
+    def session_id(self) -> str:
+        return self.session.session_id
+
+
+class FakeBackgroundManager:
+    """Background-manager stand-in with a peek-only pending queue."""
+
+    def __init__(self, pending: list[BackgroundJob] | None = None) -> None:
+        self._pending = list(pending or [])
+
+    def pending_completions(self, *, session_id: str | None = None) -> list[BackgroundJob]:
+        return list(self._pending)
+
+    def drain(self) -> None:
+        """Simulate the agent loop consuming completions during a turn."""
+        self._pending = []
+
+
+class FakeSubagentRunner(FakeChatRunner):
+    """Runner that exercises subagent-completion delivery end to end."""
+
+    def __init__(self, pending: list[BackgroundJob] | None = None) -> None:
+        super().__init__()
+        self.current_session = FakeCurrentSession()
+        self.background_manager = FakeBackgroundManager(pending)
+
+    async def arun_user_turn(
+        self,
+        content: str,
+        *,
+        attachments: list[UserAttachment] | None = None,
+    ) -> ChatResponse:
+        self.inputs.append(content)
+        self.attachments.append(attachments)
+        # A real turn drains pending completions at its first provider request.
+        self.background_manager.drain()
+        return ChatResponse(provider="fake", model="fake", content=f"reply:{content}")
 
 
 class UnhandledCommandHandler:
@@ -3191,6 +3248,73 @@ async def test_lanscoder_app_queues_input_even_without_guidance_support() -> Non
         await pilot.pause()
 
     assert runner.inputs == ["first", "second"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_subagent_completed_idle_auto_turns_without_session_write() -> None:
+    """A completed subagent wakes an idle main agent without a redundant
+    short-summary session write (the loop delivers the full result itself)."""
+    runner = FakeSubagentRunner()
+    app = LansCoderApp(chat_runner=runner)
+    job = BackgroundJob(id="bg_0001", tool_name="delegate", label="researcher", status="completed")
+
+    async with app.run_test() as pilot:
+        app._handle_subagent_completed(job)
+        await pilot.pause()
+
+    assert runner.current_session.session.writes == []
+    assert runner.inputs == ["子agent任务已完成，请查看结果并汇报。"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_subagent_completed_busy_does_not_write_or_auto_turn() -> None:
+    """When a turn is running, a subagent completion neither writes to the
+    session nor starts an extra reporting turn — the running turn drains it."""
+    runner = FakeSubagentRunner()
+    app = LansCoderApp(chat_runner=runner)
+    job = BackgroundJob(id="bg_0001", tool_name="delegate", label="researcher", status="completed")
+
+    async with app.run_test() as pilot:
+        app._chat_busy = True
+        app._handle_subagent_completed(job)
+        await pilot.pause()
+
+    assert runner.current_session.session.writes == []
+    assert runner.inputs == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_finish_chat_turn_wakes_main_agent_for_pending_completions() -> None:
+    """A turn that ends with undelivered background completions auto-starts a
+    reporting turn so the result is not stranded until the next user message."""
+    job = BackgroundJob(id="bg_0001", tool_name="delegate", label="researcher", status="completed")
+    runner = FakeSubagentRunner(pending=[job])
+    app = LansCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        app._chat_busy = True
+        app._finish_chat_turn(app._chat_turn_token)
+        await pilot.pause()
+
+    assert runner.inputs == ["子agent任务已完成，请查看结果并汇报。"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_finish_chat_turn_does_not_wake_when_no_pending_completions() -> None:
+    """Without undelivered completions, a normal turn end starts nothing new."""
+    runner = FakeSubagentRunner(pending=[])
+    app = LansCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        app._chat_busy = True
+        app._finish_chat_turn(app._chat_turn_token)
+        await pilot.pause()
+
+    assert runner.inputs == []
 
 
 @pytest.mark.anyio
