@@ -18,6 +18,7 @@ from firstcoder.app.activity_view import (
     tool_event_label,
     tool_event_status,
     tool_status_text,
+    single_line_activity,
     truncate_activity_text,
     turn_metrics_text,
 )
@@ -85,7 +86,11 @@ class FirstCoderViewMixin:
         if session_id is None and self.current_session is not None:
             session_id = self.current_session.session_id
         brand = "[#7bba55]FirstCoder[/]"
-        status = activity_markup(self._activity_text)
+        # 顶栏 status 独立于下栏：thinking 时只显示 "thinking ⠋" 动画头（_topbar_status），
+        # reasoning 全文只进下栏 #activity。非 thinking 状态 _topbar_status 镜像
+        # _activity_text；兜底 _activity_text（测试/直接赋值路径）。
+        status_text = self._topbar_status if self._topbar_status else self._activity_text
+        status = activity_markup(single_line_activity(status_text))
         metadata_values: list[tuple[str | None, str, int | None]] = []
         if self.config.provider_name or self.config.provider_model:
             provider = self.config.provider_name or "provider"
@@ -121,13 +126,13 @@ class FirstCoderViewMixin:
                 metadata = _truncate_markup(metadata, metadata_width)
                 fixed_width = brand_width + _markup_width(metadata) + top_separator_width
             available_status_width = max(0, width - fixed_width)
-            status = activity_markup(truncate_activity_text(self._activity_text, available_status_width))
+            status = activity_markup(truncate_activity_text(status_text, available_status_width))
             compact = f"{brand}{top_separator}{status}{top_separator}{metadata}"
             return _truncate_markup(compact, width) if _markup_width(compact) > width else compact
         if width - content_width < 8:
             available_status_width = width - brand_width - metadata_width - top_separator_width
             if available_status_width < status_width:
-                status = activity_markup(truncate_activity_text(self._activity_text, max(1, available_status_width)))
+                status = activity_markup(truncate_activity_text(status_text, max(1, available_status_width)))
                 compact = f"{brand}{top_separator}{status}{top_separator}{metadata}"
             return compact
         left_gap = max(3, (width // 2) - _markup_width(brand) - (_markup_width(status) // 2))
@@ -536,7 +541,7 @@ class FirstCoderViewMixin:
         self._reasoning_is_fallback = True
         self._working_text = text
         self._working_frame_index = 0
-        self._set_activity(self._working_indicator_body())
+        self._set_activity(self._working_indicator_body(), topbar_status=self._working_head())
         self._start_working_animation()
 
     def _complete_working_indicator(self) -> None:
@@ -551,12 +556,19 @@ class FirstCoderViewMixin:
             self._reasoning_is_fallback = False
             self._working_text = ""
         self._reasoning_buffer += text
-        self._set_activity(self._working_indicator_body(self._reasoning_buffer))
+        self._set_activity(
+            self._working_indicator_body(self._reasoning_buffer),
+            topbar_status=self._working_head(),
+        )
         self._start_working_animation()
 
-    def _working_indicator_body(self, text: str | None = None) -> str:
+    def _working_head(self) -> str:
+        """顶栏 thinking 状态只显示动画头（不含 reasoning 文本）。"""
         frame = self.WORKING_FRAMES[self._working_frame_index % len(self.WORKING_FRAMES)]
-        return f"thinking {frame} {text if text is not None else self._working_text}"
+        return f"thinking {frame}"
+
+    def _working_indicator_body(self, text: str | None = None) -> str:
+        return f"{self._working_head()} {text if text is not None else self._working_text}"
 
     def _start_working_animation(self) -> None:
         self._start_interval_timer(
@@ -572,7 +584,7 @@ class FirstCoderViewMixin:
     def _advance_working_animation(self) -> None:
         self._working_frame_index += 1
         text = self._working_text or self._reasoning_buffer
-        self._set_activity(self._working_indicator_body(text))
+        self._set_activity(self._working_indicator_body(text), topbar_status=self._working_head())
 
     def _show_static_activity(self, text: str) -> None:
         self._show_activity_animation("static", text)
@@ -621,8 +633,11 @@ class FirstCoderViewMixin:
         except NoMatches:
             return None
 
-    def _set_activity(self, text: str) -> None:
+    def _set_activity(self, text: str, *, topbar_status: str | None = None) -> None:
         self._activity_text = text
+        # 顶栏短状态默认镜像 activity 全文；working-indicator 单独传 thinking 动画头，
+        # 使顶栏只显示动画、reasoning 全文只进下栏。
+        self._topbar_status = text if topbar_status is None else topbar_status
         activity = self._query_mounted("#activity")
         if activity is None:
             return
@@ -640,6 +655,8 @@ class FirstCoderViewMixin:
         return Text(text, style="#527c3b")
 
     def tool_activity_line_text(self, text: str, activity) -> str:
+        # 与顶栏一致：activity 行也是单行 widget，先折叠 reasoning 内容里的换行。
+        text = single_line_activity(text)
         metrics = turn_metrics_text(self._turn_elapsed_seconds(), self._turn_tool_count)
         width = getattr(getattr(activity, "size", None), "width", None)
         if not isinstance(width, int) or width <= 0:

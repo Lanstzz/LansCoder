@@ -15,7 +15,8 @@ PERMISSION_MODE_COLORS = {
 
 
 def _markup_width(markup: str) -> int:
-    return len(Text.from_markup(markup).plain)
+    # 用渲染列宽而非字符数：中文按 2 列计，换行符不计横向宽度。
+    return Text.from_markup(markup).cell_len
 
 
 def _truncate_markup(markup: str, width: int) -> str:

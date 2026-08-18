@@ -163,6 +163,7 @@ class FirstCoderApp(FirstCoderViewMixin, App[None]):
         self._live_tool_events_seen = False
         self._stream_segment_closed_for_tool = False
         self._activity_text = "idle · ready"
+        self._topbar_status = ""
         self._input_history: list[str] = []
         self._input_history_index: int | None = None
         self._picker: TuiPickerState | None = None

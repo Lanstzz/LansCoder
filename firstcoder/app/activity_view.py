@@ -5,6 +5,17 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from rich.markup import escape
+from rich.text import Text
+
+
+def single_line_activity(text: str) -> str:
+    """把 activity 文本中的换行折叠成空格，保证单行 widget 不折行。
+
+    `_activity_text` 可能携带流式 reasoning 的多行内容（含换行符）。顶栏 status
+    与下栏 activity 都是单行 widget，渲染前必须折叠换行，否则会把整个布局顶成两行。
+    注意只折叠换行、不折叠内部连续空格——动画帧（如 `running [=   ]`）依赖内部空格。
+    """
+    return text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ").strip()
 
 
 def activity_markup(text: str) -> str:
@@ -21,11 +32,23 @@ def activity_markup(text: str) -> str:
 
 
 def truncate_activity_text(text: str, width: int) -> str:
-    if len(text) <= width:
-        return text
+    """把 activity 文本折叠成单行，并按渲染列宽截断（中文按 2 列计）。
+
+    换行符既会让单行 widget 变成两行，又会被 `len()` 算成 1 个字符从而高估宽度、
+    误触截断分支；这里先折叠再按 cell 宽度截断，保证返回结果始终单行。
+    """
+    single_line = single_line_activity(text)
+    if not single_line:
+        return ""
+    if width <= 0:
+        return ""
     if width <= 1:
-        return text[:width]
-    return text[: width - 1] + "."
+        return single_line[:1]
+    if Text(single_line).cell_len <= width:
+        return single_line
+    truncated = Text(single_line)
+    truncated.truncate(max(0, width - 1), overflow="crop", pad=False)
+    return truncated.plain + "."
 
 
 def turn_metrics_text(elapsed_seconds: float, tool_count: int) -> str:

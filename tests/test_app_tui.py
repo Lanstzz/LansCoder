@@ -813,6 +813,26 @@ def test_firstcoder_app_topbar_truncates_narrow_metadata_to_one_row() -> None:
     assert "sess_test" not in plain
 
 
+def test_firstcoder_app_topbar_single_line_with_multiline_thinking() -> None:
+    app = FirstCoderApp(
+        current_session=FakeSession(),
+        config=FirstCoderTuiConfig(
+            provider_name="deepseek",
+            provider_model="deepseek-chat",
+            project_name="FirstCoder",
+        ),
+    )
+    app._activity_text = "thinking [.. ] 好的，我来分析。\n先看下目录结构"
+
+    text = app._topbar_text(width=120)
+    plain = Text.from_markup(text).plain
+
+    assert "\n" not in plain
+    assert Text(plain).cell_len <= 120
+    assert plain.startswith("FirstCoder")
+    assert "cwd FirstCoder" in plain
+
+
 def test_tui_transcript_records_structured_entries_with_stable_labels() -> None:
     transcript = TuiTranscript()
 
@@ -2256,6 +2276,31 @@ def test_firstcoder_app_animates_working_indicator(monkeypatch) -> None:
     assert activity.updates[-1].rstrip().endswith("0.0s · 0 tools")
     assert timer.stopped is True
     assert app._working_timer is None
+
+
+def test_firstcoder_app_topbar_shows_only_thinking_head_during_reasoning(monkeypatch) -> None:
+    output = FakeOutput()
+    activity = FakeActivity()
+    timer = type("FakeTimer", (), {"stopped": False, "stop": lambda self: setattr(self, "stopped", True)})()
+    app = FirstCoderApp()
+
+    def query_one(selector, *args, **kwargs):
+        if selector == "#activity":
+            return activity
+        return output
+
+    monkeypatch.setattr(app, "query_one", query_one)
+    monkeypatch.setattr(app, "_loop", object())
+    monkeypatch.setattr(app, "set_interval", lambda *args, **kwargs: timer)
+
+    app._append_reasoning_text("好的，我来分析。\n先看下目录结构")
+
+    # 下栏 #activity 显示全文（含换行折叠后的 reasoning 文本）
+    assert "好的，我来分析。" in activity.updates[-1]
+    # 顶栏只显示 thinking 动画头，不含 reasoning 文本
+    topbar_plain = Text.from_markup(app._topbar_text(width=120)).plain
+    assert "thinking" in topbar_plain
+    assert "好的，我来分析。" not in topbar_plain
 
 
 def test_firstcoder_app_streaming_final_response_skips_assistant_display_line(monkeypatch) -> None:
