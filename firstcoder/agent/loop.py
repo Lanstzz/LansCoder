@@ -67,7 +67,7 @@ from firstcoder.tools.background import create_background_cancel_tool, create_ba
 from firstcoder.agent.subagent import SubagentRunner
 from firstcoder.tools.delegate import create_delegate_tool
 from firstcoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
-from firstcoder.tools.types import Tool, ToolResult, make_error_result
+from firstcoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 
 
 # ============================================================================
@@ -319,22 +319,25 @@ class AgentLoop:
         )
 
     # ----------------------------------------------------------------------------
-    # _resume_with_user_input_sync — 用用户的权限答复恢复暂停的 turn
+    # _resume_with_user_input_sync — 用用户的回答恢复暂停的 turn
     # ----------------------------------------------------------------------------
-    # 关键步骤：
+    # 权限确认与 ask_user 都走这里（统一 pending 协议）：
     #   1. 校验超时 / 取消 / pending 状态存在
-    #   2. _prepare_permission_resume：根据用户答复决定 allow / deny / 预览过期
+    #   2. _prepare_permission_resume：权限按答复决定 allow / deny / 预览过期；
+    #      ask_user 直接用回答合成最终 tool_result
     #   3. _execute_resumed_permission_tool_call：用 session 保存的原始 tool_call 执行
     #      （注意：绝对不能相信 UI 回传的 tool_call 参数，防止参数篡改攻击）
-    #   4. _finish_permission_resume：把 tool_result 写入 JSONL，清理 pending 状态
+    #   4. _finish_permission_resume：把 tool_result 写入 JSONL，清理 pending 状态，
+    #      并续跑同批次剩余工具（deferred batch continuation）；若剩余里又有工具
+    #      需要用户输入，链式返回新的 pending
     #   5. _begin_turn(new_user_turn=False)：重置 turn 计时但不重置 turn 序号
     #   6. 进入 _run_tool_loop_interactive 继续工具循环
     def _resume_with_user_input_sync(self, request_id: str, answer: str) -> AgentTurnResult:
-        """用用户回答恢复一个暂停中的权限确认。
+        """用用户回答恢复一个暂停中的权限确认或 ask_user。
 
-        普通 `ask_user` 第一版仍通过”下一条用户消息”继续；权限确认不能这样做，
-        因为模型原始 tool_call 已经在历史里等待一个匹配的 tool_result。这里必须先
-        用本地 pending 状态补齐最终 tool_result，再继续下一次 provider 调用。
+        权限确认不能走”下一条用户消息”，因为模型原始 tool_call 已经在历史里等待一个
+        匹配的 tool_result。ask_user 也统一走这里，这样回答后能继续执行同批次剩余
+        工具，而不是把剩余工具写死成 skipped 让模型重新发起。
         """
 
         try:
@@ -446,6 +449,13 @@ class AgentLoop:
                 self._tag_message_parts_with_task_hash(message_id, active_hash)
 
     def _append_permission_resume_result(self, request_id: str, answer: str) -> AgentTurnResult | None:
+        """用回答恢复一个暂停的权限/ask_user。
+
+        返回 AgentTurnResult 表示本轮必须立即结束（请求不存在，或延迟批次续跑时又
+        遇到需要用户输入的工具，链式再暂停）；返回 None 表示整批执行完毕，调用方
+        继续进入工具循环。
+        """
+
         pending = self._pending_permission_for_resume(request_id)
         if isinstance(pending, AgentTurnResult):
             return pending
@@ -453,7 +463,9 @@ class AgentLoop:
         if result is None:
             result = self._execute_resumed_permission_tool_call(pending)
             self._emit_finished_permission_resume(pending, result)
-        self._finish_permission_resume(pending, result)
+        chained = self._finish_permission_resume(pending, result)
+        if chained is not None:
+            return self._pending_turn_result(chained)
         return None
 
     async def _append_permission_resume_result_async(self, request_id: str, answer: str) -> AgentTurnResult | None:
@@ -464,7 +476,9 @@ class AgentLoop:
         if result is None:
             result = await anyio.to_thread.run_sync(self._execute_resumed_permission_tool_call, pending)
             self._emit_finished_permission_resume(pending, result)
-        self._finish_permission_resume(pending, result)
+        chained = await self._finish_permission_resume_async(pending, result)
+        if chained is not None:
+            return self._pending_turn_result(chained)
         return None
 
     def _pending_permission_for_resume(
@@ -482,7 +496,7 @@ class AgentLoop:
                     finish_reason="error",
                 ),
             )
-        if self.session.permission_manager is None:
+        if pending.kind == "permission_confirmation" and self.session.permission_manager is None:
             return AgentTurnResult(
                 status=AgentTurnStatus.COMPLETED,
                 response=ChatResponse(
@@ -499,6 +513,16 @@ class AgentLoop:
         pending: PendingPermissionExecution,
         answer: str,
     ) -> ToolResult | None:
+        if pending.kind == "ask_user":
+            # ask_user 的回答就是最终 tool_result，无需执行工具（暂停时已 emit
+            # started/finished，这里不重复 emit）。问题保存在 ask_user_request 里，
+            # 供模型与转录参考。
+            return make_text_result(
+                "ask_user",
+                answer,
+                question=str(pending.ask_user_request.question if pending.ask_user_request is not None else ""),
+                answer=answer,
+            )
         result = self._blocked_permission_resume_result(pending, answer)
         if result is not None:
             self._emit_tool_event(
@@ -532,11 +556,35 @@ class AgentLoop:
             permission_request=pending.permission_request,
         )
 
-    def _finish_permission_resume(self, pending: PendingPermissionExecution, result: ToolResult) -> None:
+    def _finish_permission_resume(self, pending: PendingPermissionExecution, result: ToolResult) -> UserInputRequest | None:
+        """写回已恢复工具的 result，续跑同批次剩余工具。
+
+        剩余工具（``deferred_tool_calls``）作为新一批交给 ToolExecutor 继续执行：
+        - 全部跑完：返回 None，调用方进入工具循环回问模型。
+        - 又有工具需要用户输入：返回链式 pending，本轮立即暂停等下一次回答。
+        """
         self.session.pending_permission_execution = None
         self.session.append_tool_result(tool_call=pending.tool_call, result=result)
-        self._emit_settlements("skipped", self.tool_settlement.append_skipped(pending.skipped_tool_calls))
         self._tool_rounds_completed += 1
+        if not pending.deferred_tool_calls:
+            return None
+        execution = self.tool_executor.execute_interactive(pending.deferred_tool_calls)
+        if execution.task_hash_changed:
+            self._compact_after_task_hash_changed()
+        return execution.pending_input
+
+    async def _finish_permission_resume_async(self, pending: PendingPermissionExecution, result: ToolResult) -> UserInputRequest | None:
+        """流式版本的 _finish_permission_resume，续跑走 worker 线程避免阻塞事件循环。"""
+
+        self.session.pending_permission_execution = None
+        self.session.append_tool_result(tool_call=pending.tool_call, result=result)
+        self._tool_rounds_completed += 1
+        if not pending.deferred_tool_calls:
+            return None
+        execution = await self.tool_executor.execute_interactive_async(pending.deferred_tool_calls)
+        if execution.task_hash_changed:
+            self._compact_after_task_hash_changed()
+        return execution.pending_input
 
     def _resolve_pending_confirmation(
         self,

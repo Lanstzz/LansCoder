@@ -1080,6 +1080,27 @@ class FakePermissionResumeRunner(FakeChatRunner):
         return ChatResponse(provider="fake", model="fake", content="done")
 
 
+class FakeAskUserResumeRunner(FakeChatRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_pending_input = UserInputRequest(
+            id="ask_env",
+            kind="ask_user",
+            question="Which environment?",
+            options=[
+                UserInputOption(id="1", label="dev"),
+                UserInputOption(id="2", label="prod"),
+            ],
+        )
+        self.resumes: list[tuple[str, str]] = []
+
+    async def aresume_with_user_input(self, request_id: str, answer: str) -> ChatResponse:
+        self.resumes.append((request_id, answer))
+        self.last_pending_input = None
+        self.last_display_lines = ["部署到 prod", "done"]
+        return ChatResponse(provider="fake", model="fake", content="done")
+
+
 class FakePermissionMidTurnRunner(FakeChatRunner):
     def __init__(self) -> None:
         super().__init__()
@@ -3156,6 +3177,23 @@ async def test_firstcoder_app_routes_permission_answer_to_resume() -> None:
 
     assert runner.inputs == []
     assert runner.resumes == [("perm_write", "allow_once")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_firstcoder_app_routes_ask_user_answer_to_resume() -> None:
+    runner = FakeAskUserResumeRunner()
+    app = FirstCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        await pilot.press(*"2")
+        await pilot.press("enter")
+        await pilot.pause()
+
+    # ask_user 与权限统一走 resume 协议；序号 "2" 规范化为选项 label "prod"。
+    assert runner.inputs == []
+    assert runner.resumes == [("ask_env", "prod")]
 
 
 @pytest.mark.anyio

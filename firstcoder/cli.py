@@ -463,12 +463,12 @@ def run_repl(
                     continue
                 response = chat_runner.resume_with_user_input(_pending_id(pending), choice)
             elif kind == "ask_user":
-                # ask_user 通过"下一条普通消息"继续（loop 协议如此，没有可 resume 的
-                # pending_permission_execution）；输入匹配某选项时规范化为其 label。
+                # ask_user 与权限统一走 resume 协议：回答后 loop 会继续执行同批次
+                # 剩余工具（deferred batch continuation）。输入匹配某选项时规范化为其 label。
                 matched = _ask_user_choice_for_text(line, pending)
                 if matched is not None:
                     line = matched
-                response = chat_runner.run_user_turn(line)
+                response = chat_runner.resume_with_user_input(_pending_id(pending), line)
             else:
                 response = chat_runner.resume_with_user_input(_pending_id(pending), line)
         else:

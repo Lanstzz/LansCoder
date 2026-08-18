@@ -381,9 +381,9 @@ def test_agent_chat_runner_exposes_pending_user_input(tmp_path) -> None:
     assert runner.last_pending_input.kind == "ask_user"
     assert runner.last_pending_input.question == "继续吗？"
     assert [option.label for option in runner.last_pending_input.options] == ["继续", "取消"]
+    # ask_user 的 tool_result 延迟到回答后才写入，暂停时显示行只有 tool call + 提问。
     assert runner.last_display_lines == [
         'Tool call: ask_user {"options": ["继续", "取消"], "question": "继续吗？"}',
-        "Tool result: ask_user success: 继续吗？ 1. 继续 2. 取消",
         "继续吗？",
     ]
     assert runner._active_cancellation_token is None
@@ -602,7 +602,6 @@ async def test_agent_chat_runner_streaming_exposes_pending_user_input(tmp_path) 
     ]
     assert runner.last_display_lines == [
         'Tool call: ask_user {"options": ["继续", "暂停"], "question": "流式继续吗？"}',
-        "Tool result: ask_user success: 流式继续吗？ 1. 继续 2. 暂停",
         "流式继续吗？",
     ]
 
