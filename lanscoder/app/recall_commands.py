@@ -27,6 +27,7 @@ class RecallCommandHandler:
     store: JsonlSessionStore
     bootstrap: object  # SessionBootstrap, imported lazily to avoid circular imports
     on_recall: Callable[[object], None]  # callback to swap session in runner
+    busy_check: Callable[[], bool] = lambda: False  # True while a turn is in-flight / paused
 
     def commands(self) -> list[tuple[str, str]]:
         return [("/recall", "Rewind conversation to a previous turn.")]
@@ -34,10 +35,20 @@ class RecallCommandHandler:
     def handle(self, text: str) -> CommandResult:
         command = " ".join(text.strip().split())
         if command == "/recall":
+            if self.busy_check():
+                return self._busy_result()
             return self._handle_list()
         elif command.startswith("/recall "):
+            if self.busy_check():
+                return self._busy_result()
             return self._handle_recall_to(command)
         return CommandResult(handled=False)
+
+    def _busy_result(self) -> CommandResult:
+        return CommandResult(
+            handled=True,
+            output="当前 turn 尚未结束，请先等待或按 Esc 中断后再 recall。",
+        )
 
     def _handle_list(self) -> CommandResult:
         """Handle bare /recall — show the turn picker."""

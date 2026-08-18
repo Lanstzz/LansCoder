@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 from typing import Iterable
 
@@ -39,27 +40,34 @@ class JsonlSessionStore:
         self.root = Path(root)
         self.sessions_dir = self.root / "sessions"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        # Guards the session JSONL files against concurrent read/write/truncate
+        # from different threads (e.g. the TUI event-loop thread running /recall
+        # while a worker thread appends an agent event). Reentrant so that
+        # truncate_before_message can call list_events while already holding it.
+        self._lock = threading.RLock()
 
     def append_event(self, event: SessionEvent) -> None:
-        path = self._session_path(event.session_id)
-        with path.open("a", encoding="utf-8") as file:
-            file.write(json.dumps(event.to_dict(), ensure_ascii=False, sort_keys=True))
-            file.write("\n")
-        from lanscoder.session.index import SessionIndex
+        with self._lock:
+            path = self._session_path(event.session_id)
+            with path.open("a", encoding="utf-8") as file:
+                file.write(json.dumps(event.to_dict(), ensure_ascii=False, sort_keys=True))
+                file.write("\n")
+            from lanscoder.session.index import SessionIndex
 
-        SessionIndex(self.root).update_event(event)
+            SessionIndex(self.root).update_event(event)
 
     def list_events(self, session_id: str) -> list[SessionEvent]:
-        path = self._session_path(session_id)
-        if not path.exists():
-            return []
+        with self._lock:
+            path = self._session_path(session_id)
+            if not path.exists():
+                return []
 
-        events: list[SessionEvent] = []
-        with path.open("r", encoding="utf-8") as file:
-            for line in file:
-                if line.strip():
-                    events.append(SessionEvent.from_dict(json.loads(line)))
-        return events
+            events: list[SessionEvent] = []
+            with path.open("r", encoding="utf-8") as file:
+                for line in file:
+                    if line.strip():
+                        events.append(SessionEvent.from_dict(json.loads(line)))
+            return events
 
     def rebuild_session_view(self, session_id: str) -> SessionView:
         view = SessionView(session_id=session_id)
@@ -84,54 +92,55 @@ class JsonlSessionStore:
             FileNotFoundError: if the session file does not exist.
             ValueError: if message_id is not found or does not belong to a user_message.
         """
-        path = self._session_path(session_id)
-        if not path.exists():
-            raise FileNotFoundError(f"Session file not found: {path}")
+        with self._lock:
+            path = self._session_path(session_id)
+            if not path.exists():
+                raise FileNotFoundError(f"Session file not found: {path}")
 
-        events = self.list_events(session_id)
-        if not events:
-            raise ValueError(f"Session {session_id} has no events")
+            events = self.list_events(session_id)
+            if not events:
+                raise ValueError(f"Session {session_id} has no events")
 
-        # Find the target line index (0-based)
-        target_line: int | None = None
-        for index, event in enumerate(events):
-            if event.type == "user_message" and str(event.payload.get("message_id") or "") == message_id:
-                target_line = index
-                break
-
-        if target_line is None:
-            # Check if the message_id exists at all (but with wrong type)
+            # Find the target line index (0-based)
+            target_line: int | None = None
             for index, event in enumerate(events):
-                if str(event.payload.get("message_id") or "") == message_id:
-                    raise ValueError(
-                        f"message_id {message_id} is not a user_message event (type={event.type}); "
-                        f"can only recall to user message boundaries"
-                    )
-            raise ValueError(f"message_id not found: {message_id} in session {session_id}")
+                if event.type == "user_message" and str(event.payload.get("message_id") or "") == message_id:
+                    target_line = index
+                    break
 
-        # Read all lines from the file
-        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+            if target_line is None:
+                # Check if the message_id exists at all (but with wrong type)
+                for index, event in enumerate(events):
+                    if str(event.payload.get("message_id") or "") == message_id:
+                        raise ValueError(
+                            f"message_id {message_id} is not a user_message event (type={event.type}); "
+                            f"can only recall to user message boundaries"
+                        )
+                raise ValueError(f"message_id not found: {message_id} in session {session_id}")
 
-        # Validate: first line must be session_created
-        if target_line == 0:
-            raise ValueError("Cannot truncate before the session_created event")
+            # Read all lines from the file
+            lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
 
-        retained_lines = lines[:target_line]
+            # Validate: first line must be session_created
+            if target_line == 0:
+                raise ValueError("Cannot truncate before the session_created event")
 
-        # Atomic write via temp file
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=f".{session_id}.", suffix=".tmp")
-        try:
-            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                f.writelines(retained_lines)
-            os.replace(tmp_path, path)
-        except Exception:
+            retained_lines = lines[:target_line]
+
+            # Atomic write via temp file
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=f".{session_id}.", suffix=".tmp")
             try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+                with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                    f.writelines(retained_lines)
+                os.replace(tmp_path, path)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
 
-        return len(retained_lines)
+            return len(retained_lines)
 
     def delete_session(self, session_id: str) -> bool:
         """Delete a session's persisted artifacts (JSONL, index entry, archives).
@@ -140,19 +149,20 @@ class JsonlSessionStore:
         without raising. Child (subagent) sessions call this after finishing so
         their ephemeral transcripts never surface in ``/resume``.
         """
-        path = self._session_path(session_id)
-        if not path.exists():
-            return False
-        path.unlink()
+        with self._lock:
+            path = self._session_path(session_id)
+            if not path.exists():
+                return False
+            path.unlink()
 
-        archive_dir = self.root / "archives" / session_id
-        if archive_dir.exists():
-            shutil.rmtree(archive_dir, ignore_errors=True)
+            archive_dir = self.root / "archives" / session_id
+            if archive_dir.exists():
+                shutil.rmtree(archive_dir, ignore_errors=True)
 
-        from lanscoder.session.index import SessionIndex
+            from lanscoder.session.index import SessionIndex
 
-        SessionIndex(self.root).rebuild_session(session_id)
-        return True
+            SessionIndex(self.root).rebuild_session(session_id)
+            return True
 
     def _apply_event(self, view: SessionView, event: SessionEvent, *, sequence: int) -> None:
         if event.type in {"session_created", "session_metadata_updated"}:

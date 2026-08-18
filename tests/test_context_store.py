@@ -404,3 +404,45 @@ def test_delete_session_removes_jsonl_index_and_archives(tmp_path: Path) -> None
 
     # Deleting an unknown session is a no-op, not an error.
     assert store.delete_session(session_id) is False
+
+
+def test_append_event_is_thread_safe(tmp_path: Path) -> None:
+    """Concurrent appends must serialize through the store lock and never corrupt JSONL."""
+
+    import threading
+
+    store = JsonlSessionStore(tmp_path)
+    session_id = "sess_test"
+
+    def worker(index: int) -> None:
+        store.append_event(
+            SessionEvent(
+                id=f"evt_{index}",
+                session_id=session_id,
+                type="user_message",
+                payload={
+                    "message_id": f"msg_{index}",
+                    "parts": [
+                        {
+                            "id": f"part_{index}",
+                            "message_id": f"msg_{index}",
+                            "kind": "text",
+                            "content": f"hello {index}",
+                            "metadata": {},
+                        }
+                    ],
+                    "metadata": {},
+                },
+            )
+        )
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(32)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    events = store.list_events(session_id)
+    assert len(events) == 32
+    # Every line in the file must still parse as a valid event.
+    assert len(store.rebuild_session_view(session_id).messages) == 32

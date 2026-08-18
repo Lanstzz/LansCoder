@@ -42,6 +42,7 @@ class SessionCommandHandler:
     share_service: SessionShareService | None = None
     store: JsonlSessionStore | None = None
     on_resume: Callable[[SessionRuntimeLike], None] | None = None
+    busy_check: Callable[[], bool] = lambda: False  # True while a turn is in-flight / paused
 
     def commands(self) -> list[tuple[str, str]]:
         return [
@@ -63,6 +64,15 @@ class SessionCommandHandler:
         parts = command.split()
         name = parts[0]
         args = parts[1:]
+
+        # /resume, /new and /fork all hot-swap the current session via on_resume;
+        # refuse while a turn is running or paused so the in-flight loop keeps a
+        # consistent session to write into.
+        if name in {"/resume", "/new", "/fork"} and self.busy_check():
+            return CommandResult(
+                handled=True,
+                output="当前 turn 尚未结束，请先等待或按 Esc 中断后再切换会话。",
+            )
 
         try:
             if name == "/new":
