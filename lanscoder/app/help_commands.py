@@ -9,6 +9,7 @@ from lanscoder.app.commands import CommandResult
 HELP_COMMANDS = [
     ("/new [title]", "Start a new session."),
     ("/fork [title]", "Copy the current session into a new branch."),
+    ("/recall", "Rewind conversation to a previous turn."),
     ("/sessions", "List saved sessions."),
     ("/session <session_id>", "Show one session summary."),
     ("/resume", "Pick a session to resume."),
