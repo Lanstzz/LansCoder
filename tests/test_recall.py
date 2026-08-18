@@ -379,3 +379,137 @@ class TestRecallCommandHandler:
         user_messages = [m for m in view.messages if m.role == "user"]
         assert len(user_messages) == 1
         assert user_messages[0].id == "msg_01"
+
+
+# ---------------------------------------------------------------------------
+# Task 6: Integration tests
+# ---------------------------------------------------------------------------
+
+
+from lanscoder.providers.types import ChatResponse
+
+
+class TestRecallIntegration:
+    def test_recall_roundtrip(self, tmp_path):
+        store = JsonlSessionStore(tmp_path)
+        sid = "sess_integration"
+        events = [
+            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_user_message_event(sid, "msg_01", "first turn", 1),
+            _make_assistant_message_event(sid, "msg_02", "first response"),
+            _make_user_message_event(sid, "msg_03", "second turn", 2),
+            _make_assistant_message_event(sid, "msg_04", "second response"),
+            _make_user_message_event(sid, "msg_05", "third turn", 3),
+            _make_assistant_message_event(sid, "msg_06", "third response"),
+        ]
+        _write_session_jsonl(store._session_path(sid), events)
+
+        # Bootstrap and resume
+        bootstrap = SessionBootstrap(store=store, project_root=tmp_path, data_root=tmp_path)
+        session = bootstrap.resume(sid)
+
+        # Verify all 3 turns are present
+        view = session.rebuild_view()
+        user_msgs = [m for m in view.messages if m.role == "user"]
+        assert len(user_msgs) == 3
+
+        swapped = None
+
+        def on_recall(new_session):
+            nonlocal swapped
+            swapped = new_session
+
+        handler = RecallCommandHandler(
+            session=session,
+            store=store,
+            bootstrap=bootstrap,
+            on_recall=on_recall,
+        )
+
+        # Recall to turn 2 (message msg_03)
+        handler.recall_to("msg_03")
+
+        assert swapped is not None
+        view = swapped.rebuild_view()
+        user_msgs = [m for m in view.messages if m.role == "user"]
+        assert len(user_msgs) == 1
+        assert user_msgs[0].id == "msg_01"
+
+    def test_recall_then_continue(self, tmp_path):
+        store = JsonlSessionStore(tmp_path)
+        sid = "sess_continue"
+        events = [
+            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_user_message_event(sid, "msg_01", "first turn", 1),
+            _make_assistant_message_event(sid, "msg_02", "first response"),
+            _make_user_message_event(sid, "msg_03", "second turn", 2),
+            _make_assistant_message_event(sid, "msg_04", "second response"),
+        ]
+        _write_session_jsonl(store._session_path(sid), events)
+
+        bootstrap = SessionBootstrap(store=store, project_root=tmp_path, data_root=tmp_path)
+        session = bootstrap.resume(sid)
+
+        swapped = None
+
+        def on_recall(new_session):
+            nonlocal swapped
+            swapped = new_session
+
+        handler = RecallCommandHandler(
+            session=session,
+            store=store,
+            bootstrap=bootstrap,
+            on_recall=on_recall,
+        )
+
+        handler.recall_to("msg_03")
+
+        # After recall, append a new user message
+        swapped.append_user_message("new turn after recall")
+        swapped.append_assistant_response(
+            ChatResponse(
+                provider="test",
+                model="test",
+                content="new response",
+                finish_reason="stop",
+            )
+        )
+
+        # Verify the new messages are persisted
+        view = swapped.rebuild_view()
+        user_msgs = [m for m in view.messages if m.role == "user"]
+        assert len(user_msgs) == 2
+        assert user_msgs[0].id == "msg_01"
+        # The new message should have a different ID
+        assert user_msgs[1].id != "msg_03"
+
+    def test_recall_updates_session_index(self, tmp_path):
+        store = JsonlSessionStore(tmp_path)
+        sid = "sess_index_test"
+        events = [
+            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_user_message_event(sid, "msg_01", "turn 1", 1),
+            _make_assistant_message_event(sid, "msg_02", "response 1"),
+            _make_user_message_event(sid, "msg_03", "turn 2", 2),
+            _make_assistant_message_event(sid, "msg_04", "response 2"),
+            _make_user_message_event(sid, "msg_05", "turn 3", 3),
+            _make_assistant_message_event(sid, "msg_06", "response 3"),
+        ]
+        _write_session_jsonl(store._session_path(sid), events)
+
+        from lanscoder.session.index import SessionIndex
+        index = SessionIndex(tmp_path)
+        index.rebuild()
+
+        records = index.list_records()
+        assert len(records) == 1
+        assert records[0].user_turn_count == 3
+
+        store.truncate_before_message(sid, "msg_03")
+        index.rebuild_session(sid)
+
+        records = index.list_records()
+        assert len(records) == 1
+        assert records[0].user_turn_count == 1
+        assert records[0].message_count == 2
