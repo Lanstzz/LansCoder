@@ -168,3 +168,35 @@ class TestTruncateBeforeMessage:
 
         with pytest.raises(ValueError, match="is not a user_message"):
             store.truncate_before_message(sid, "msg_02")
+
+
+class TestSessionIndexRebuildSession:
+    def test_rebuild_session_updates_index(self, tmp_path):
+        from lanscoder.session.index import SessionIndex
+
+        store = JsonlSessionStore(tmp_path)
+        sid = "sess_test123456"
+        events = [
+            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_user_message_event(sid, "msg_01", "hello", 1),
+            _make_assistant_message_event(sid, "msg_02", "hi there"),
+            _make_user_message_event(sid, "msg_03", "do something", 2),
+            _make_assistant_message_event(sid, "msg_04", "ok done"),
+        ]
+        _write_session_jsonl(store._session_path(sid), events)
+
+        index = SessionIndex(tmp_path)
+        index.rebuild()
+        records_before = index.list_records()
+        assert len(records_before) == 1
+        assert records_before[0].user_turn_count == 2
+
+        # Truncate to turn 1
+        store.truncate_before_message(sid, "msg_03")
+        # Rebuild just this session's index entry
+        index.rebuild_session(sid)
+
+        records_after = index.list_records()
+        assert len(records_after) == 1
+        assert records_after[0].user_turn_count == 1
+        assert records_after[0].message_count == 2  # msg_01 + msg_02
