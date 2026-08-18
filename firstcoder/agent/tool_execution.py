@@ -137,7 +137,9 @@ class ToolExecutor:
         """执行一个 response 里的全部 tool_calls。
 
         默认顺序执行。只读探查工具在当前权限允许时可以同批并行，减少等待。
-        一旦某个工具返回 pending user input，本轮剩余工具会跳过。
+        一旦某个工具需要用户输入（权限 ASK 或 ask_user），会暂停并把同批次剩余
+        工具存进 pending 状态；用户回答后由 AgentLoop 续跑剩余工具（见 loop.py
+        的 deferred batch continuation），需要输入则链式再暂停。
         """
 
         state = ToolExecutionState()
@@ -214,7 +216,7 @@ class ToolExecutor:
                 tool_call,
                 result,
                 state=state,
-                skipped_tool_calls=tool_calls[index + 1 :],
+                deferred_tool_calls=tool_calls[index + 1 :],
             )
             if pending_input is not None:
                 state.pending_input = pending_input
@@ -412,7 +414,7 @@ class ToolExecutor:
     def _prepare_permission(
         self,
         tool_call: ToolCall,
-        skipped_tool_calls: list[ToolCall],
+        deferred_tool_calls: list[ToolCall],
     ) -> _PermissionPreparation:
         """Resolve preflight outcomes before any local tool side effect."""
 
@@ -433,7 +435,7 @@ class ToolExecutor:
             pending = self.store_pending_permission_request(
                 tool_call=tool_call,
                 request=preflight.request,
-                skipped_tool_calls=skipped_tool_calls,
+                deferred_tool_calls=deferred_tool_calls,
                 review_only=review_only,
             )
             if isinstance(pending, ToolResult):
@@ -450,19 +452,30 @@ class ToolExecutor:
         result: ToolResult,
         *,
         state: ToolExecutionState,
-        skipped_tool_calls: list[ToolCall] | None = None,
+        deferred_tool_calls: list[ToolCall] | None = None,
     ) -> UserInputRequest | None:
-        self.session.append_tool_result(tool_call=tool_call, result=result)
-        if self._observe_tool_result is not None:
-            self._observe_tool_result(tool_call, result)
+        """记录一个已执行工具的结果。
+
+        若结果要求用户输入（ask_user 等），**不**立即写 tool_result：把同批次剩余
+        工具存进 pending-ask_user，回答后才由 resume 合成答案 result 并继续执行剩余。
+        剩余工具不再被写死成 skipped，而是等待回答后继续——这是"延迟批次续跑"的基础。
+        """
+
         pending_input = user_input_request_from_tool_result(
             result,
             tool_call_id=tool_call.id,
             tool_name=tool_call.name,
         )
         if pending_input is not None:
-            self._emit_settlements("skipped", self.settlement.append_skipped(skipped_tool_calls or []))
+            self.store_pending_ask_user(
+                tool_call=tool_call,
+                deferred_tool_calls=deferred_tool_calls or [],
+                user_input_request=pending_input,
+            )
             return pending_input
+        self.session.append_tool_result(tool_call=tool_call, result=result)
+        if self._observe_tool_result is not None:
+            self._observe_tool_result(tool_call, result)
         if tool_call.name == "task_boundary" and result.ok and result.data.get("should_trigger_compaction"):
             self._tag_task_boundary_messages(result.data)
             state.task_hash_changed = True
@@ -563,7 +576,7 @@ class ToolExecutor:
         *,
         tool_call: ToolCall,
         request: PermissionRequest,
-        skipped_tool_calls: list[ToolCall],
+        deferred_tool_calls: list[ToolCall],
         review_only: bool = False,
     ) -> UserInputRequest | ToolResult:
         if self.session.permission_manager is None:
@@ -602,13 +615,39 @@ class ToolExecutor:
             permission_request=request,
             prewrite_review=prewrite_review,
             review_only=review_only,
-            skipped_tool_calls=list(skipped_tool_calls),
+            deferred_tool_calls=list(deferred_tool_calls),
         )
         self.session.persist_pending_permission_kind(
             tool_call_id=trusted_tool_call.id,
             review_only=review_only,
         )
         return confirmation
+
+    def store_pending_ask_user(
+        self,
+        *,
+        tool_call: ToolCall,
+        deferred_tool_calls: list[ToolCall],
+        user_input_request: UserInputRequest,
+    ) -> None:
+        """为 ask_user 暂停建立统一 pending 状态。
+
+        ask_user 工具本身不产生持久副作用，回答由 resume 阶段合成 tool_result 写入。
+        这里把提问请求与同批次剩余工具一起保存，回答后继续执行剩余工具。
+        """
+
+        trusted_tool_call = ToolCall(
+            id=tool_call.id,
+            name=tool_call.name,
+            arguments=deepcopy(tool_call.arguments),
+        )
+        self.session.pending_permission_execution = PendingPermissionExecution(
+            request_id=user_input_request.id,
+            tool_call=trusted_tool_call,
+            kind="ask_user",
+            deferred_tool_calls=list(deferred_tool_calls),
+            ask_user_request=user_input_request,
+        )
 
     def permission_input_request_from_pending(self, pending: PendingPermissionExecution) -> UserInputRequest:
         confirmation = self.session.pending_permission_input_request(pending)

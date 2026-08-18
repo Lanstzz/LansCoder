@@ -10,6 +10,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from threading import RLock
+from typing import Literal
 
 from firstcoder.agent.prompt_inputs import (
     DEFAULT_PERMISSION_POLICY,
@@ -29,7 +30,7 @@ from firstcoder.permissions.manager import PermissionManager
 from firstcoder.permissions.policy import DefaultPermissionPolicy
 from firstcoder.permissions.types import PermissionDecisionKind, PermissionMode
 from firstcoder.providers.types import ChatResponse, ProviderCapabilities, ToolCall
-from firstcoder.runtime.user_input import UserInputRequest
+from firstcoder.runtime.user_input import UserInputRequest, _options_from_data
 from firstcoder.permissions.types import PermissionDecision, PermissionRequest
 from firstcoder.tools.permission_registry import PermissionAwareToolRegistry
 from firstcoder.tools.review import PrewriteReview, build_prewrite_review, supports_prewrite_review
@@ -47,18 +48,27 @@ DEFAULT_BASE_RULES = "你是 FirstCoder，一个本地 AI coding agent。请遵�
 
 @dataclass(slots=True)
 class PendingPermissionExecution:
-    """等待用户确认后才能继续的工具调用。
+    """等待用户确认后才能继续的工具调用（权限确认或 ask_user 统一槽）。
 
     这类状态不能相信 UI 回传的 payload。agent 只接受 request id 和用户选择，
     原始 tool_call 与规范化后的 permission request 都保存在本地运行时对象里。
+
+    - ``kind == "permission_confirmation"``：权限/写前预览确认，permission_request 非空。
+    - ``kind == "ask_user"``：模型主动提问，permission_request 为 None，
+      问题与选项存在 ``ask_user_request``。
+
+    ``deferred_tool_calls`` 是暂停时同批次里尚未执行的剩余工具；用户回答后由
+    AgentLoop 把它们当作新一批继续执行，需要输入则链式再暂停。
     """
 
     request_id: str
     tool_call: ToolCall
-    permission_request: PermissionRequest
+    permission_request: PermissionRequest | None = None
     prewrite_review: PrewriteReview | None = None
     review_only: bool = False
-    skipped_tool_calls: list[ToolCall] = field(default_factory=list)
+    deferred_tool_calls: list[ToolCall] = field(default_factory=list)
+    kind: Literal["permission_confirmation", "ask_user"] = "permission_confirmation"
+    ask_user_request: UserInputRequest | None = None
 
 
 @dataclass(slots=True)
@@ -250,21 +260,35 @@ class AgentSession:
         return session
 
     def restore_pending_permission_execution(self) -> PendingPermissionExecution | None:
-        """从 append-only 历史中重建未完成的权限确认。
+        """从 append-only 历史中重建未完成的权限确认或 ask_user 暂停。
 
         只有最后一个 assistant tool_call 批次仍缺少 tool_result 时才尝试重建。
         即使 grant 已经存在，也只恢复 pending，不自动执行工具，避免 resume 阶段
         产生隐式副作用或留下悬空 tool_call。
+
+        ask_user 走同样的槽：暂停时整批 tool_call 都未闭合，尾部第一个未闭合的
+        若是 ask_user 工具，就从它的 arguments 重建提问请求。
         """
 
         pending = self._pending_tool_calls_from_tail()
         if len(pending) != 1:
             return None
 
-        tool_call, skipped_tool_calls, persisted_review_only = pending[0]
+        tool_call, deferred_tool_calls, persisted_review_only = pending[0]
         preflight = self.preflight_tool_call_permission(tool_call)
         if preflight is None:
-            return None
+            ask_user_request = _ask_user_request_from_tool_call(tool_call)
+            if ask_user_request is None:
+                return None
+            restored = PendingPermissionExecution(
+                request_id=ask_user_request.id,
+                tool_call=tool_call,
+                kind="ask_user",
+                deferred_tool_calls=deferred_tool_calls,
+                ask_user_request=ask_user_request,
+            )
+            self.pending_permission_execution = restored
+            return restored
 
         restored = PendingPermissionExecution(
             request_id=preflight.request.id,
@@ -280,7 +304,7 @@ class AgentSession:
                 else None
             ),
             review_only=(persisted_review_only if persisted_review_only is not None else preflight.decision.kind == PermissionDecisionKind.ALLOW),
-            skipped_tool_calls=skipped_tool_calls,
+            deferred_tool_calls=deferred_tool_calls,
         )
         self.pending_permission_execution = restored
         return restored
@@ -307,7 +331,11 @@ class AgentSession:
         pending: PendingPermissionExecution | None = None,
     ) -> UserInputRequest | None:
         pending = pending or self.pending_permission_execution
-        if pending is None or self.permission_manager is None:
+        if pending is None:
+            return None
+        if pending.kind == "ask_user":
+            return pending.ask_user_request
+        if self.permission_manager is None or pending.permission_request is None:
             return None
         confirmation = (
             self.permission_manager.build_prewrite_review_confirmation(pending.permission_request) if pending.review_only else self.permission_manager.build_confirmation(pending.permission_request)
@@ -644,6 +672,29 @@ def _tool_call_from_part(part: MessagePart) -> ToolCall:
         id=str(part.metadata["tool_call_id"]),
         name=str(part.metadata["tool_name"]),
         arguments=arguments,
+    )
+
+
+def _ask_user_request_from_tool_call(tool_call: ToolCall) -> UserInputRequest | None:
+    """从 ask_user 工具调用的 arguments 重建待回答的请求（跨重启恢复用）。
+
+    暂停时 ask_user 的 tool_result 尚未写入，恢复阶段只能从原始 tool_call 的
+    arguments（question/options）重建提问请求，作为 pending 状态的 ask_user_request。
+    """
+
+    if tool_call.name != "ask_user":
+        return None
+    arguments = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
+    question = str(arguments.get("question") or "").strip()
+    if not question:
+        return None
+    options = _options_from_data(arguments.get("options"))
+    return UserInputRequest(
+        id=tool_call.id,
+        kind="ask_user",
+        question=question,
+        options=options,
+        payload={"tool_call_id": tool_call.id, "tool_name": tool_call.name},
     )
 
 

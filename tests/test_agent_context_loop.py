@@ -3178,7 +3178,8 @@ def test_agent_loop_interactive_pauses_on_ask_user(tmp_path) -> None:
         ]
     )
 
-    result = AgentLoop(session=session, provider=provider)._run_user_turn_sync("部署")
+    loop = AgentLoop(session=session, provider=provider)
+    result = loop._run_user_turn_sync("部署")
 
     assert result.status == AgentTurnStatus.WAITING_FOR_USER_INPUT
     assert result.response is None
@@ -3191,14 +3192,25 @@ def test_agent_loop_interactive_pauses_on_ask_user(tmp_path) -> None:
         ("2", "prod"),
     ]
     assert len(provider.requests) == 1
+    # ask_user 的 tool_result 延迟到回答后才写入，暂停时历史里只有 user + assistant。
     assert [message.role for message in store.rebuild_session_view("sess_ask").messages] == [
         "user",
         "assistant",
-        "tool",
     ]
 
+    resumed = loop._resume_with_user_input_sync(result.pending_input.id, "prod")
+    assert resumed.status == AgentTurnStatus.COMPLETED
+    assert resumed.response is not None
+    assert resumed.response.content == "不应继续"
+    view = store.rebuild_session_view("sess_ask")
+    assert [message.role for message in view.messages] == ["user", "assistant", "tool", "assistant"]
+    answer_result = view.messages[2].parts[0]
+    assert answer_result.metadata["tool_call_id"] == "call_ask"
+    assert answer_result.metadata["ok"] is True
+    assert answer_result.content == "prod"
 
-def test_agent_loop_skips_remaining_parallel_tools_when_waiting_for_user(tmp_path) -> None:
+
+def test_agent_loop_defers_remaining_tools_until_ask_user_answer(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
         store=store,
@@ -3221,20 +3233,37 @@ def test_agent_loop_skips_remaining_parallel_tools_when_waiting_for_user(tmp_pat
                     ToolCall(id="call_echo", name="echo", arguments={"text": "should skip"}),
                 ],
                 finish_reason="tool_calls",
-            )
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="继续"),
         ]
     )
+    loop = AgentLoop(session=session, provider=provider)
 
-    result = AgentLoop(session=session, provider=provider)._run_user_turn_sync("需要确认")
+    result = loop._run_user_turn_sync("需要确认")
 
     assert result.status == AgentTurnStatus.WAITING_FOR_USER_INPUT
     view = store.rebuild_session_view("sess_parallel_ask")
-    assert [message.role for message in view.messages] == ["user", "assistant", "tool", "tool"]
-    assert view.messages[2].parts[0].metadata["tool_call_id"] == "call_ask"
-    skipped = view.messages[3].parts[0]
-    assert skipped.metadata["tool_call_id"] == "call_echo"
-    assert skipped.metadata["ok"] is False
-    assert skipped.metadata["data"]["skipped_due_to_user_input"] is True
+    # 暂停时不写任何 tool_result：ask_user 与同批次剩余工具都延迟到回答后。
+    assert [message.role for message in view.messages] == ["user", "assistant"]
+
+    resumed = loop._resume_with_user_input_sync(result.pending_input.id, "好的")
+    assert resumed.status == AgentTurnStatus.COMPLETED
+    view = store.rebuild_session_view("sess_parallel_ask")
+    assert [message.role for message in view.messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "assistant",
+    ]
+    ask_result = view.messages[2].parts[0]
+    assert ask_result.metadata["tool_call_id"] == "call_ask"
+    assert ask_result.metadata["ok"] is True
+    assert ask_result.content == "好的"
+    echo_result = view.messages[3].parts[0]
+    assert echo_result.metadata["tool_call_id"] == "call_echo"
+    assert echo_result.metadata["ok"] is True
+    assert echo_result.content == "echo:should skip"
 
 
 def test_agent_loop_permission_pause_does_not_append_confirmation_tool_result(tmp_path) -> None:
@@ -3897,7 +3926,7 @@ def test_agent_loop_permission_pending_blocks_new_user_turn_until_resolved(tmp_p
     ]
 
 
-def test_agent_loop_permission_resume_skips_remaining_parallel_tools(tmp_path) -> None:
+def test_agent_loop_permission_resume_continues_remaining_parallel_tools(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path / ".firstcoder")
     session = AgentSession.from_project(
         store=store,
@@ -3928,17 +3957,129 @@ def test_agent_loop_permission_resume_skips_remaining_parallel_tools(tmp_path) -
 
     pending = loop._run_user_turn_sync("写 README，然后 echo").pending_input
     assert pending is not None
+    # write 与 echo 都在等批准，暂停时整批都不写 result。
+    paused_view = store.rebuild_session_view("sess_perm_parallel")
+    assert [message.role for message in paused_view.messages] == ["user", "assistant"]
+
     loop._resume_with_user_input_sync(pending.id, "allow_once")
 
     view = store.rebuild_session_view("sess_perm_parallel")
     assert [message.role for message in view.messages] == ["user", "assistant", "tool", "tool", "assistant"]
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "hello"
-    skipped = view.messages[3].parts[0]
-    assert skipped.metadata["tool_call_id"] == "call_echo"
-    assert skipped.metadata["ok"] is False
-    assert skipped.metadata["data"]["skipped_due_to_user_input"] is True
+    echo_result = view.messages[3].parts[0]
+    assert echo_result.metadata["tool_call_id"] == "call_echo"
+    assert echo_result.metadata["ok"] is True
+    assert echo_result.content == "echo:should skip"
     assert provider.requests[1].messages[-2].tool_call_id == "call_write"
     assert provider.requests[1].messages[-1].tool_call_id == "call_echo"
+
+
+def test_agent_loop_chains_permission_prompts_across_deferred_batch(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    session = AgentSession.from_project(
+        store=store,
+        session_id="sess_perm_chain",
+        project_root=tmp_path,
+        tools=[create_write_tool(tmp_path)],
+    )
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(id="call_a", name="write", arguments={"path": "a.md", "content": "A"}),
+                    ToolCall(id="call_b", name="write", arguments={"path": "b.md", "content": "B"}),
+                ],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="写好了"),
+        ]
+    )
+    loop = AgentLoop(session=session, provider=provider)
+
+    pending = loop._run_user_turn_sync("写两个文件").pending_input
+    assert pending is not None
+    assert pending.kind == "permission_confirmation"
+
+    # 批准第一个后，延迟批次里的第二个 write 需要权限 → 链式暂停，而不是跳过。
+    second = loop._resume_with_user_input_sync(pending.id, "allow_once")
+    assert second.status == AgentTurnStatus.WAITING_FOR_USER_INPUT
+    assert second.pending_input is not None
+    assert second.pending_input.kind == "permission_confirmation"
+    assert (tmp_path / "a.md").read_text(encoding="utf-8") == "A"
+    assert not (tmp_path / "b.md").exists()
+
+    resumed = loop._resume_with_user_input_sync(second.pending_input.id, "allow_once")
+    assert resumed.status == AgentTurnStatus.COMPLETED
+    assert resumed.response is not None
+    assert resumed.response.content == "写好了"
+    assert (tmp_path / "b.md").read_text(encoding="utf-8") == "B"
+
+
+def test_agent_session_restores_pending_ask_user_across_restart(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(
+        store=store,
+        session_id="sess_ask_restore",
+        agents_md="",
+        tools=[create_ask_user_tool(), _echo_tool()],
+    )
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[
+                    ToolCall(id="call_ask", name="ask_user", arguments={"question": "继续吗？", "options": ["继续", "取消"]}),
+                    ToolCall(id="call_echo", name="echo", arguments={"text": "deferred"}),
+                ],
+                finish_reason="tool_calls",
+            ),
+        ]
+    )
+    loop = AgentLoop(session=session, provider=provider)
+    pending = loop._run_user_turn_sync("提问").pending_input
+    assert pending is not None
+    assert pending.kind == "ask_user"
+
+    # 模拟进程重启：从同一 store 重建 session，恢复 ask_user pending。
+    resumed_session = AgentSession.resume(
+        store=store,
+        session_id="sess_ask_restore",
+        agents_md="",
+        tools=[create_ask_user_tool(), _echo_tool()],
+    )
+    restored = resumed_session.restore_pending_permission_execution()
+    assert restored is not None
+    assert restored.kind == "ask_user"
+    assert restored.request_id == "call_ask"
+    assert restored.ask_user_request is not None
+    assert restored.ask_user_request.question == "继续吗？"
+    assert [call.id for call in restored.deferred_tool_calls] == ["call_echo"]
+
+    # 用恢复出的 pending 继续回答，延迟批次里的 echo 仍会执行。
+    resumed_loop = AgentLoop(
+        session=resumed_session,
+        provider=FakeProvider([ChatResponse(provider="fake", model="fake-model", content="完成")]),
+    )
+    result = resumed_loop._resume_with_user_input_sync("call_ask", "继续")
+    assert result.status == AgentTurnStatus.COMPLETED
+    assert result.response is not None
+    assert result.response.content == "完成"
+    view = store.rebuild_session_view("sess_ask_restore")
+    assert [message.role for message in view.messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "assistant",
+    ]
+    assert view.messages[2].parts[0].content == "继续"
+    assert view.messages[3].parts[0].metadata["tool_call_id"] == "call_echo"
+    assert view.messages[3].parts[0].metadata["ok"] is True
 
 
 def test_agent_loop_permission_resume_uses_local_pending_not_ui_payload(tmp_path) -> None:

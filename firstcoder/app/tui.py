@@ -514,11 +514,15 @@ class FirstCoderApp(FirstCoderViewMixin, App[None]):
             self._chat_worker = self.run_worker(self._resume_permission_turn(pending.id, choice, token))
             return
         if getattr(pending, "kind", None) == "ask_user":
-            # ask_user 用"下一条普通消息"继续（loop 协议如此，不正式 resume）；
-            # 输入若匹配某个选项（序号/id/文本），规范化为该选项 label。
+            # ask_user 与权限统一走 resume 协议：回答后 loop 继续执行同批次剩余工具
+            # （deferred batch continuation）。输入若匹配某选项则规范化为其 label。
             choice = ask_user_choice_for_text(text, pending)
             if choice is not None:
                 text = choice
+            self._chat_busy = True
+            token = self._resume_active_chat_turn()
+            self._chat_worker = self.run_worker(self._resume_permission_turn(pending.id, text, token))
+            return
 
         self._chat_busy = True
         token = self._begin_active_chat_turn()
