@@ -176,6 +176,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._welcome_particle_frame = 0
         self._provider_glow_timer: Timer | None = None
         self._provider_glow_frame = 0
+        self._subagent_progress_timer: Timer | None = None
         self.transcript = TuiTranscript()
         self.task_plan_panel_state = TuiTaskPlanPanelState()
 
@@ -211,6 +212,10 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         # Keep focus on the input — clicking elsewhere should not steal it.
         self.query_one("#output").can_focus = False
         self.set_focus(self.query_one("#input"))
+        # Periodically update the activity line with subagent progress.
+        self._subagent_progress_timer = self.set_interval(
+            0.5, self._refresh_subagent_progress
+        )
 
     def on_app_focus(self) -> None:
         """When the terminal window regains focus, put it back on the input."""
@@ -218,6 +223,34 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             self.set_focus(self.query_one("#input"))
         except Exception:
             pass
+
+    def _refresh_subagent_progress(self) -> None:
+        """Periodic timer: read active background jobs and update the activity line."""
+        manager = None
+        if self.chat_runner is not None:
+            manager = getattr(self.chat_runner, "background_manager", None)
+        if manager is None:
+            return
+        jobs = manager.active_jobs()
+        if not jobs:
+            return
+        # Build a one-line summary for each running job.
+        parts: list[str] = []
+        now = time.monotonic()
+        for job in jobs:
+            elapsed = now - job.created_at
+            label = job.label or job.tool_name
+            progress = job.progress
+            calls = progress.get("provider_calls", 0) if progress else 0
+            tokens = progress.get("total_tokens", 0) if progress else 0
+            if tokens >= 1000:
+                token_str = f"{tokens / 1000:.1f}k"
+            else:
+                token_str = str(tokens)
+            parts.append(
+                f"{label} · {elapsed:.0f}s · {calls} calls · {token_str} tokens"
+            )
+        self._set_activity(" | ".join(parts))
 
     def set_slash_commands(self, commands: list[tuple[str, str]]) -> None:
         """Set the full command list for the slash-command autocomplete dropdown."""

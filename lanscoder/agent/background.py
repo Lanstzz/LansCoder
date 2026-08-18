@@ -167,6 +167,10 @@ class BackgroundJob:
     token: CancellationToken = field(default_factory=CancellationToken)
     on_completed: Callable[["BackgroundJob"], str | None] | None = field(default=None, repr=False)
     task_plan_completion: str | None = None
+    # Cross-thread progress tracking for the TUI activity panel.
+    # Written by the subagent thread, read by the TUI timer (protected by
+    # BackgroundJobManager._lock).
+    progress: dict[str, Any] = field(default_factory=dict)
 
     def snapshot(self) -> dict[str, Any]:
         """给 background_status 工具用的可读快照。"""
@@ -185,6 +189,17 @@ class BackgroundJob:
             "summary": summary,
             "cancel_requested": self.cancel_requested,
         }
+
+
+# Thread-local that BackgroundJobManager._run sets before calling the job function
+# so that subagent code can discover which background job it belongs to and
+# report progress back via BackgroundJob.progress.
+_current_job_id: threading.local = threading.local()
+
+
+def current_job_id() -> str | None:
+    """Return the background job ID for the calling thread, or None."""
+    return getattr(_current_job_id, "value", None)
 
 
 class BackgroundJobManager:
@@ -246,6 +261,7 @@ class BackgroundJobManager:
         return job
 
     def _run(self, job: BackgroundJob, func: Callable[[], ToolResult]) -> None:
+        _current_job_id.value = job.id
         try:
             with cancellation_context(job.token):
                 result = func()
@@ -335,6 +351,11 @@ class BackgroundJobManager:
     def list(self, *, session_id: str | None = None) -> list[BackgroundJob]:
         with self._lock:
             return [job for job in self._jobs.values() if session_id is None or job.session_id == session_id]
+
+    def active_jobs(self) -> list[BackgroundJob]:
+        """Return currently running jobs (for the TUI activity panel)."""
+        with self._lock:
+            return [job for job in self._jobs.values() if job.status == STATUS_RUNNING]
 
     def cancel(self, job_id: str, *, session_id: str | None = None) -> BackgroundJob | None:
         """尽力取消一个后台任务。
