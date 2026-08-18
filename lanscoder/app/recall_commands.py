@@ -30,9 +30,14 @@ class RecallCommandHandler:
 
     def handle(self, text: str) -> CommandResult:
         command = " ".join(text.strip().split())
-        if command != "/recall":
-            return CommandResult(handled=False)
+        if command == "/recall":
+            return self._handle_list()
+        elif command.startswith("/recall "):
+            return self._handle_recall_to(command)
+        return CommandResult(handled=False)
 
+    def _handle_list(self) -> CommandResult:
+        """Handle bare /recall — show the turn picker."""
         view = self.session.rebuild_view()
         user_messages = [m for m in view.messages if m.role == "user"]
 
@@ -73,6 +78,18 @@ class RecallCommandHandler:
                 "turns": turns,
             },
         )
+
+    def _handle_recall_to(self, command: str) -> CommandResult:
+        """Handle /recall <message_id> — delegate to recall_to."""
+        parts = command.split()
+        if len(parts) != 2:
+            return CommandResult(
+                handled=True,
+                output="Usage: /recall <message_id>",
+            )
+        message_id = parts[1]
+        output = self.recall_to(message_id)
+        return CommandResult(handled=True, output=output)
 
     def recall_to(self, message_id: str) -> str:
         """Truncate, rebuild, and swap session. Returns status message."""
