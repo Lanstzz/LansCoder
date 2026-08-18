@@ -227,6 +227,45 @@ def test_manager_marks_failed_when_function_raises() -> None:
         manager.shutdown()
 
 
+def test_manager_pending_completions_peeks_without_consuming() -> None:
+    manager = BackgroundJobManager()
+    try:
+        manager.start(
+            lambda: make_text_result("shell", "done"),
+            tool_name="shell",
+            session_id="sess_a",
+        )
+        assert manager.wait(timeout=5) is True
+        # Peeking exposes the completed job without consuming it.
+        pending = manager.pending_completions(session_id="sess_a")
+        assert [job.id for job in pending] == ["bg_0001"]
+        # collect_completed still consumes it, and the queue then drains empty.
+        assert len(manager.collect_completed(session_id="sess_a")) == 1
+        assert manager.pending_completions(session_id="sess_a") == []
+    finally:
+        manager.shutdown()
+
+
+def test_manager_pending_completions_filters_by_session() -> None:
+    manager = BackgroundJobManager()
+    try:
+        manager.start(
+            lambda: make_text_result("shell", "a"),
+            tool_name="shell",
+            session_id="sess_a",
+        )
+        manager.start(
+            lambda: make_text_result("shell", "b"),
+            tool_name="shell",
+            session_id="sess_b",
+        )
+        assert manager.wait(timeout=5) is True
+        assert [job.session_id for job in manager.pending_completions(session_id="sess_a")] == ["sess_a"]
+        assert len(manager.pending_completions()) == 2
+    finally:
+        manager.shutdown()
+
+
 def test_manager_enforces_capacity() -> None:
     manager = BackgroundJobManager(max_jobs=1, max_workers=2)
     release = threading.Event()
