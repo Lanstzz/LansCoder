@@ -315,3 +315,48 @@ def test_manager_mcp_allow_always_is_exact_server_and_tool_scope(tmp_path) -> No
         ).kind
         == PermissionDecisionKind.ASK
     )
+
+
+def test_autonomous_manager_coerces_ask_to_deny(tmp_path) -> None:
+    """In autonomous mode, a decision that would pause for confirmation becomes
+    a DENY so a background subagent can react instead of hanging."""
+    manager = PermissionManager(
+        policy=DefaultPermissionPolicy(tmp_path),
+        mode=PermissionMode.AGGRESSIVE,
+        autonomous=True,
+    )
+
+    # Dangerous shell would ASK in AGGRESSIVE mode; autonomous downgrades to DENY.
+    decision = manager.preflight(
+        PermissionRequest(id="req_rm", action=PermissionAction.EXECUTE_SHELL, target="rm -rf build")
+    )
+    assert decision.kind == PermissionDecisionKind.DENY
+
+    # A matching grant still wins over the autonomous coercion.
+    manager.grants.add(
+        PermissionGrant(
+            id="grant_rm",
+            effect="allow",
+            action=PermissionAction.EXECUTE_SHELL,
+            scope_type=PermissionScopeType.COMMAND_PREFIX,
+            scope_value="rm -rf build",
+            created_at="runtime",
+        )
+    )
+    allowed = manager.preflight(
+        PermissionRequest(id="req_rm2", action=PermissionAction.EXECUTE_SHELL, target="rm -rf build")
+    )
+    assert allowed.kind == PermissionDecisionKind.ALLOW
+
+
+def test_non_autonomous_manager_keeps_ask(tmp_path) -> None:
+    manager = PermissionManager(
+        policy=DefaultPermissionPolicy(tmp_path),
+        mode=PermissionMode.AGGRESSIVE,
+        autonomous=False,
+    )
+
+    decision = manager.preflight(
+        PermissionRequest(id="req_rm", action=PermissionAction.EXECUTE_SHELL, target="rm -rf build")
+    )
+    assert decision.kind == PermissionDecisionKind.ASK

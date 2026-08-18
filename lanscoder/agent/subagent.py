@@ -355,13 +355,18 @@ class SubagentRunner:
 
     def create_child_session(self, request: SubagentRequest, *, profile: SubagentProfile) -> AgentSession:
         session_id = new_session_id()
+        permission_manager = (
+            self._background_child_permission_manager()
+            if request.run_in_background
+            else self._child_permission_manager_for_inline()
+        )
         child = AgentSession.create(
             store=self.store,
             session_id=session_id,
             agents_md=self.agents_md,
             skill_catalog=self.skill_catalog,
             tools=self._supplied_tools_for_child(profile.role),
-            permission_manager=self._child_permission_manager_for_inline(),
+            permission_manager=permission_manager,
             sandbox_access=self.sandbox_access,
         )
         child.writer.append_session_metadata_updated(
@@ -398,7 +403,7 @@ class SubagentRunner:
         the parent working directory.
         """
 
-        permission_manager = self._child_permission_manager(worktree.path)
+        permission_manager = self._child_permission_manager(worktree.path, mutation=True)
         # PROJECT sandbox keeps every file tool physically confined to the worktree
         # root even though the policy auto-allows in-tree writes.
         sandbox_access = SandboxAccess(mode=SandboxAccessMode.PROJECT)
@@ -472,32 +477,36 @@ class SubagentRunner:
             mode=self.permission_manager.mode,
         )
 
-    def _child_permission_manager(self, root) -> PermissionManager:
-        """Build an autonomous permission manager scoped to the worktree root.
+    def _child_permission_manager(self, root, *, mutation: bool) -> PermissionManager:
+        """Build an autonomous permission manager scoped to ``root``.
 
-        The policy root is the worktree path, so every path/shell/git decision is
-        evaluated against the isolated tree.  AGGRESSIVE mode auto-allows in-tree
-        writes and a safe validation-command allow-list so the background coder can
-        make progress without an interactive user, while sensitive paths, deletes,
-        and dangerous shell still require confirmation (and will simply pause the
-        job rather than escape the sandbox).  A fresh grant store avoids inheriting
-        parent-scoped grants.
+        The policy root is ``root`` (the worktree path for a coder, the project
+        root otherwise), so every path/shell/git decision is evaluated against the
+        isolated scope.  AGGRESSIVE mode auto-allows in-tree writes and a safe
+        validation-command allow-list so a background subagent can make progress
+        without an interactive user.  Anything still requiring confirmation
+        (sensitive paths, dangerous shell, out-of-tree) is auto-DENIED rather than
+        paused, so the subagent receives a clean denial and can try a safer
+        approach instead of hanging.  Mutation-capable roles additionally get
+        write/delete grants scoped to the isolated root.  A fresh grant store
+        avoids inheriting parent-scoped grants.
         """
 
         grants = PermissionGrantStore()
-        root_value = str(root)
-        for action in (PermissionAction.WRITE_PATH, PermissionAction.DELETE_PATH):
-            grants.add(
-                PermissionGrant(
-                    id=f"grant_subagent_{action.value}",
-                    effect="allow",
-                    action=action,
-                    scope_type=PermissionScopeType.PATH_TREE,
-                    scope_value=root_value,
-                    created_at="runtime",
-                    reason="Isolated background coder may mutate only its dedicated worktree.",
+        if mutation:
+            root_value = str(root)
+            for action in (PermissionAction.WRITE_PATH, PermissionAction.DELETE_PATH):
+                grants.add(
+                    PermissionGrant(
+                        id=f"grant_subagent_{action.value}",
+                        effect="allow",
+                        action=action,
+                        scope_type=PermissionScopeType.PATH_TREE,
+                        scope_value=root_value,
+                        created_at="runtime",
+                        reason="Isolated background coder may mutate only its dedicated worktree.",
+                    )
                 )
-            )
         grants.add(
             PermissionGrant(
                 id="grant_subagent_network_request",
@@ -513,7 +522,21 @@ class SubagentRunner:
             policy=DefaultPermissionPolicy(root),
             grants=grants,
             mode=PermissionMode.AGGRESSIVE,
+            autonomous=True,
         )
+
+    def _background_child_permission_manager(self) -> PermissionManager | None:
+        """Autonomous permissions for a background subagent with no worktree.
+
+        Background researcher/reviewer/tester roles run inline (no worktree), but
+        still have no interactive user, so they must not pause for confirmation.
+        They have no write/delete tools, so no mutation grants are added; the
+        network grant and AGGRESSIVE shell allow-list cover their approved actions.
+        """
+
+        if self.project_root is None:
+            return self._child_permission_manager_for_inline()
+        return self._child_permission_manager(self.project_root, mutation=False)
 
     def _worktree_child_tools(
         self,

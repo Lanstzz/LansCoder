@@ -36,17 +36,29 @@ class PermissionManager:
         policy: DefaultPermissionPolicy,
         grants: PermissionGrantStore | None = None,
         mode: PermissionMode = PermissionMode.STANDARD,
+        autonomous: bool = False,
     ) -> None:
         self.policy = policy
         self.grants = grants or PermissionGrantStore()
         self.mode = mode
+        # Autonomous contexts (background subagents) have no interactive user to
+        # answer a confirmation prompt, so an ASK would just hang.  When true, any
+        # decision that would pause for confirmation is downgraded to a DENY so the
+        # caller receives a clean denial and can try a safer approach.
+        self.autonomous = autonomous
 
     def preflight(self, request: PermissionRequest) -> PermissionDecision:
         request = self.normalize_request(request)
         grant_decision = self.grants.matching_decision(request)
         if grant_decision is not None:
             return grant_decision
-        return self.policy.decide(request, mode=self.mode)
+        decision = self.policy.decide(request, mode=self.mode)
+        if self.autonomous and decision.kind == PermissionDecisionKind.ASK:
+            return PermissionDecision(
+                kind=PermissionDecisionKind.DENY,
+                reason=f"后台子 agent 无法交互确认，已自动拒绝：{decision.reason}",
+            )
+        return decision
 
     def build_confirmation(self, request: PermissionRequest) -> UserInputRequest:
         """把 `ASK` 权限请求转换成 UI 可展示的结构化用户输入请求。"""
