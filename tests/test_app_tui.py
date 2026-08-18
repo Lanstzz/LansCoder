@@ -1500,7 +1500,10 @@ async def test_lanscoder_app_awaits_async_chat_runner_when_available() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_lanscoder_app_queues_guidance_while_chat_is_running() -> None:
+async def test_lanscoder_app_interrupts_and_restarts_when_chat_is_running() -> None:
+    """When the user sends a message while a turn is running, the current
+    turn is cancelled and a new turn starts immediately.  Background
+    subagents are unaffected."""
     runner = BlockingGuidanceAsyncChatRunner()
     app = LansCoderApp(chat_runner=runner)
 
@@ -1514,8 +1517,7 @@ async def test_lanscoder_app_queues_guidance_while_chat_is_running() -> None:
         await pilot.pause()
         runner.release.set()
 
-    assert runner.inputs == ["start"]
-    assert runner.guidance == ["先别总结"]
+    assert runner.inputs == ["start", "先别总结"]
 
 
 @pytest.mark.anyio
@@ -3170,7 +3172,9 @@ async def test_lanscoder_app_displays_chat_errors_from_worker() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_lanscoder_app_rejects_chat_input_while_turn_is_running() -> None:
+async def test_lanscoder_app_interrupts_turn_even_without_guidance_support() -> None:
+    """Even when the chat runner lacks add_guidance, user input interrupts
+    the running turn and starts a new one."""
     runner = BlockingAsyncChatRunner()
     app = LansCoderApp(chat_runner=runner)
 
@@ -3186,7 +3190,7 @@ async def test_lanscoder_app_rejects_chat_input_while_turn_is_running() -> None:
         runner.release.set()
         await pilot.pause()
 
-    assert runner.inputs == ["first"]
+    assert runner.inputs == ["first", "second"]
 
 
 @pytest.mark.anyio

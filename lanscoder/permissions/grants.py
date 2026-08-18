@@ -105,6 +105,8 @@ def _grant_matches(grant: PermissionGrant, request: PermissionRequest) -> bool:
                 return False
         return _command_matches_prefix(request.target, grant.scope_value)
     if grant.scope_type == PermissionScopeType.HOST:
+        if grant.scope_value == "*":
+            return True
         return _host_from_target(request.target) == grant.scope_value.lower()
     if grant.scope_type == PermissionScopeType.ENV_KEY:
         return request.target.upper() == grant.scope_value.upper()

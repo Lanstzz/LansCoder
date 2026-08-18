@@ -507,17 +507,12 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return
 
         if self._chat_busy:
-            add_guidance = getattr(self.chat_runner, "add_guidance", None)
-            if add_guidance is None:
-                self._write_line(
-                    "Chat is still running. Please wait for the current turn to finish.",
-                    kind=TuiEntryKind.SYSTEM,
-                )
-                return
-            add_guidance(text)
-            self._write_line("Guidance queued for the running turn.", kind=TuiEntryKind.SYSTEM)
-            self._set_activity("running · guidance queued")
-            return
+            # Interrupt the current turn so the user can start a new one
+            # immediately.  Background subagents are unaffected — they run in
+            # independent threads with their own cancellation tokens and will
+            # report completion via <task_notification> when they finish.
+            self._interrupt_chat_turn()
+            # Fall through to start a new turn below.
 
         pending = getattr(self.chat_runner, "last_pending_input", None)
         if getattr(pending, "kind", None) == "permission_confirmation":
