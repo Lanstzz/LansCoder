@@ -9,11 +9,13 @@ from textual.widgets.option_list import Option
 class SlashSuggest(OptionList):
     """Dropdown list of slash-command suggestions that appears above the input."""
 
+    can_focus = False
+
     DEFAULT_CSS = """
     SlashSuggest {
         display: none;
         height: auto;
-        max-height: 12;
+        max-height: 6;
         border: solid $primary;
         background: $surface;
         margin: 0 0 1 0;
@@ -61,8 +63,7 @@ class SlashSuggest(OptionList):
         for cmd, desc in all_matching:
             self.add_option(Option(f"{cmd}  — {desc}", id=cmd))
 
-        if self.option_count == 1:
-            self.highlighted = 0
+        self.highlighted = 0
         self.add_class("--visible")
 
     def selected_command(self) -> str | None:

@@ -57,6 +57,8 @@ class ComposerTextArea(TextArea):
     class Submitted(Message):
         pass
 
+    _suppress_suggest = False
+
     def _get_slash_suggest(self):
         """Return the SlashSuggest widget, or None if not found."""
         try:
@@ -64,9 +66,21 @@ class ComposerTextArea(TextArea):
         except Exception:
             return None
 
-    def _update_slash_suggest(self, suggest) -> None:
+    def _update_slash_suggest(self) -> None:
         """Update slash-command suggestions based on current input text."""
-        suggest.update_suggestions(self.text)
+        suggest = self._get_slash_suggest()
+        if suggest is not None:
+            suggest.update_suggestions(self.text)
+
+    def _on_text_area_changed(self, _event: TextArea.Changed) -> None:
+        """React to every text change so bindings (backspace, delete, …) also
+        update the slash-command dropdown — not just keys routed through _on_key."""
+        if self._suppress_suggest:
+            return
+        self._update_slash_suggest()
+
+    def _clear_suppress(self) -> None:
+        self._suppress_suggest = False
 
     async def _on_key(self, event: events.Key) -> None:
         # ── slash-command autocomplete ──────────────────────────────
@@ -77,7 +91,9 @@ class ComposerTextArea(TextArea):
                 event.prevent_default()
                 cmd = suggest.selected_command()
                 if cmd:
+                    self._suppress_suggest = True
                     self.load_text(cmd)
+                    self.call_after_refresh(self._clear_suppress)
                     self.cursor_location = self.document.end
                 suggest.remove_class("--visible")
                 self.post_message(self.Submitted())
@@ -87,7 +103,9 @@ class ComposerTextArea(TextArea):
                 event.prevent_default()
                 cmd = suggest.selected_command()
                 if cmd:
+                    self._suppress_suggest = True
                     self.load_text(cmd + " ")
+                    self.call_after_refresh(self._clear_suppress)
                     self.cursor_location = self.document.end
                 suggest.remove_class("--visible")
                 return
@@ -120,9 +138,6 @@ class ComposerTextArea(TextArea):
             self.insert("\n")
             return
         await super()._on_key(event)
-        # ── update suggestions after text change ────────────────────
-        if suggest is not None:
-            self._update_slash_suggest(suggest)
 
     async def _on_paste(self, event: events.Paste) -> None:
         """Stage pasted files before TextArea inserts their paths as text."""
