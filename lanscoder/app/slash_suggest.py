@@ -61,13 +61,13 @@ class SlashSuggest(OptionList):
         for cmd, desc in all_matching:
             self.add_option(Option(f"{cmd}  — {desc}", id=cmd))
 
-        if len(self._options) == 1:
-            self.highlight = 0
+        if self.option_count == 1:
+            self.highlighted = 0
         self.add_class("--visible")
 
     def selected_command(self) -> str | None:
         """Return the command string of the highlighted option, or None."""
-        if self.highlight is not None and self._options:
-            opt = self._options[self.highlight]
+        if self.highlighted is not None and self.option_count:
+            opt = self.get_option_at_index(self.highlighted)
             return str(opt.id) if opt.id else None
         return None

@@ -10,8 +10,8 @@ import pytest
 
 pytest.importorskip("harbor")
 
-from benchmark.harbor.firstcoder_agent import (  # noqa: E402
-    FirstCoderHarborAgent,
+from benchmark.harbor.lanscoder_agent import (  # noqa: E402
+    LansCoderHarborAgent,
     _catalog_bootstrap_command,
     _install_command,
 )
@@ -24,14 +24,14 @@ from benchmark.harbor.aider_feedback_trial import (  # noqa: E402
 from benchmark.harbor.aider_feedback_plugin import AiderFeedbackPlugin  # noqa: E402
 
 
-def test_harbor_agent_builds_quoted_firstcoder_benchmark_command(tmp_path: Path) -> None:
-    agent = FirstCoderHarborAgent(logs_dir=tmp_path, max_tool_rounds="77")
+def test_harbor_agent_builds_quoted_lanscoder_benchmark_command(tmp_path: Path) -> None:
+    agent = LansCoderHarborAgent(logs_dir=tmp_path, max_tool_rounds="77")
 
     command = agent._run_command("Fix the task.\nRun tests.", session_id="task/id")
 
-    assert "/opt/firstcoder-agent/.venv/bin/python -m lanscoder" in command
+    assert "/opt/lanscoder-agent/.venv/bin/python -m lanscoder" in command
     assert "--benchmark --project ." in command
-    assert "--data-root /tmp/firstcoder-harbor-sessions" in command
+    assert "--data-root /tmp/lanscoder-harbor-sessions" in command
     assert "--session-id task_id" in command
     assert "--max-tool-rounds 77" in command
     assert '--model "${LANSCODER_PROVIDER_NAME}/${LANSCODER_MODEL}"' in command
@@ -43,18 +43,18 @@ def test_harbor_agent_builds_quoted_firstcoder_benchmark_command(tmp_path: Path)
     assert "set -o pipefail" in command
     assert "LANSCODER_EXIT" in command
     assert "/logs/agent/lanscoder-session.jsonl" in command
-    assert "/tmp/firstcoder-harbor-sessions/sessions/task_id.jsonl" in command
-    assert "warning: failed to export FirstCoder benchmark session" in command
+    assert "/tmp/lanscoder-harbor-sessions/sessions/task_id.jsonl" in command
+    assert "warning: failed to export LansCoder benchmark session" in command
 
 
 def test_harbor_catalog_bootstrap_writes_parseable_standard_config(tmp_path: Path) -> None:
     command = (
         _catalog_bootstrap_command()
         .replace(
-            "/opt/firstcoder-agent/.venv/bin/python",
+            "/opt/lanscoder-agent/.venv/bin/python",
             sys.executable,
         )
-        .replace("/tmp/firstcoder-harbor-config", str(tmp_path / "xdg"))
+        .replace("/tmp/lanscoder-harbor-config", str(tmp_path / "xdg"))
     )
     env = {
         **os.environ,
@@ -73,8 +73,8 @@ def test_harbor_catalog_bootstrap_writes_parseable_standard_config(tmp_path: Pat
     assert '[models."Yuren/gpt-test"]' in config
 
 
-def test_harbor_agent_passes_reasoning_effort_to_firstcoder(tmp_path: Path) -> None:
-    agent = FirstCoderHarborAgent(logs_dir=tmp_path, reasoning_effort="high")
+def test_harbor_agent_passes_reasoning_effort_to_lanscoder(tmp_path: Path) -> None:
+    agent = LansCoderHarborAgent(logs_dir=tmp_path, reasoning_effort="high")
 
     command = agent._run_command("Fix the task.", session_id="task")
 
@@ -82,7 +82,7 @@ def test_harbor_agent_passes_reasoning_effort_to_firstcoder(tmp_path: Path) -> N
 
 
 def test_harbor_agent_marks_feedback_turn_as_a_session_resume(tmp_path: Path) -> None:
-    agent = FirstCoderHarborAgent(logs_dir=tmp_path)
+    agent = LansCoderHarborAgent(logs_dir=tmp_path)
 
     command = agent._run_command(
         "The tests are correct. Do not modify the tests.\nTesting errors:\nFAIL",
@@ -163,7 +163,7 @@ def test_harbor_agent_stages_only_runtime_source_tree(tmp_path: Path) -> None:
     package = source / "lanscoder"
     package.mkdir(parents=True)
     (source / "pyproject.toml").write_text("[project]\nname = 'lanscoder'\n")
-    (source / "README.md").write_text("# FirstCoder\n")
+    (source / "README.md").write_text("# LansCoder\n")
     (package / "__init__.py").write_text("__version__ = 'test'\n")
     (package / "module.py").write_text("value = 1\n")
     cache = package / "__pycache__"
@@ -171,7 +171,7 @@ def test_harbor_agent_stages_only_runtime_source_tree(tmp_path: Path) -> None:
     (cache / "module.pyc").write_bytes(b"ignored")
     (source / ".env").write_text("SECRET=not-copied\n")
 
-    agent = FirstCoderHarborAgent(logs_dir=tmp_path / "logs", source_dir=source)
+    agent = LansCoderHarborAgent(logs_dir=tmp_path / "logs", source_dir=source)
     staged = agent._stage_local_source()
 
     assert (staged / "pyproject.toml").is_file()
@@ -182,8 +182,8 @@ def test_harbor_agent_stages_only_runtime_source_tree(tmp_path: Path) -> None:
 
 
 def test_harbor_agent_uses_explicit_package_fallback(tmp_path: Path) -> None:
-    package = "https://example.invalid/firstcoder.zip"
-    agent = FirstCoderHarborAgent(
+    package = "https://example.invalid/lanscoder.zip"
+    agent = LansCoderHarborAgent(
         logs_dir=tmp_path,
         source_dir=tmp_path / "missing",
         package=package,
@@ -195,11 +195,11 @@ def test_harbor_agent_uses_explicit_package_fallback(tmp_path: Path) -> None:
 
 def test_harbor_agent_rejects_invalid_tool_round_limit(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="max_tool_rounds"):
-        FirstCoderHarborAgent(logs_dir=tmp_path, max_tool_rounds=0)
+        LansCoderHarborAgent(logs_dir=tmp_path, max_tool_rounds=0)
 
 
 def test_harbor_install_prefers_a_suitable_existing_python() -> None:
-    command = _install_command("/installed-agent/firstcoder-src")
+    command = _install_command("/installed-agent/lanscoder-src")
 
     assert "for candidate in python3.12 python3.11 python3" in command
     assert "sys.version_info < (3, 11)" in command
@@ -207,7 +207,7 @@ def test_harbor_install_prefers_a_suitable_existing_python() -> None:
 
 
 def test_harbor_install_can_use_python_venv_without_curl_or_wget() -> None:
-    command = _install_command("/installed-agent/firstcoder-src")
+    command = _install_command("/installed-agent/lanscoder-src")
 
     assert 'if [ -x "$UV_BIN" ]; then' in command
     assert '"$PYTHON_BIN" -m venv "$AGENT_ROOT/.venv" --clear' in command
@@ -217,9 +217,9 @@ def test_harbor_install_can_use_python_venv_without_curl_or_wget() -> None:
 
 
 def test_harbor_install_reuses_a_shared_download_cache() -> None:
-    command = _install_command("/installed-agent/firstcoder-src")
+    command = _install_command("/installed-agent/lanscoder-src")
 
-    assert "CACHE_DIR=/opt/firstcoder-cache" in command
+    assert "CACHE_DIR=/opt/lanscoder-cache" in command
     assert '"$UV_BIN" pip install --python "$AGENT_ROOT/.venv/bin/python" --cache-dir "$CACHE_DIR"' in command
     # The cache stores downloaded wheels only; the venv is still rebuilt per trial.
     assert "--no-cache" not in command
@@ -227,7 +227,7 @@ def test_harbor_install_reuses_a_shared_download_cache() -> None:
 
 
 def test_harbor_install_retries_the_download_step_with_backoff() -> None:
-    command = _install_command("/installed-agent/firstcoder-src")
+    command = _install_command("/installed-agent/lanscoder-src")
 
     assert "install_deps() {" in command
     assert "until install_deps; do" in command
@@ -240,15 +240,15 @@ def test_harbor_agent_does_not_require_system_package_installation(tmp_path: Pat
     source = tmp_path / "source"
     (source / "lanscoder").mkdir(parents=True)
     (source / "pyproject.toml").write_text("[project]\nname = 'lanscoder'\n")
-    (source / "README.md").write_text("# FirstCoder\n")
+    (source / "README.md").write_text("# LansCoder\n")
 
-    agent = FirstCoderHarborAgent(logs_dir=tmp_path / "logs", source_dir=source)
+    agent = LansCoderHarborAgent(logs_dir=tmp_path / "logs", source_dir=source)
 
     assert "apt-get" not in agent.install.__doc__ or True
 
 
 def test_harbor_agent_bootstraps_python_311_before_installing(tmp_path: Path) -> None:
-    agent = FirstCoderHarborAgent(logs_dir=tmp_path)
+    agent = LansCoderHarborAgent(logs_dir=tmp_path)
 
     command = agent._python_setup_command()
 
@@ -274,14 +274,14 @@ def test_harbor_agent_bootstraps_python_311_before_installing(tmp_path: Path) ->
 
 
 def test_harbor_python_bootstrap_fails_clearly_without_supported_package_manager(tmp_path: Path) -> None:
-    command = FirstCoderHarborAgent(logs_dir=tmp_path)._python_setup_command()
+    command = LansCoderHarborAgent(logs_dir=tmp_path)._python_setup_command()
 
     assert 'PACKAGE_MANAGER="unsupported"' in command
     assert "cannot bootstrap Python 3.11 or newer" in command
 
 
 def test_harbor_python_bootstrap_retries_flaky_package_and_network_steps(tmp_path: Path) -> None:
-    command = FirstCoderHarborAgent(logs_dir=tmp_path)._python_setup_command()
+    command = LansCoderHarborAgent(logs_dir=tmp_path)._python_setup_command()
 
     # A retry helper with bounded backoff wraps every step that hits a mirror.
     assert "retry() {" in command

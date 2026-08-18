@@ -102,7 +102,7 @@ def test_web_search_uses_parallel_by_default(monkeypatch, tmp_path):
     monkeypatch.setattr(web_search_module.request, "urlopen", fake_urlopen)
     registry = create_builtin_registry(tmp_path, include_network_tools=True)
 
-    result = registry.execute("web_search", {"query": "FirstCoder agent", "num_results": 3})
+    result = registry.execute("web_search", {"query": "python", "num_results": 3})
 
     assert result.ok is True
     assert "search.parallel.ai" in captured["url"]
@@ -130,7 +130,7 @@ def test_web_search_falls_back_to_exa_with_api_key(monkeypatch, tmp_path):
     monkeypatch.setattr(web_search_module.request, "urlopen", fake_urlopen)
     registry = create_builtin_registry(tmp_path, include_network_tools=True)
 
-    result = registry.execute("web_search", {"query": "FirstCoder"})
+    result = registry.execute("web_search", {"query": "python"})
 
     assert result.ok is True
     assert result.content == "exa results"
@@ -151,7 +151,7 @@ def test_web_search_redacts_exa_api_key_from_result_data(monkeypatch, tmp_path):
     monkeypatch.setattr(web_search_module.request, "urlopen", fake_urlopen)
     registry = create_builtin_registry(tmp_path, include_network_tools=True)
 
-    result = registry.execute("web_search", {"query": "FirstCoder"})
+    result = registry.execute("web_search", {"query": "python"})
 
     assert "secret-token" in captured["url"]
     assert result.ok is True
@@ -203,7 +203,7 @@ def test_web_search_normalizes_common_model_boolean_livecrawl(monkeypatch, tmp_p
     monkeypatch.setattr(web_search_module.request, "urlopen", fake_urlopen)
     registry = create_builtin_registry(tmp_path, include_network_tools=True)
 
-    result = registry.execute("web_search", {"query": "FirstCoder", "livecrawl": "false"})
+    result = registry.execute("web_search", {"query": "python", "livecrawl": "false"})
 
     assert result.ok is True
     # Parallel 不支持 livecrawl，所以 body 里不该有 livecrawl
