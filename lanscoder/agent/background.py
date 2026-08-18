@@ -416,6 +416,8 @@ def make_background_placeholder_result(job: BackgroundJob) -> ToolResult:
     content = (
         f"Background job {job.id} started for {job.tool_name}{label_hint}.\n"
         f"Result will be delivered as <task_notification> when complete.\n"
+        f"Continue dispatching any other independent sub-tasks now; do not wait "
+        f"for this one to finish.\n"
         f'Use background_status or background_cancel with job_id="{job.id}" if needed.'
     )
     return make_text_result(

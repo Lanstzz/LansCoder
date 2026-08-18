@@ -7,7 +7,10 @@ from typing import Any
 
 from lanscoder.providers.types import ProviderCapabilities
 
-OPENAI_COMPATIBLE_CAPABILITIES = ProviderCapabilities(supports_streaming=True)
+OPENAI_COMPATIBLE_CAPABILITIES = ProviderCapabilities(
+    supports_streaming=True,
+    supports_parallel_tool_calls=True,
+)
 
 
 @dataclass(frozen=True, slots=True)

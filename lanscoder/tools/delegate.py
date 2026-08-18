@@ -73,7 +73,10 @@ def create_delegate_tool(
                 "Run a restricted child LansCoder subagent with a fresh context. Use for independent "
                 "research, review, validation, or isolated implementation work. Do not use for nested "
                 "delegation. researcher/reviewer/tester can run in background directly; coder can run "
-                "in background only when git worktree isolation is available."
+                "in background only when git worktree isolation is available. "
+                "When you have multiple independent sub-tasks, dispatch them all at once in a single "
+                "turn by emitting multiple delegate tool calls (each with run_in_background=true), "
+                "so they run in parallel instead of waiting for each one to finish."
             ),
             parameters=object_schema(
                 {
