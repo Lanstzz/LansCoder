@@ -1,17 +1,17 @@
-"""Yuren topbar easter-egg themes.
+"""Model topbar glow themes.
 
-Keep this optional chrome effect isolated from the main TUI so palette and match
-rules can evolve or be removed without touching general provider rendering.
+Optional chrome effect isolated from the main TUI so palettes and match rules
+can evolve or be removed without touching general provider rendering.
 
-Trigger rule: provider display name must be exactly "Yuren", then model id must
-match an entry in MODEL_GLOW_PALETTES.
+Trigger rule: the model id must match an entry in MODEL_GLOW_PALETTES,
+regardless of provider. When it matches, the provider/model labels render as
+a per-character animated glow in that model's palette.
 """
 
 from __future__ import annotations
 
 from rich.markup import escape
 
-PROVIDER_NAMES = frozenset({"Yuren", "yurenapi"})
 GLOW_INTERVAL_SECONDS = 0.18
 MODEL_GLOW_PALETTES: dict[str, tuple[str, ...]] = {
     # GPT-5.6 celestial trio
@@ -30,25 +30,26 @@ MODEL_GLOW_PALETTES: dict[str, tuple[str, ...]] = {
     "claude-opus-4-8": ("#ffd6e0", "#ff9aa8", "#ff6f61", "#d94848", "#ffc36b"),
     "claude-sonnet-5": ("#fff0d8", "#ffd29a", "#f0b36a", "#d7925a", "#e8c4a2"),
     "claude-sonnet-4-6": ("#ffe8ef", "#ffc2d1", "#f0a18c", "#d9896c", "#f2d0a8"),
+    # DeepSeek V4: pro deep blue, flash light blue
+    "deepseek-v4-pro": ("#0a1a4f", "#0e2b70", "#143aa0", "#1a4ad0", "#2f6bff"),
+    "deepseek-v4-flash": ("#eaf6ff", "#c0e0ff", "#94c9ff", "#63a8ff", "#7db9ff"),
 }
 
 
-def model_glow_palette(provider: str, model: str) -> tuple[str, ...] | None:
-    """Return the animated palette for a supported Yuren model, else None."""
+def model_glow_palette(model: str) -> tuple[str, ...] | None:
+    """Return the animated palette for a supported model id, else None."""
 
-    if provider not in PROVIDER_NAMES:
-        return None
     return MODEL_GLOW_PALETTES.get(model)
 
 
-def should_animate(provider: str, model: str) -> bool:
-    return model_glow_palette(provider, model) is not None
+def should_animate(model: str) -> bool:
+    return model_glow_palette(model) is not None
 
 
 def provider_model_markup(provider: str, model: str, *, glow_frame: int = 0) -> str | None:
-    """Return Yuren glow markup when the easter egg applies; otherwise None."""
+    """Return glow markup when the model easter egg applies; otherwise None."""
 
-    palette = model_glow_palette(provider, model)
+    palette = model_glow_palette(model)
     if palette is None:
         return None
     return f"{glow_markup(provider, glow_frame=glow_frame, palette=palette)}" f"[#6e6d72]/[/]" f"{glow_markup(model, glow_frame=glow_frame + len(provider) + 1, palette=palette)}"

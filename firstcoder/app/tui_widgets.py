@@ -123,7 +123,7 @@ def _observe_markdown_update(update_result) -> None:
 
 @dataclass(slots=True)
 class FirstCoderTuiConfig:
-    title: str = "FirstCoder"
+    title: str = "LansCoder"
     provider_name: str | None = None
     provider_model: str | None = None
     project_name: str | None = None

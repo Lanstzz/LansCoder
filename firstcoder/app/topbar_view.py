@@ -5,7 +5,7 @@ from __future__ import annotations
 from rich.markup import escape
 from rich.text import Text
 
-from firstcoder.app import yuren_topbar_themes
+from firstcoder.app import model_topbar_themes, theme
 
 PERMISSION_MODE_COLORS = {
     "standard": "#cfd1d6",
@@ -32,12 +32,12 @@ def _metadata_markup(values: list[tuple[str | None, str, int | None]], *, separa
 
 def _provider_name_markup(provider: str, *, glow_frame: int = 0) -> str:
     """Render the provider-only part for ordinary, non-easter-egg labels."""
-    return f"[#7bba55]{escape(provider)}[/]"
+    return f"[{theme.ACCENT}]{escape(provider)}[/]"
 
 
 def _provider_model_markup(provider: str, model: str, *, glow_frame: int = 0) -> str:
-    """Render provider/model labels, applying the optional Yuren easter egg."""
-    themed = yuren_topbar_themes.provider_model_markup(
+    """Render provider/model labels, applying the optional model-glow easter egg."""
+    themed = model_topbar_themes.provider_model_markup(
         provider,
         model,
         glow_frame=glow_frame,

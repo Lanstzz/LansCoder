@@ -8,7 +8,7 @@ import threading
 from rich.text import Text
 from textual.css.query import NoMatches
 
-from firstcoder.app import yuren_topbar_themes
+from firstcoder.app import model_topbar_themes, theme
 from firstcoder.app.activity_view import (
     activity_markup,
     post_tool_reasoning_text,
@@ -55,7 +55,7 @@ def _entry_renderable(entry: TuiTranscriptEntry, rendered: str) -> object:
         if line_index:
             text.append("\n")
         if line.startswith("> "):
-            text.append(">", style="#7bba55 bold")
+            text.append(">", style=f"{theme.ACCENT} bold")
             text.append(line[1:])
         else:
             text.append(line)
@@ -85,7 +85,7 @@ class FirstCoderViewMixin:
     def _topbar_text(self, *, session_id: str | None = None, width: int | None = None) -> str:
         if session_id is None and self.current_session is not None:
             session_id = self.current_session.session_id
-        brand = "[#7bba55]FirstCoder[/]"
+        brand = f"[{theme.ACCENT}]LansCoder[/]"
         # 顶栏 status 独立于下栏：thinking 时只显示 "thinking ⠋" 动画头（_topbar_status），
         # reasoning 全文只进下栏 #activity。非 thinking 状态 _topbar_status 镜像
         # _activity_text；兜底 _activity_text（测试/直接赋值路径）。
@@ -410,7 +410,7 @@ class FirstCoderViewMixin:
             self._start_welcome_particles()
 
     def _sync_provider_glow(self) -> None:
-        if yuren_topbar_themes.should_animate(self.config.provider_name, self.config.provider_model):
+        if model_topbar_themes.should_animate(self.config.provider_model):
             self._start_provider_glow()
         else:
             self._stop_provider_glow()
@@ -420,17 +420,14 @@ class FirstCoderViewMixin:
             "_provider_glow_timer",
             self.PROVIDER_GLOW_INTERVAL_SECONDS,
             self._advance_provider_glow,
-            name="yuren-provider-glow",
+            name="model-provider-glow",
         )
 
     def _stop_provider_glow(self) -> None:
         self._stop_interval_timer("_provider_glow_timer")
 
     def _advance_provider_glow(self) -> None:
-        palette = yuren_topbar_themes.model_glow_palette(
-            self.config.provider_name,
-            self.config.provider_model,
-        )
+        palette = model_topbar_themes.model_glow_palette(self.config.provider_model)
         if palette is None:
             self._stop_provider_glow()
             return
@@ -652,7 +649,7 @@ class FirstCoderViewMixin:
             topbar.update(self._topbar_text(width=self._topbar_width()))
 
     def _activity_renderable(self, text: str) -> Text:
-        return Text(text, style="#527c3b")
+        return Text(text, style=theme.ACCENT_DARK)
 
     def tool_activity_line_text(self, text: str, activity) -> str:
         # 与顶栏一致：activity 行也是单行 widget，先折叠 reasoning 内容里的换行。
@@ -690,7 +687,7 @@ class FirstCoderViewMixin:
                 self._schedule_stream_flush()
             return
         if hasattr(output, "write"):
-            prefix = "FirstCoder:\n" if self._stream_text_buffer == text else ""
+            prefix = "LansCoder:\n" if self._stream_text_buffer == text else ""
             output.write(f"{prefix}{text}")
 
     def _close_stream_segment_for_tool(self) -> None:
@@ -712,7 +709,7 @@ class FirstCoderViewMixin:
         if timer is not None:
             timer.stop()
         self._stream_flush_timer = None
-        final_markdown = f"FirstCoder:\n\n{self._stream_text_buffer}"
+        final_markdown = f"LansCoder:\n\n{self._stream_text_buffer}"
         pending_update = self._stream_markdown_update
         self._stream_markdown_update = None
         self._stream_rendered_text = self._stream_text_buffer
@@ -783,7 +780,7 @@ class FirstCoderViewMixin:
         if self._stream_markdown_update is not None:
             return False
         self._stream_rendered_text = self._stream_text_buffer
-        update_result = self._stream_text_widget.update(f"FirstCoder:\n\n{self._stream_rendered_text}")
+        update_result = self._stream_text_widget.update(f"LansCoder:\n\n{self._stream_rendered_text}")
         self._track_stream_markdown_update(update_result)
         _observe_markdown_update(update_result)
         output = self.query_one("#output")

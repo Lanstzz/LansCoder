@@ -22,7 +22,7 @@ _DEFAULT_LABELS = {
     TuiEntryKind.SYSTEM: "system",
     TuiEntryKind.COMMAND: "command",
     TuiEntryKind.USER: "you",
-    TuiEntryKind.ASSISTANT: "FirstCoder",
+    TuiEntryKind.ASSISTANT: "LansCoder",
     TuiEntryKind.REASONING: "thinking",
     TuiEntryKind.TOOL: "tool",
     TuiEntryKind.PERMISSION: "permission",
