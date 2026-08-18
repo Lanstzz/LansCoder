@@ -3,43 +3,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from lanscoder.app.commands import CommandResult
 
-HELP_COMMANDS = [
-    ("/new [title]", "Start a new session."),
-    ("/fork [title]", "Copy the current session into a new branch."),
-    ("/recall", "Rewind conversation to a previous turn."),
-    ("/sessions", "List saved sessions."),
-    ("/session <session_id>", "Show one session summary."),
-    ("/resume", "Pick a session to resume."),
-    ("/resume <session_id>", "Resume a session directly."),
-    ("/share [session_id] [--tool-results]", "Export a shareable transcript."),
-    ("/rename <title>", "Rename the current session."),
-    ("/model", "Pick a model to use."),
-    ("/model <model|provider/model>", "Switch the active model."),
-    ("/skills", "Pick a skill to reference."),
-    ("/skill <name>", "Show skill details."),
-    ("/context", "Inspect context state."),
-    ("/compact status", "Show compaction status."),
-    ("/compact", "Compact context now."),
-    ("/mode", "Show permission mode."),
-    ("/mode <standard|aggressive|bypass>", "Change permission mode."),
-    ("/mcp list", "List MCP server status."),
-    ("/mcp doctor <server>", "Inspect one MCP server."),
-    ("/mcp reconnect <server|all>", "Reconnect MCP servers in the background."),
-]
-
-
-HELP_TEXT = "\n".join(["Commands:", *[f"{command.ljust(48)} {description}" for command, description in HELP_COMMANDS]])
+if TYPE_CHECKING:
+    from lanscoder.app.router import CompositeCommandHandler
 
 
 @dataclass(slots=True)
 class HelpCommandHandler:
     """Render the current TUI slash command surface."""
 
+    command_handler: CompositeCommandHandler  # injected from factory
+
     def handle(self, text: str) -> CommandResult:
         command = " ".join(text.strip().split())
         if command != "/help":
             return CommandResult(handled=False)
-        return CommandResult(handled=True, output=HELP_TEXT)
+        all_commands = self.command_handler.all_commands()
+        lines = ["Commands:", *[f"{cmd.ljust(48)} {desc}" for cmd, desc in all_commands]]
+        return CommandResult(handled=True, output="\n".join(lines))
+
+    def commands(self) -> list[tuple[str, str]]:
+        return [("/help", "Show available commands.")]
