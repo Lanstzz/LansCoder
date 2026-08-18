@@ -87,7 +87,7 @@ class ComposerTextArea(TextArea):
                 event.prevent_default()
                 cmd = suggest.selected_command()
                 if cmd:
-                    self.load_text(cmd)
+                    self.load_text(cmd + " ")
                     self.cursor_location = self.document.end
                 suggest.remove_class("--visible")
                 return
