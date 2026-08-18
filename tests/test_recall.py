@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from lanscoder.context.events import SessionEvent
 from lanscoder.context.store import JsonlSessionStore
 
 
@@ -208,8 +207,6 @@ class TestSessionIndexRebuildSession:
 
 
 from lanscoder.app.recall_commands import RecallCommandHandler
-from lanscoder.app.commands import CommandResult
-from lanscoder.agent.session import AgentSession
 from lanscoder.session.bootstrap import SessionBootstrap
 
 
@@ -329,6 +326,52 @@ class TestRecallCommandHandler:
         assert result.handled is True
         assert "Nothing to recall" in result.output
         assert result.action is None
+
+    def test_handler_with_message_id_delegates_to_recall_to(self, tmp_path):
+        """handle("/recall <message_id>") should delegate to recall_to."""
+        store = JsonlSessionStore(tmp_path)
+        sid = "sess_recall_test"
+        events = [
+            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_user_message_event(sid, "msg_01", "turn 1", 1),
+            _make_assistant_message_event(sid, "msg_02", "response 1"),
+            _make_user_message_event(sid, "msg_03", "turn 2", 2),
+            _make_assistant_message_event(sid, "msg_04", "response 2"),
+        ]
+        _write_session_jsonl(store._session_path(sid), events)
+
+        bootstrap = SessionBootstrap(
+            store=store,
+            project_root=tmp_path,
+            data_root=tmp_path,
+        )
+        session = bootstrap.resume(sid)
+
+        swapped = None
+
+        def on_recall(new_session):
+            nonlocal swapped
+            swapped = new_session
+
+        handler = RecallCommandHandler(
+            session=session,
+            store=store,
+            bootstrap=bootstrap,
+            on_recall=on_recall,
+        )
+
+        result = handler.handle("/recall msg_03")
+
+        assert result.handled is True
+        assert "Recalled" in result.output
+        assert "msg_03" in result.output
+        assert swapped is not None
+        assert swapped.session_id == sid
+
+        view = swapped.rebuild_view()
+        user_messages = [m for m in view.messages if m.role == "user"]
+        assert len(user_messages) == 1
+        assert user_messages[0].id == "msg_01"
 
     def test_recall_to_truncates_and_swaps(self, tmp_path):
         store = JsonlSessionStore(tmp_path)
