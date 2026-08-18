@@ -43,6 +43,7 @@ class ProviderProfile:
     type: str
     base_url: str | None = None
     api_key_env: str | None = None
+    api_key: str | None = None
     parallel_tool_calls: bool | None = None
     streaming: bool | None = None
 
@@ -116,6 +117,7 @@ def _provider_profile(provider_id: str, raw: Any) -> ProviderProfile:
         type=provider_type or "",
         base_url=_optional_str(raw.get("base_url"), f"provider {provider_id}.base_url"),
         api_key_env=_optional_str(raw.get("api_key_env"), f"provider {provider_id}.api_key_env"),
+        api_key=_optional_str(raw.get("api_key"), f"provider {provider_id}.api_key"),
         parallel_tool_calls=_optional_bool(raw.get("parallel_tool_calls"), f"provider {provider_id}.parallel_tool_calls"),
         streaming=_optional_bool(raw.get("streaming"), f"provider {provider_id}.streaming"),
     )

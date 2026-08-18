@@ -33,14 +33,14 @@ def test_load_config_reads_project_lanscoder_toml(tmp_path, monkeypatch):
                 "[providers.custom]",
                 'type = "openai-compatible"',
                 'base_url = "https://example.com/v1"',
-                'api_key_env = "CUSTOM_API_KEY"',
+                'api_key = "test-key"',
                 '[models."custom/custom-model"]',
             ]
         ),
         encoding="utf-8",
     )
 
-    config = load_config(project_root=tmp_path, env={"CUSTOM_API_KEY": "test-key"})
+    config = load_config(project_root=tmp_path)
 
     assert config.model_catalog().require("custom/custom-model").provider.id == "custom"
     assert config.get_config_value("default_model") == "custom/custom-model"
@@ -60,11 +60,11 @@ def test_legacy_environment_provider_does_not_override_catalog(tmp_path, monkeyp
     assert config.model_catalog().default_ref == "custom/model"
 
 
-def test_render_default_config_uses_api_key_env_not_plain_secret():
+def test_render_default_config_uses_api_key_not_plain_secret():
     content = render_default_config()
 
-    assert "api_key_env" in content
-    assert "api_key =" not in content
+    assert "api_key " in content
+    assert "api_key_env" not in content
     assert "parallel_tool_calls = true" in content
 
 
@@ -162,14 +162,14 @@ def test_openai_compatible_presets_have_constructable_metadata():
 
 def test_catalog_preset_builds_openrouter_provider_without_extra_headers():
     config = AppConfig(
-        env={"OPENROUTER_API_KEY": "test-key"},
+        env={},
         project_config={
-            "providers": {"openrouter": {"type": "openrouter"}},
+            "providers": {"openrouter": {"type": "openrouter", "api_key": "test-key"}},
             "models": {"openrouter/custom": {}},
         },
     )
 
-    provider = create_provider_for_model(config, config.model_catalog().require("openrouter/custom"))
+    provider = create_provider_for_model(config.model_catalog().require("openrouter/custom"))
 
     assert isinstance(provider, OpenAICompatibleProvider)
     assert provider.base_url == "https://openrouter.ai/api/v1"
@@ -249,13 +249,13 @@ def test_model_catalog_rejects_legacy_single_provider_config() -> None:
 
 def test_create_provider_for_model_uses_profile_provider_and_model_options() -> None:
     config = AppConfig(
-        env={"YUREN_API_KEY": "test-key"},
+        env={},
         project_config={
             "providers": {
                 "yuren": {
                     "type": "openai-compatible",
                     "base_url": "https://example.test/v1",
-                    "api_key_env": "YUREN_API_KEY",
+                    "api_key": "test-key",
                     "parallel_tool_calls": True,
                     "streaming": False,
                 }
@@ -264,7 +264,7 @@ def test_create_provider_for_model_uses_profile_provider_and_model_options() -> 
         },
     )
 
-    provider = create_provider_for_model(config, config.model_catalog().require("yuren/gpt-test"))
+    provider = create_provider_for_model(config.model_catalog().require("yuren/gpt-test"))
 
     assert isinstance(provider, OpenAICompatibleProvider)
     assert provider.name == "yuren"
@@ -276,48 +276,47 @@ def test_create_provider_for_model_uses_profile_provider_and_model_options() -> 
 
 def test_create_provider_for_model_supports_anthropic_profile() -> None:
     config = AppConfig(
-        env={"ANTHROPIC_API_KEY": "test-key"},
+        env={},
         project_config={
-            "providers": {"claude": {"type": "anthropic", "api_key_env": "ANTHROPIC_API_KEY"}},
+            "providers": {"claude": {"type": "anthropic", "api_key": "test-key"}},
             "models": {"claude/claude-test": {}},
         },
     )
 
-    provider = create_provider_for_model(config, config.model_catalog().require("claude/claude-test"))
+    provider = create_provider_for_model(config.model_catalog().require("claude/claude-test"))
 
     assert isinstance(provider, AnthropicProvider)
     assert provider.name == "claude"
     assert provider.model == "claude-test"
 
 
-def test_create_provider_for_model_reports_profile_api_key_env() -> None:
+def test_create_provider_for_model_reports_missing_api_key() -> None:
     config = AppConfig(
         env={},
         project_config={
             "providers": {
                 "yuren": {
                     "type": "openai-compatible",
-                    "api_key_env": "YUREN_API_KEY",
                 }
             },
             "models": {"yuren/gpt-test": {}},
         },
     )
 
-    with pytest.raises(ProviderConfigError, match="YUREN_API_KEY"):
-        create_provider_for_model(config, config.model_catalog().require("yuren/gpt-test"))
+    with pytest.raises(ProviderConfigError, match="缺少 api_key"):
+        create_provider_for_model(config.model_catalog().require("yuren/gpt-test"))
 
 
 def test_create_provider_for_model_supports_preset_and_profile_model() -> None:
     config = AppConfig(
-        env={"OPENAI_API_KEY": "test-key"},
+        env={},
         project_config={
-            "providers": {"openai": {"type": "openai"}},
+            "providers": {"openai": {"type": "openai", "api_key": "test-key"}},
             "models": {"openai/custom-gpt": {}},
         },
     )
 
-    provider = create_provider_for_model(config, config.model_catalog().require("openai/custom-gpt"))
+    provider = create_provider_for_model(config.model_catalog().require("openai/custom-gpt"))
 
     assert isinstance(provider, OpenAICompatibleProvider)
     assert provider.model == "custom-gpt"
@@ -332,8 +331,8 @@ def test_create_provider_for_model_reports_missing_preset_api_key() -> None:
         },
     )
 
-    with pytest.raises(ProviderConfigError, match="OPENAI_API_KEY"):
-        create_provider_for_model(config, config.model_catalog().require("openai/custom-gpt"))
+    with pytest.raises(ProviderConfigError, match="缺少 api_key"):
+        create_provider_for_model(config.model_catalog().require("openai/custom-gpt"))
 
 
 def test_model_catalog_validates_request_options_and_reserved_extra_body() -> None:

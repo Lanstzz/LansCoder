@@ -13,8 +13,6 @@ from pathlib import Path
 from typing import Any
 import tomllib
 
-from dotenv import load_dotenv
-
 from lanscoder.config.models import ModelCatalog, build_model_catalog
 
 PROJECT_CONFIG_NAME = "lanscoder.toml"
@@ -116,13 +114,12 @@ def load_config(
     project_root: Path | str | None = None,
     env: dict[str, str] | None = None,
 ) -> AppConfig:
-    """从配置文件、`.env` 和系统环境变量加载应用配置。
+    """从配置文件和系统环境变量加载应用配置。
 
-    Provider 和模型选择只来自标准 Model Catalog；旧的单 provider 环境变量不再
-    参与选择。
+    Provider 和模型选择只来自标准 Model Catalog；API key 直接从配置文件
+    的 api_key 字段读取，不再从环境变量或 .env 文件获取。
     """
 
-    load_dotenv()
     env_snapshot = dict(os.environ if env is None else env)
     root = Path(project_root or os.getcwd()).resolve()
     global_path = default_global_config_path()
@@ -165,7 +162,7 @@ def render_default_config() -> str:
             "[providers.deepseek]",
             'type = "openai-compatible"',
             'base_url = "https://api.deepseek.com"',
-            'api_key_env = "DEEPSEEK_API_KEY"',
+            'api_key = ""',
             "parallel_tool_calls = true",
             "",
             '[models."deepseek/deepseek-v4-flash"]',

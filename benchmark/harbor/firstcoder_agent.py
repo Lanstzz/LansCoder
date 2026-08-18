@@ -336,7 +336,7 @@ config = (
     + "[providers." + quote(provider) + "]\n"
     + 'type = "openai-compatible"\n'
     + "base_url = " + quote(os.environ["LANSCODER_BASE_URL"]) + "\n"
-    + 'api_key_env = "LANSCODER_API_KEY"\n'
+    + 'api_key = ' + quote(os.environ.get("LANSCODER_API_KEY", "")) + '\n'
     + "parallel_tool_calls = true\n"
     + "[models." + quote(ref) + "]\n"
 )

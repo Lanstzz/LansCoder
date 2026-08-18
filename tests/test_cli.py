@@ -151,7 +151,7 @@ def test_main_config_init_creates_global_config(tmp_path: Path, monkeypatch, cap
     config_path = tmp_path / "xdg" / "lanscoder" / "config.toml"
     assert exit_code == 0
     assert config_path.exists()
-    assert "api_key_env" in config_path.read_text(encoding="utf-8")
+    assert "api_key " in config_path.read_text(encoding="utf-8")
     assert f"created: {config_path}" in capsys.readouterr().out
 
 
@@ -191,7 +191,6 @@ def test_main_config_init_refuses_to_overwrite_without_force(tmp_path: Path, mon
 
 def test_main_config_show_uses_project_config_without_leaking_key(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.delenv("LANSCODER_PROVIDER", raising=False)
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-key")
     (tmp_path / "lanscoder.toml").write_text(
         "\n".join(
             [
@@ -199,7 +198,7 @@ def test_main_config_show_uses_project_config_without_leaking_key(tmp_path: Path
                 "[providers.deepseek]",
                 'type = "openai-compatible"',
                 'base_url = "https://api.deepseek.com"',
-                'api_key_env = "DEEPSEEK_API_KEY"',
+                'api_key = "secret-key"',
                 "parallel_tool_calls = true",
                 '[models."deepseek/deepseek-v4-flash"]',
             ]
@@ -220,7 +219,6 @@ def test_main_config_show_uses_project_config_without_leaking_key(tmp_path: Path
 
 def test_main_config_show_lists_catalog_refs_without_secrets_or_state(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.delenv("LANSCODER_PROVIDER", raising=False)
-    monkeypatch.setenv("YURENAPI_API_KEY", "secret-key")
     (tmp_path / "lanscoder.toml").write_text(
         "\n".join(
             [
@@ -228,7 +226,7 @@ def test_main_config_show_lists_catalog_refs_without_secrets_or_state(tmp_path: 
                 "[providers.yuren]",
                 'type = "openai-compatible"',
                 'base_url = "https://yurenapi.cn/v1"',
-                'api_key_env = "YURENAPI_API_KEY"',
+                'api_key = "secret-key"',
                 '[models."yuren/gpt-5.6-terra"]',
                 'label = "Yuren Terra"',
                 '[models."yuren/gpt-5.6-terra".request]',
@@ -237,7 +235,7 @@ def test_main_config_show_lists_catalog_refs_without_secrets_or_state(tmp_path: 
                 'label = "OpenAI"',
                 "[providers.openai]",
                 'type = "openai-compatible"',
-                'api_key_env = "OPENAI_API_KEY"',
+                'api_key = "openai-key"',
             ]
         ),
         encoding="utf-8",
@@ -253,9 +251,8 @@ def test_main_config_show_lists_catalog_refs_without_secrets_or_state(tmp_path: 
     assert "default_model: yuren/gpt-5.6-terra" in output
     assert "  - yuren/gpt-5.6-terra (Yuren Terra)" in output
     assert "  - openai/gpt-5.5 (OpenAI)" in output
-    assert "YURENAPI_API_KEY" not in output
-    assert "OPENAI_API_KEY" not in output
     assert "secret-key" not in output
+    assert "openai-key" not in output
     assert "do-not-print" not in output
     assert "model_state.json" not in output
 

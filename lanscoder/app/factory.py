@@ -188,7 +188,7 @@ def create_lanscoder_app(
             state=model_state_store.load(),
         )
         try:
-            provider = create_provider_for_model(resolved_app_config, selected_profile)
+            provider = create_provider_for_model(selected_profile)
         except ProviderConfigError as error:
             raise ValueError(str(error)) from error
     # ------------------------------------------------------------------
@@ -405,7 +405,7 @@ class RuntimeModelSwitcher:
 
     def _apply_profile(self, profile: ModelProfile, *, persist: bool) -> ModelState:
         try:
-            provider = create_provider_for_model(self._app_config, profile)
+            provider = create_provider_for_model(profile)
         except ProviderConfigError as error:
             raise ValueError(str(error)) from error
         self._chat_runner.set_model(
