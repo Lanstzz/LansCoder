@@ -89,7 +89,11 @@ class RecallCommandHandler:
             )
         message_id = parts[1]
         output = self.recall_to(message_id)
-        return CommandResult(handled=True, output=output)
+        return CommandResult(
+            handled=True,
+            output=output,
+            action={"type": "replay_session"},
+        )
 
     def recall_to(self, message_id: str) -> str:
         """Truncate, rebuild, and swap session. Returns status message."""
