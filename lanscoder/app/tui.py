@@ -208,6 +208,16 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if commands is not None:
             suggest = self.query_one("#slash-suggest", SlashSuggest)
             suggest.set_commands(commands)
+        # Keep focus on the input — clicking elsewhere should not steal it.
+        self.query_one("#output").can_focus = False
+        self.set_focus(self.query_one("#input"))
+
+    def on_app_focus(self) -> None:
+        """When the terminal window regains focus, put it back on the input."""
+        try:
+            self.set_focus(self.query_one("#input"))
+        except Exception:
+            pass
 
     def set_slash_commands(self, commands: list[tuple[str, str]]) -> None:
         """Set the full command list for the slash-command autocomplete dropdown."""
