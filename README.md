@@ -2,7 +2,7 @@
   <img src="assets/firstcoder-logo.png" alt="FirstCoder logo" width="156">
 </p>
 
-<h1 align="center">FirstCoder</h1>
+<h1 align="center">LansCoder</h1>
 
 <p align="center">
   <strong>A local Python coding agent built to make agent internals visible.</strong>
@@ -23,23 +23,23 @@
 
 ---
 
-FirstCoder is a real, runnable local coding agent with a Textual TUI, tool calling, permissions, sessions, and context compaction. It is designed to be useful in daily work and easy to study in code.
+LansCoder is a real, runnable local coding agent with a Textual TUI, tool calling, permissions, sessions, and context compaction. It is designed to be useful in daily work and easy to study in code.
 
-If you want to understand how coding agents actually work, FirstCoder keeps the moving parts visible instead of hiding them behind a black box.
+If you want to understand how coding agents actually work, LansCoder keeps the moving parts visible instead of hiding them behind a black box.
 
 - Learn the agent loop, tool calling, permissions, sessions, and context handling.
 - Build on a small Python codebase with clear module boundaries.
 - Use a local coding agent while still being able to inspect how it works.
 
-![FirstCoder planning, requesting permission, and completing a local task](docs/images/firstcoder-demo.gif)
+![LansCoder planning, requesting permission, and completing a local task](docs/images/firstcoder-demo.gif)
 
-## Why FirstCoder
+## Why LansCoder
 
-Most coding-agent demos show the surface: a prompt goes in, code changes come out. FirstCoder focuses on the machinery in between.
+Most coding-agent demos show the surface: a prompt goes in, code changes come out. LansCoder focuses on the machinery in between.
 
-Compared with larger projects like OpenCode, FirstCoder is intentionally smaller in scope.
+Compared with larger projects like OpenCode, LansCoder is intentionally smaller in scope.
 
-| Dimension | FirstCoder | Larger projects like OpenCode |
+| Dimension | LansCoder | Larger projects like OpenCode |
 | --- | --- | --- |
 | Primary goal | Make agent internals readable and teachable | Deliver a broader production-style coding-agent platform |
 | Codebase shape | Roughly 25k lines of Python under `firstcoder/` (174 files) | Roughly 575k lines of TS/JS across a much larger multi-surface codebase |
@@ -48,11 +48,11 @@ Compared with larger projects like OpenCode, FirstCoder is intentionally smaller
 
 The goal is not to out-feature a bigger coding agent. The goal is to keep the system real enough to use, but small enough that you can still read it end to end and understand why each subsystem exists.
 
-That also makes FirstCoder a practical repo to study deeply, adapt for your own workflow, and turn into a resume-worthy or portfolio-friendly project after you have extended it.
+That also makes LansCoder a practical repo to study deeply, adapt for your own workflow, and turn into a resume-worthy or portfolio-friendly project after you have extended it.
 
-Compared with more tutorial-first or lightweight learning repos, FirstCoder also tries to stay closer to a small but testable engineering system.
+Compared with more tutorial-first or lightweight learning repos, LansCoder also tries to stay closer to a small but testable engineering system.
 
-| Dimension | FirstCoder | Many learning-oriented agent repos |
+| Dimension | LansCoder | Many learning-oriented agent repos |
 | --- | --- | --- |
 | Learning value | Readable subsystem boundaries and explicit docs | Often optimized for a single tutorial path or demo flow |
 | Practical surface | Real TUI, tools, permissions, sessions, provider adapters | Often focused on a narrower loop or a simpler proof of concept |
@@ -74,25 +74,25 @@ Detailed subsystem design lives in the docs, not in this README.
 Install with `pipx`:
 
 ```sh
-pipx install firstcoder
+pipx install lanscoder
 ```
 
 Start the TUI:
 
 ```sh
-firstcoder
+lanscoder
 ```
 
 Run one message without opening the TUI:
 
 ```sh
-firstcoder --message "Summarize this repository in one paragraph"
+lanscoder --message "Summarize this repository in one paragraph"
 ```
 
 Use line-oriented interactive mode:
 
 ```sh
-firstcoder --interactive
+lanscoder --interactive
 ```
 
 ## What You Get
@@ -108,9 +108,9 @@ firstcoder --interactive
 Create a starter config:
 
 ```sh
-firstcoder config init
-firstcoder config path
-firstcoder config show
+lanscoder config init
+lanscoder config path
+lanscoder config show
 ```
 
 Keep secrets in environment variables:
@@ -126,7 +126,7 @@ global:  ~/.config/firstcoder/config.toml
 project: ./firstcoder.toml
 ```
 
-Provider support is centered on the OpenAI Chat Completions-compatible path and a native Anthropic Messages API adapter. Both paths implement the same internal complete/streaming contracts (text deltas, tool-call accumulation, forced `tool_choice`, usage, and `PROMPT_TOO_LONG`-style error classification). The TUI's native multimodal input can stage pasted file paths and clipboard images; images and small text files then travel through the session/context pipeline to providers that support vision. Model and provider vision capability still matters. Anthropic-only extras such as prompt caching remain optional future work. FirstCoder does not use the OpenAI Responses API yet.
+Provider support is centered on the OpenAI Chat Completions-compatible path and a native Anthropic Messages API adapter. Both paths implement the same internal complete/streaming contracts (text deltas, tool-call accumulation, forced `tool_choice`, usage, and `PROMPT_TOO_LONG`-style error classification). The TUI's native multimodal input can stage pasted file paths and clipboard images; images and small text files then travel through the session/context pipeline to providers that support vision. Model and provider vision capability still matters. Anthropic-only extras such as prompt caching remain optional future work. LansCoder does not use the OpenAI Responses API yet.
 
 ### Multiple models and request options
 
@@ -151,7 +151,7 @@ reasoning_effort = "high"
 extra_body = { reasoning_summary = "auto" }
 ```
 
-Use `firstcoder --model provider/model` to choose the initial profile for a run. In the TUI, `/models` opens the configured model picker and `/model provider/model` switches immediately. `firstcoder config show` prints the configured model references and labels, but never prints API keys, environment-variable values, request bodies, or model-state contents.
+Use `lanscoder --model provider/model` to choose the initial profile for a run. In the TUI, `/models` opens the configured model picker and `/model provider/model` switches immediately. `lanscoder config show` prints the configured model references and labels, but never prints API keys, environment-variable values, request bodies, or model-state contents.
 
 `temperature`, `max_tokens`, and `extra_body` are sent with the main model request. `reasoning_effort` is represented as a request extension and passed through when the selected provider supports it; providers that do not recognize it may reject or ignore it. Internal classifiers and compact summarization keep their own bounded token budgets.
 
@@ -160,17 +160,17 @@ Use `firstcoder --model provider/model` to choose the initial profile for a run.
 
 ## TUI
 
-FirstCoder's TUI is designed to expose the agent loop instead of hiding it. You can see session state, streamed assistant output, tool calls, tool results, and permission prompts in one place.
+LansCoder's TUI is designed to expose the agent loop instead of hiding it. You can see session state, streamed assistant output, tool calls, tool results, and permission prompts in one place.
 
-Before `write`, `edit`, `apply_patch`, or `delete` changes local files, FirstCoder builds a trusted unified diff with red removals, green additions, per-file statistics, and bounded expansion controls. In standard mode it accompanies the normal permission confirmation; an existing grant or aggressive mode still requires a review-only Apply confirmation. Approve the reviewed operation, deny it, or reply with `reject: <feedback>` so the model can revise the proposed change. FirstCoder rechecks reviewed file snapshots immediately before dispatch and blocks stale operations, reducing accidental overwrites from concurrent changes; this is a guard, not a filesystem-level atomic transaction. In bypass mode the review is shown as a non-blocking event and the operation proceeds immediately; the Harbor adapter disables that event for its non-interactive task turn. Shell commands follow the permission policy for the active mode because arbitrary command effects cannot be precomputed safely.
+Before `write`, `edit`, `apply_patch`, or `delete` changes local files, LansCoder builds a trusted unified diff with red removals, green additions, per-file statistics, and bounded expansion controls. In standard mode it accompanies the normal permission confirmation; an existing grant or aggressive mode still requires a review-only Apply confirmation. Approve the reviewed operation, deny it, or reply with `reject: <feedback>` so the model can revise the proposed change. LansCoder rechecks reviewed file snapshots immediately before dispatch and blocks stale operations, reducing accidental overwrites from concurrent changes; this is a guard, not a filesystem-level atomic transaction. In bypass mode the review is shown as a non-blocking event and the operation proceeds immediately; the Harbor adapter disables that event for its non-interactive task turn. Shell commands follow the permission policy for the active mode because arbitrary command effects cannot be precomputed safely.
 
 Ready state:
 
-![FirstCoder ready state](docs/images/firstcoder-ready.png)
+![LansCoder ready state](docs/images/firstcoder-ready.png)
 
 Conversation flow:
 
-![FirstCoder conversation flow](docs/images/tui-empty.png)
+![LansCoder conversation flow](docs/images/tui-empty.png)
 
 ## Documentation
 
@@ -205,7 +205,7 @@ Run a focused test file:
 
 ## Philosophy
 
-FirstCoder was built to answer a question most coding agents do not address:
+LansCoder was built to answer a question most coding agents do not address:
 
 > What actually happens inside when an agent streams, calls tools, asks for
 > permission, compacts context, and resumes a session?

@@ -1,9 +1,9 @@
-"""Command-line entry point for single-turn FirstCoder runs."""
+"""Command-line entry point for single-turn LansCoder runs."""
 
 # ============================================================================
 # 阅读路径导航 (Reading Path Guide)
 # ============================================================================
-# 这是 FirstCoder 的最外层入口。核心流程：
+# 这是 LansCoder 的最外层入口。核心流程：
 #   main() → 解析参数 → 选择运行模式
 #     ├─ TUI/交互模式 → create_cli_app() → create_firstcoder_app()
 #     └─ 单次执行     → create_cli_app() → run_single_turn()
@@ -63,9 +63,9 @@ def read_message(message: str | None, *, stdin_text: str | None = None) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run a single FirstCoder user turn.")
+    parser = argparse.ArgumentParser(description="Run a single LansCoder user turn.")
     subparsers = parser.add_subparsers(dest="command")
-    config_parser = subparsers.add_parser("config", help="Inspect or initialize FirstCoder configuration.")
+    config_parser = subparsers.add_parser("config", help="Inspect or initialize LansCoder configuration.")
     config_subparsers = config_parser.add_subparsers(dest="config_command")
     config_subparsers.add_parser("path", help="Show global and project config paths.")
     config_subparsers.add_parser("show", help="Show effective provider configuration without secrets.")
@@ -85,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     remove_parser.add_argument("name")
 
     parser.add_argument("--project", default=".", help="Project root for tools and AGENTS.md.")
-    parser.add_argument("--data-root", default=None, help="Directory for FirstCoder session data.")
+    parser.add_argument("--data-root", default=None, help="Directory for LansCoder session data.")
     parser.add_argument("--session-id", default=None, help="Session id to create or reuse.")
     parser.add_argument(
         "--resume-session",
@@ -474,12 +474,12 @@ def run_repl(
         else:
             response = chat_runner.run_user_turn(line)
 
-        print(f"FirstCoder> {response.content}")
+        print(f"LansCoder> {response.content}")
         pending = getattr(chat_runner, "last_pending_input", None)
         while pending is not None and auto_approve and _pending_kind(pending) == "permission_confirmation":
             print("Auto-approve> allow_once")
             response = chat_runner.resume_with_user_input(_pending_id(pending), "allow_once")
-            print(f"FirstCoder> {response.content}")
+            print(f"LansCoder> {response.content}")
             pending = getattr(chat_runner, "last_pending_input", None)
 
         if pending is not None:
