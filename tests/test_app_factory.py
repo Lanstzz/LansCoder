@@ -246,12 +246,12 @@ def _catalog_config(*, default_model: str | None = "yuren/main") -> AppConfig:
             "yuren": {
                 "type": "openai-compatible",
                 "base_url": "https://example.test/v1",
-                "api_key_env": "YUREN_KEY",
+                "api_key": "test-key",
             },
             "mimo": {
                 "type": "openai-compatible",
                 "base_url": "https://mimo.example/v1",
-                "api_key_env": "MIMO_KEY",
+                "api_key": "mimo-key",
             },
         },
         "models": {
@@ -262,7 +262,7 @@ def _catalog_config(*, default_model: str | None = "yuren/main") -> AppConfig:
     if default_model is not None:
         project["default_model"] = default_model
     return AppConfig(
-        env={"YUREN_KEY": "test-key", "MIMO_KEY": "mimo-key"},
+        env={},
         project_config=project,
     )
 
@@ -347,14 +347,14 @@ def test_catalog_model_switch_rejects_unconfigured_short_name(tmp_path: Path) ->
 
 def test_catalog_picker_can_switch_mixed_case_provider_ref(tmp_path: Path) -> None:
     config = AppConfig(
-        env={"YUREN_KEY": "test-key"},
+        env={},
         project_config={
             "default_model": "Yuren/main",
             "providers": {
                 "Yuren": {
                     "type": "openai-compatible",
                     "base_url": "https://example.test/v1",
-                    "api_key_env": "YUREN_KEY",
+                    "api_key": "test-key",
                 }
             },
             "models": {
@@ -383,13 +383,13 @@ def test_catalog_picker_can_switch_mixed_case_provider_ref(tmp_path: Path) -> No
 
 def test_catalog_anthropic_alias_is_current_model_and_picker_selection(tmp_path: Path) -> None:
     config = AppConfig(
-        env={"ANTHROPIC_API_KEY": "test-key"},
+        env={},
         project_config={
             "default_model": "claude/sonnet",
             "providers": {
                 "claude": {
                     "type": "anthropic",
-                    "api_key_env": "ANTHROPIC_API_KEY",
+                    "api_key": "test-key",
                 }
             },
             "models": {

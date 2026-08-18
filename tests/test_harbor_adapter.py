@@ -36,7 +36,7 @@ def test_harbor_agent_builds_quoted_firstcoder_benchmark_command(tmp_path: Path)
     assert "--max-tool-rounds 77" in command
     assert '--model "${LANSCODER_PROVIDER_NAME}/${LANSCODER_MODEL}"' in command
     assert '"[providers." + quote(provider)' in command
-    assert 'api_key_env = "LANSCODER_API_KEY"' in command
+    assert 'api_key ' in command
     assert "LANSCODER_BASE_URL" in command
     assert "'Fix the task." in command
     assert "/logs/agent/lanscoder.txt" in command
@@ -45,7 +45,6 @@ def test_harbor_agent_builds_quoted_firstcoder_benchmark_command(tmp_path: Path)
     assert "/logs/agent/lanscoder-session.jsonl" in command
     assert "/tmp/firstcoder-harbor-sessions/sessions/task_id.jsonl" in command
     assert "warning: failed to export FirstCoder benchmark session" in command
-    assert "api_key = " not in command
 
 
 def test_harbor_catalog_bootstrap_writes_parseable_standard_config(tmp_path: Path) -> None:

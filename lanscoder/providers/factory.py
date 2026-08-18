@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
-from lanscoder.config import AppConfig
 from lanscoder.config.models import ModelProfile
 from lanscoder.providers.anthropic_provider import AnthropicProvider
 from lanscoder.providers.base import ChatProvider
@@ -19,7 +18,7 @@ class ProviderConfigError(ValueError):
     """provider 配置缺失或不合法时抛出的异常。"""
 
 
-def create_provider_for_model(config: AppConfig, profile: ModelProfile) -> ChatProvider:
+def create_provider_for_model(profile: ModelProfile) -> ChatProvider:
     """根据完整的模型 Profile 创建 provider。
 
     Profile 中的模型 ID、provider ID、endpoint 和能力覆盖属于当前模型选择。
@@ -27,15 +26,14 @@ def create_provider_for_model(config: AppConfig, profile: ModelProfile) -> ChatP
 
     provider_type = profile.provider.type
     if provider_type in {"openai-compatible", "custom"}:
-        return _create_catalog_openai_compatible(config, profile)
+        return _create_catalog_openai_compatible(profile)
     if provider_type in PROVIDER_PRESETS:
-        return _create_catalog_preset(config, profile)
+        return _create_catalog_preset(profile)
     raise ProviderConfigError(f"不支持的 provider 类型：{provider_type}")
 
 
-def _catalog_api_key(config: AppConfig, profile: ModelProfile, fallback_env: str | None) -> tuple[str | None, str]:
-    env_name = profile.provider.api_key_env or fallback_env or "LANSCODER_API_KEY"
-    return config.get_env(env_name), env_name
+def _catalog_api_key(profile: ModelProfile) -> str | None:
+    return profile.provider.api_key
 
 
 def _catalog_capabilities(base: ProviderCapabilities, profile: ModelProfile) -> ProviderCapabilities:
@@ -47,10 +45,10 @@ def _catalog_capabilities(base: ProviderCapabilities, profile: ModelProfile) -> 
     return replace(base, **overrides) if overrides else base
 
 
-def _create_catalog_openai_compatible(config: AppConfig, profile: ModelProfile) -> ChatProvider:
-    api_key, env_name = _catalog_api_key(config, profile, "LANSCODER_API_KEY")
+def _create_catalog_openai_compatible(profile: ModelProfile) -> ChatProvider:
+    api_key = _catalog_api_key(profile)
     if not api_key:
-        raise ProviderConfigError(f"缺少环境变量：{env_name}")
+        raise ProviderConfigError(f"provider {profile.provider.id} 缺少 api_key，请在配置文件中设置")
     capabilities = _catalog_capabilities(ProviderCapabilities(supports_streaming=True), profile)
     return OpenAICompatibleProvider(
         name=profile.provider.id,
@@ -61,17 +59,14 @@ def _create_catalog_openai_compatible(config: AppConfig, profile: ModelProfile) 
     )
 
 
-def _create_catalog_preset(config: AppConfig, profile: ModelProfile) -> ChatProvider:
+def _create_catalog_preset(profile: ModelProfile) -> ChatProvider:
     preset = PROVIDER_PRESETS[profile.provider.type]
-    api_key, env_name = _catalog_api_key(config, profile, preset.api_key_env)
+    api_key = _catalog_api_key(profile)
     if not api_key and preset.name == "ollama":
         api_key = "ollama"
     if not api_key:
-        raise ProviderConfigError(f"缺少环境变量：{env_name}")
-    base_url = profile.provider.base_url
-    if base_url is None and preset.base_url_env:
-        base_url = config.get_env(preset.base_url_env)
-    base_url = base_url or preset.default_base_url
+        raise ProviderConfigError(f"provider {profile.provider.id} 缺少 api_key，请在配置文件中设置")
+    base_url = profile.provider.base_url or preset.default_base_url
     capabilities = _catalog_capabilities(preset.capabilities, profile)
     return _create_provider_instance(
         kind=preset.kind,
