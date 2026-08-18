@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 class CommandHandlerLike(Protocol):
     def handle(self, text: str) -> CommandResult: ...
+    def commands(self) -> list[tuple[str, str]]: ...
 
 
 class ChatRunnerLike(Protocol):

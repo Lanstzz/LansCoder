@@ -28,6 +28,9 @@ class RecallCommandHandler:
     bootstrap: object  # SessionBootstrap, imported lazily to avoid circular imports
     on_recall: Callable[[object], None]  # callback to swap session in runner
 
+    def commands(self) -> list[tuple[str, str]]:
+        return [("/recall", "Rewind conversation to a previous turn.")]
+
     def handle(self, text: str) -> CommandResult:
         command = " ".join(text.strip().split())
         if command == "/recall":

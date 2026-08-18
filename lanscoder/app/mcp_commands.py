@@ -25,6 +25,13 @@ class McpCommandHandler:
 
     manager: McpStatusProvider
 
+    def commands(self) -> list[tuple[str, str]]:
+        return [
+            ("/mcp list", "List MCP server status."),
+            ("/mcp doctor <server>", "Inspect one MCP server."),
+            ("/mcp reconnect <server|all>", "Reconnect MCP servers in the background."),
+        ]
+
     def handle(self, text: str) -> CommandResult:
         parts = text.strip().split()
         if not parts or parts[0] != "/mcp":

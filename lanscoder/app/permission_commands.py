@@ -21,6 +21,12 @@ class PermissionCommandHandler:
 
     session: PermissionSessionLike
 
+    def commands(self) -> list[tuple[str, str]]:
+        return [
+            ("/mode", "Show permission mode."),
+            ("/mode <standard|aggressive|bypass>", "Change permission mode."),
+        ]
+
     def handle(self, text: str) -> CommandResult:
         command = " ".join(text.strip().split())
         if not command.startswith("/"):

@@ -19,6 +19,13 @@ class MemoryCommandHandler:
     memory_provider: Callable[[], MemoryManager | None]
     writer_provider: Callable[[], SessionEventWriter | None] | None = None
 
+    def commands(self) -> list[tuple[str, str]]:
+        return [
+            ("/memory", "List memories."),
+            ("/memory remember <name>: <body>", "Add a memory."),
+            ("/memory forget [user:]<name>", "Delete a memory."),
+        ]
+
     def handle(self, text: str) -> CommandResult:
         command = text.strip()
         if not command.startswith("/memory"):

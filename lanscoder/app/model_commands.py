@@ -28,6 +28,12 @@ class ModelCommandHandler:
 
     switcher: ModelSwitcherLike
 
+    def commands(self) -> list[tuple[str, str]]:
+        return [
+            ("/model", "Pick a model to use."),
+            ("/model <model|provider/model>", "Switch the active model."),
+        ]
+
     def handle(self, text: str) -> CommandResult:
         command = " ".join(text.strip().split())
         if not command.startswith("/"):
