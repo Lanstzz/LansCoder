@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from firstcoder.app.review_view import render_prewrite_review, review_command_from_text
-from firstcoder.providers.types import ToolCall
-from firstcoder.tools.review import build_prewrite_review
+from lanscoder.app.review_view import render_prewrite_review, review_command_from_text
+from lanscoder.providers.types import ToolCall
+from lanscoder.tools.review import build_prewrite_review
 
 
 def test_review_card_highlights_additions_and_removals(tmp_path) -> None:

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from firstcoder.tools import create_builtin_registry
-from firstcoder.tools.apply_patch import create_apply_patch_tool
-from firstcoder.tools.delete import create_delete_tool
-from firstcoder.tools.edit import create_edit_tool
-from firstcoder.tools.write import create_write_tool
+import sys
+
+import pytest
+
+from lanscoder.tools import create_builtin_registry
 
 
 def test_apply_patch_updates_file(tmp_path):
@@ -274,11 +274,6 @@ def test_delete_rejects_project_root(tmp_path):
     assert result.ok is False
     assert result.error == "不能删除项目根目录"
     assert tmp_path.exists()
-
-
-import sys
-
-import pytest
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows 非管理员账户创建符号链接受限，平台行为差异大")

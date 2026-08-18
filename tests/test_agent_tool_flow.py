@@ -2,24 +2,24 @@ from __future__ import annotations
 
 import pytest
 
-from firstcoder.agent.session import AgentSession
-from firstcoder.agent.tool_flow import (
+from lanscoder.agent.session import AgentSession
+from lanscoder.agent.tool_flow import (
     InvalidToolCallSequenceError,
     assistant_response_to_parts,
     tool_call_to_part,
     tool_result_to_part,
     validate_tool_call_sequence,
 )
-from firstcoder.context.context_builder import ContextBuilder
-from firstcoder.context.models import AgentMessage, MessagePart, SessionView
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.context.writer import SessionEventWriter, tool_call_to_part as writer_tool_call_to_part
-from firstcoder.providers.types import ChatResponse, ToolCall
-from firstcoder.tools.apply_patch import create_apply_patch_tool
-from firstcoder.tools.python_exec import create_python_exec_tool
-from firstcoder.tools.session_registry import create_session_tool_registry
-from firstcoder.tools.write import create_write_tool
-from firstcoder.tools.types import ToolResult
+from lanscoder.context.context_builder import ContextBuilder
+from lanscoder.context.models import AgentMessage, MessagePart, SessionView
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.context.writer import SessionEventWriter, tool_call_to_part as writer_tool_call_to_part
+from lanscoder.providers.types import ChatResponse, ToolCall
+from lanscoder.tools.apply_patch import create_apply_patch_tool
+from lanscoder.tools.python_exec import create_python_exec_tool
+from lanscoder.tools.session_registry import create_session_tool_registry
+from lanscoder.tools.write import create_write_tool
+from lanscoder.tools.types import ToolResult
 
 
 def test_agent_reexports_context_tool_call_conversion() -> None:
@@ -118,7 +118,7 @@ def test_late_tool_result_after_interruption_is_settled_once(tmp_path) -> None:
 
 
 def test_project_session_permissioned_write_pauses_without_writing(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_permissions",
@@ -142,7 +142,7 @@ def test_project_session_permissioned_write_pauses_without_writing(tmp_path) -> 
 
 
 def test_project_session_permissioned_apply_patch_pauses_without_writing(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_patch_permissions",
@@ -175,7 +175,7 @@ def test_project_session_permissioned_apply_patch_pauses_without_writing(tmp_pat
 
 
 def test_project_session_permissioned_python_exec_pauses_without_executing(tmp_path, monkeypatch) -> None:
-    from firstcoder.tools import python_exec as python_exec_module
+    from lanscoder.tools import python_exec as python_exec_module
 
     called = False
 
@@ -185,7 +185,7 @@ def test_project_session_permissioned_python_exec_pauses_without_executing(tmp_p
         return python_exec_module.subprocess.CompletedProcess(command, 0, "42\n", "")
 
     monkeypatch.setattr(python_exec_module.subprocess, "run", fake_run)
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_python_permissions",

@@ -1,4 +1,4 @@
-from firstcoder.context.versions import (
+from lanscoder.context.versions import (
     COMPACTION_STRATEGY_VERSION,
     SYSTEM_PROMPT_VERSION,
     TASK_BOUNDARY_TOOL_VERSION,

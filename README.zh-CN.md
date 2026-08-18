@@ -42,7 +42,7 @@ LansCoder 是一个能真实运行的本地 coding agent，带有 Textual TUI、
 | 维度 | LansCoder | OpenCode 这类更大的项目 |
 | --- | --- | --- |
 | 主要目标 | 把 agent 内部机制做得可读、可学、可讲清楚 | 提供更完整、更偏产品化的 coding-agent 平台 |
-| 代码形态 | 当前 `firstcoder/` 约 2.5 万行 Python（174 个文件） | TS/JS 代码规模约 57 万行，平台层和工程表面也更多 |
+| 代码形态 | 当前 `lanscoder/` 约 2.5 万行 Python（174 个文件） | TS/JS 代码规模约 57 万行，平台层和工程表面也更多 |
 | 工程取舍 | 主动放弃一部分额外平台能力，换取更强可读性 | 接受更高复杂度，以支持更宽的产品能力面 |
 | 更适合谁 | 学习、二次改造、面试讲解、作品集 / 简历项目、本地实验 | 更想直接使用一个大而完整的 coding-agent 环境的用户 |
 
@@ -116,7 +116,7 @@ lanscoder config show
 密钥建议放在环境变量里：
 
 ```sh
-export FIRSTCODER_API_KEY="your-api-key"
+export LANSCODER_API_KEY="your-api-key"
 ```
 
 Provider 主线同时覆盖 OpenAI Chat Completions 兼容路径与原生 Anthropic Messages API；二者在 complete/streaming、tools、forced `tool_choice`、usage 与错误归类上对齐同一内部契约。TUI 可以暂存粘贴进来的文件路径和剪贴板图片；图片及小型文本文件会经过 session/context 管道交给支持视觉的 provider。实际能否看图仍取决于模型与 provider 的视觉能力；OpenAI Responses API 目前尚未接入。
@@ -150,8 +150,8 @@ extra_body = { reasoning_summary = "auto" }
 默认配置路径：
 
 ```text
-全局:  ~/.config/firstcoder/config.toml
-项目:  ./firstcoder.toml
+全局:  ~/.config/lanscoder/config.toml
+项目:  ./lanscoder.toml
 ```
 
 > 给细心用户的小提示：某些 provider 与模型组合，会让 TUI 顶栏多一点个性。

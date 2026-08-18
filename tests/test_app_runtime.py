@@ -4,20 +4,20 @@ import time
 
 import pytest
 
-from firstcoder.app.runtime import AgentChatRunner, CurrentSessionState, _display_lines_from_messages
-from firstcoder.agent.loop import ToolExecutionEvent
-from firstcoder.agent.loop_limits import AgentLoopLimits
-from firstcoder.agent.session import AgentSession
-from firstcoder.agent.user_input import AgentTurnStatus
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.context.models import AgentMessage, MessagePart
-from firstcoder.permissions.types import PermissionMode
-from firstcoder.providers.base import ChatProvider
-from firstcoder.providers.types import ChatRequest, ChatResponse, ChatStreamEvent, ProviderDiagnostics, ToolCall
-from firstcoder.tools.ask_user import create_ask_user_tool
-from firstcoder.tools.python_exec import create_python_exec_tool
-from firstcoder.tools.write import create_write_tool
-from firstcoder.tools.types import make_text_result, Tool
+from lanscoder.app.runtime import AgentChatRunner, CurrentSessionState, _display_lines_from_messages
+from lanscoder.agent.loop import ToolExecutionEvent
+from lanscoder.agent.loop_limits import AgentLoopLimits
+from lanscoder.agent.session import AgentSession
+from lanscoder.agent.user_input import AgentTurnStatus
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.context.models import AgentMessage, MessagePart
+from lanscoder.permissions.types import PermissionMode
+from lanscoder.providers.base import ChatProvider
+from lanscoder.providers.types import ChatRequest, ChatResponse, ChatStreamEvent, ProviderDiagnostics, ToolCall
+from lanscoder.tools.ask_user import create_ask_user_tool
+from lanscoder.tools.python_exec import create_python_exec_tool
+from lanscoder.tools.write import create_write_tool
+from lanscoder.tools.types import make_text_result, Tool
 
 
 @dataclass
@@ -153,7 +153,7 @@ def test_agent_chat_runner_uses_current_session_and_can_follow_resume(tmp_path) 
 
 
 def test_agent_chat_runner_cancel_current_turn_interrupts_running_python_exec(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     python_tool = create_python_exec_tool(tmp_path)
     session = AgentSession.from_project(
         store=store,
@@ -390,7 +390,7 @@ def test_agent_chat_runner_exposes_pending_user_input(tmp_path) -> None:
 
 
 def test_agent_chat_runner_can_resume_permission_confirmation(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_permission_runner",
@@ -434,7 +434,7 @@ def test_agent_chat_runner_can_resume_permission_confirmation(tmp_path) -> None:
 
 
 def test_agent_chat_runner_reuses_pending_loop_budget_on_permission_resume(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_permission_budget_runner",
@@ -616,7 +616,7 @@ async def test_agent_chat_runner_streaming_resume_rebinds_live_event_handlers(tm
     screen freezes on "resuming with permission answer...".
     """
 
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_stream_permission_rebind",
@@ -677,7 +677,7 @@ async def test_agent_chat_runner_streaming_resume_rebinds_live_event_handlers(tm
 
 @pytest.mark.anyio
 async def test_agent_chat_runner_streaming_resume_permission_uses_streaming(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_stream_permission",
@@ -723,7 +723,7 @@ async def test_agent_chat_runner_streaming_resume_permission_uses_streaming(tmp_
 
 @pytest.mark.anyio
 async def test_agent_chat_runner_streaming_reuses_pending_loop_budget_on_resume(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_stream_permission_budget",
@@ -782,7 +782,7 @@ async def test_agent_chat_runner_streaming_error_clears_stale_display_lines(tmp_
 
 
 def ToolCallEchoDefinition():
-    from firstcoder.providers.types import ToolDefinition
+    from lanscoder.providers.types import ToolDefinition
 
     return ToolDefinition(
         name="echo_path",

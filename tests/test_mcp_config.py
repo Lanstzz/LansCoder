@@ -6,9 +6,9 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from firstcoder.config import AppConfig
-from firstcoder.mcp.config import load_mcp_configs, resolve_environment_placeholders
-from firstcoder.mcp.models import McpConfigError, McpLocalServerConfig, McpRemoteServerConfig
+from lanscoder.config import AppConfig
+from lanscoder.mcp.config import load_mcp_configs, resolve_environment_placeholders
+from lanscoder.mcp.models import McpConfigError, McpLocalServerConfig, McpRemoteServerConfig
 
 
 def test_load_mcp_configs_parses_local_server_with_defaults():

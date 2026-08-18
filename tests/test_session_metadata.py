@@ -1,7 +1,7 @@
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.context.metadata import merge_metadata_patch
-from firstcoder.context.writer import SessionEventWriter
-from firstcoder.session.catalog import SessionCatalog
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.context.metadata import merge_metadata_patch
+from lanscoder.context.writer import SessionEventWriter
+from lanscoder.session.catalog import SessionCatalog
 
 
 def test_session_metadata_updated_patch_is_merged_into_session_view(tmp_path) -> None:

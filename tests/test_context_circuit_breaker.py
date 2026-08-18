@@ -1,7 +1,7 @@
-from firstcoder.context.llm_compact import LlmCompactRequest, LlmCompactService, LlmCompactSummary
-from firstcoder.context.models import AgentMessage, MessagePart, SessionView
-from firstcoder.context.runtime_state import SessionRuntimeState
-from firstcoder.context.store import JsonlSessionStore
+from lanscoder.context.llm_compact import LlmCompactRequest, LlmCompactService, LlmCompactSummary
+from lanscoder.context.models import AgentMessage, MessagePart, SessionView
+from lanscoder.context.runtime_state import SessionRuntimeState
+from lanscoder.context.store import JsonlSessionStore
 
 
 class ShouldNotBeCalled:

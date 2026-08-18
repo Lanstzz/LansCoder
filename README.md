@@ -42,7 +42,7 @@ Compared with larger projects like OpenCode, LansCoder is intentionally smaller 
 | Dimension | LansCoder | Larger projects like OpenCode |
 | --- | --- | --- |
 | Primary goal | Make agent internals readable and teachable | Deliver a broader production-style coding-agent platform |
-| Codebase shape | Roughly 25k lines of Python under `firstcoder/` (174 files) | Roughly 575k lines of TS/JS across a much larger multi-surface codebase |
+| Codebase shape | Roughly 25k lines of Python under `lanscoder/` (174 files) | Roughly 575k lines of TS/JS across a much larger multi-surface codebase |
 | Engineering tradeoff | Drops some extra platform surface area to stay inspectable | Accepts more complexity to support a broader product surface |
 | Best fit | Learning, modification, interview prep, portfolio projects, and local experimentation | Users who want a larger, more full-surface coding-agent environment |
 
@@ -116,14 +116,14 @@ lanscoder config show
 Keep secrets in environment variables:
 
 ```sh
-export FIRSTCODER_API_KEY="your-api-key"
+export LANSCODER_API_KEY="your-api-key"
 ```
 
 Default config locations:
 
 ```text
-global:  ~/.config/firstcoder/config.toml
-project: ./firstcoder.toml
+global:  ~/.config/lanscoder/config.toml
+project: ./lanscoder.toml
 ```
 
 Provider support is centered on the OpenAI Chat Completions-compatible path and a native Anthropic Messages API adapter. Both paths implement the same internal complete/streaming contracts (text deltas, tool-call accumulation, forced `tool_choice`, usage, and `PROMPT_TOO_LONG`-style error classification). The TUI's native multimodal input can stage pasted file paths and clipboard images; images and small text files then travel through the session/context pipeline to providers that support vision. Model and provider vision capability still matters. Anthropic-only extras such as prompt caching remain optional future work. LansCoder does not use the OpenAI Responses API yet.

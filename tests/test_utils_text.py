@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 
-from firstcoder.utils.text import safe_read_text, truncate
+from lanscoder.utils.text import safe_read_text, truncate
 
 
 class TestTruncate:

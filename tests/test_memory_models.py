@@ -1,6 +1,6 @@
 import pytest
 
-from firstcoder.memory.models import (
+from lanscoder.memory.models import (
     MEMORY_TYPES,
     MemoryRecord,
     MemoryScope,

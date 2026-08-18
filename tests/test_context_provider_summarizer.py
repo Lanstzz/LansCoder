@@ -4,18 +4,18 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from firstcoder.context.llm_compact import (
+from lanscoder.context.llm_compact import (
     CODING_HANDOFF_HEADINGS,
     LlmCompactSummary,
     NoSummaryError,
     PromptTooLongError,
     normalize_coding_handoff,
 )
-from firstcoder.context.models import AgentMessage, MessagePart
-from firstcoder.context.provider_summarizer import ProviderLlmCompactSummarizer
-from firstcoder.providers.base import ChatProvider
-from firstcoder.providers.errors import ProviderError, ProviderErrorKind
-from firstcoder.providers.types import ChatRequest, ChatResponse
+from lanscoder.context.models import AgentMessage, MessagePart
+from lanscoder.context.provider_summarizer import ProviderLlmCompactSummarizer
+from lanscoder.providers.base import ChatProvider
+from lanscoder.providers.errors import ProviderError, ProviderErrorKind
+from lanscoder.providers.types import ChatRequest, ChatResponse
 
 EXPECTED_CODING_HANDOFF_HEADINGS = (
     "## 当前目标",

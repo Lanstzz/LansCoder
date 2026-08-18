@@ -1,13 +1,13 @@
 from pathlib import Path
 
-from firstcoder.skills.catalog import (
+from lanscoder.skills.catalog import (
     SKILL_CATALOG_MAX_CHARS,
     SKILL_DESCRIPTION_MAX_CHARS,
     SKILL_LOAD_INSTRUCTION,
     render_skill_catalog,
 )
-from firstcoder.skills.discovery import discover_all_skills, discover_project_skills
-from firstcoder.skills.models import SkillCatalog, SkillDefinition, SkillSource
+from lanscoder.skills.discovery import discover_all_skills, discover_project_skills
+from lanscoder.skills.models import SkillCatalog, SkillDefinition, SkillSource
 
 
 def test_discovers_project_markdown_skills_and_uses_index_as_context(tmp_path: Path) -> None:
@@ -141,13 +141,13 @@ def test_extra_global_skill_roots_and_disable_global_skills(tmp_path: Path, monk
     extra_root.mkdir()
     (extra_root / "brief.md").write_text("# Brief Writer\n\n写简报。", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("FIRSTCODER_SKILL_ROOTS", str(extra_root))
+    monkeypatch.setenv("LANSCODER_SKILL_ROOTS", str(extra_root))
 
     enabled = discover_all_skills(tmp_path)
 
     assert [(skill.name, skill.source) for skill in enabled.skills] == [("brief", SkillSource.GLOBAL_MARKDOWN)]
 
-    monkeypatch.setenv("FIRSTCODER_DISABLE_GLOBAL_SKILLS", "1")
+    monkeypatch.setenv("LANSCODER_DISABLE_GLOBAL_SKILLS", "1")
     disabled = discover_all_skills(tmp_path)
 
     assert disabled.skills == []

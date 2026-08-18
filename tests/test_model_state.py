@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from firstcoder.app.model_state import ModelSelectionState, ModelStateStore
+from lanscoder.app.model_state import ModelSelectionState, ModelStateStore
 
 
 def test_model_state_store_keeps_last_selected_and_deduplicated_recents(tmp_path: Path) -> None:

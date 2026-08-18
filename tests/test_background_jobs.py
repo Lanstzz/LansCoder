@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from firstcoder.agent.background import (
+from lanscoder.agent.background import (
     DEFAULT_BACKGROUND_TOOL_NAMES,
     BackgroundCapacityError,
     BackgroundJobManager,
@@ -25,24 +25,24 @@ from firstcoder.agent.background import (
     strip_background_controls,
     with_background_controls,
 )
-from firstcoder.agent.loop import AgentLoop
-from firstcoder.agent.session import AgentSession
-from firstcoder.context.context_builder import ContextBuilder
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.context.tool_sequence import validate_tool_call_sequence
-from firstcoder.providers.base import ChatProvider
-from firstcoder.providers.types import (
+from lanscoder.agent.loop import AgentLoop
+from lanscoder.agent.session import AgentSession
+from lanscoder.context.context_builder import ContextBuilder
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.context.tool_sequence import validate_tool_call_sequence
+from lanscoder.providers.base import ChatProvider
+from lanscoder.providers.types import (
     ChatRequest,
     ChatResponse,
     ProviderCapabilities,
     ToolCall,
     ToolDefinition,
 )
-from firstcoder.tools.background import (
+from lanscoder.tools.background import (
     create_background_cancel_tool,
     create_background_status_tool,
 )
-from firstcoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
+from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -861,7 +861,7 @@ def test_background_cancel_tool_handles_missing_and_existing() -> None:
 
 
 def test_render_task_notification_shape() -> None:
-    from firstcoder.agent.background import BackgroundNotification
+    from lanscoder.agent.background import BackgroundNotification
 
     text = render_task_notification(
         BackgroundNotification(
@@ -886,7 +886,7 @@ def test_render_task_notification_shape() -> None:
 
 
 def test_render_task_notification_escapes_xml_content() -> None:
-    from firstcoder.agent.background import BackgroundNotification
+    from lanscoder.agent.background import BackgroundNotification
 
     text = render_task_notification(
         BackgroundNotification(

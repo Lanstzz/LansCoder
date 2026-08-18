@@ -5,7 +5,7 @@ recursive-exclude data *
 recursive-exclude logs *
 recursive-exclude runs *
 recursive-exclude .codex_tmp *
-recursive-exclude .firstcoder *
+recursive-exclude .lanscoder *
 recursive-exclude .pytest_cache *
 recursive-exclude .tools *
 recursive-exclude * __pycache__

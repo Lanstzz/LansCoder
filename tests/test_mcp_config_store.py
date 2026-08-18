@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from firstcoder.mcp.config_store import McpConfigStore, McpConfigStoreError
+from lanscoder.mcp.config_store import McpConfigStore, McpConfigStoreError
 
 
 def test_add_local_preserves_existing_configuration_and_comments(tmp_path: Path) -> None:

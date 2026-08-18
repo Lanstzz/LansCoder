@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-FirstCoder is a Python local coding-agent project. Source code lives in `firstcoder/`, with clear domain modules: `agent/` for orchestration, `app/` for the Textual TUI, `context/` for session context and compaction, `providers/` for model adapters, `tools/` for tool execution, `permissions/` for policy and grants, and `session/` for persistence and resume flows. Tests live in `tests/` and generally mirror the source domains. Design notes and implementation plans are in `docs/`; benchmarks and learning sandboxes are under `benchmark/`.
+LansCoder is a Python local coding-agent project. Source code lives in `lanscoder/`, with clear domain modules: `agent/` for orchestration, `app/` for the Textual TUI, `context/` for session context and compaction, `providers/` for model adapters, `tools/` for tool execution, `permissions/` for policy and grants, and `session/` for persistence and resume flows. Tests live in `tests/` and generally mirror the source domains. Design notes and implementation plans are in `docs/`; benchmarks and learning sandboxes are under `benchmark/`.
 
 ## Build, Test, and Development Commands
 
@@ -28,12 +28,12 @@ Run a focused test file while iterating:
 Start the app locally:
 
 ```sh
-.venv/bin/python -m firstcoder
+.venv/bin/python -m lanscoder
 ```
 
 ## Coding Style & Naming Conventions
 
-Use standard Python style with 4-space indentation, explicit names, and small functions that stay close to their module’s responsibility. Prefer dataclasses for structured data already represented that way. Keep provider-specific fields inside provider adapters, and keep UI concerns inside `firstcoder/app`. Test files use `test_*.py`; test functions should describe behavior, for example `test_resume_without_id_requests_picker`.
+Use standard Python style with 4-space indentation, explicit names, and small functions that stay close to their module’s responsibility. Prefer dataclasses for structured data already represented that way. Keep provider-specific fields inside provider adapters, and keep UI concerns inside `lanscoder/app`. Test files use `test_*.py`; test functions should describe behavior, for example `test_resume_without_id_requests_picker`.
 
 ## Testing Guidelines
 
@@ -45,7 +45,7 @@ Commit history uses concise imperative messages such as `Add permission confirma
 
 ## Security & Configuration Tips
 
-Configure providers through environment variables such as `FIRSTCODER_PROVIDER`, `FIRSTCODER_API_KEY`, `FIRSTCODER_BASE_URL`, and `FIRSTCODER_MODEL`. Do not commit secrets, local session data, virtual environments, or machine-specific configuration.
+Provider and model selection is configured through TOML, not environment variables: a `default_model` plus `[providers]` and `[models]` sections in `~/.config/lanscoder/config.toml` (global) and/or `./lanscoder.toml` (project, overrides global). Only API keys come from the environment, resolved via each provider's `api_key_env` (e.g. `DEEPSEEK_API_KEY`) with a fallback to `LANSCODER_API_KEY`; `.env` files are loaded automatically. Do not commit secrets, local session data, virtual environments, or machine-specific configuration.
 
 ## Benchmark Evidence and Recovery
 

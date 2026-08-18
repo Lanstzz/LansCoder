@@ -1,5 +1,5 @@
-from firstcoder.context.content.compressors import compact_old_task_part
-from firstcoder.context.models import MessagePart
+from lanscoder.context.content.compressors import compact_old_task_part
+from lanscoder.context.models import MessagePart
 
 
 def test_old_task_compressor_marks_part_as_trimmed() -> None:

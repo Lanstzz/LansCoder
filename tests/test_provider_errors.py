@@ -1,4 +1,4 @@
-from firstcoder.providers.errors import (
+from lanscoder.providers.errors import (
     ProviderError,
     ProviderErrorKind,
     classify_provider_error,

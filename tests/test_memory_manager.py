@@ -1,9 +1,9 @@
 # tests/test_memory_manager.py
 from pathlib import Path
 
-from firstcoder.context.identity import content_fingerprint
-from firstcoder.memory.manager import MemoryManager, project_memory_root
-from firstcoder.memory.models import MemoryRecord, MemoryScope
+from lanscoder.context.identity import content_fingerprint
+from lanscoder.memory.manager import MemoryManager, project_memory_root
+from lanscoder.memory.models import MemoryRecord, MemoryScope
 
 
 def test_project_memory_root_hashes_project_path(tmp_path: Path) -> None:

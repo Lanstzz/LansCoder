@@ -5,15 +5,15 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from firstcoder.mcp.adapter import adapt_mcp_tool
-from firstcoder.mcp.manager import McpManager
-from firstcoder.mcp.models import McpLocalServerConfig, McpRemoteServerConfig, McpToolDescription
-from firstcoder.permissions.manager import PermissionManager
-from firstcoder.permissions.policy import DefaultPermissionPolicy
-from firstcoder.permissions.types import PermissionConfirmationChoice
-from firstcoder.permissions.types import PermissionDecisionKind
-from firstcoder.tools.permission_registry import PermissionAwareToolRegistry
-from firstcoder.tools.registry import ToolRegistry
+from lanscoder.mcp.adapter import adapt_mcp_tool
+from lanscoder.mcp.manager import McpManager
+from lanscoder.mcp.models import McpLocalServerConfig, McpRemoteServerConfig, McpToolDescription
+from lanscoder.permissions.manager import PermissionManager
+from lanscoder.permissions.policy import DefaultPermissionPolicy
+from lanscoder.permissions.types import PermissionConfirmationChoice
+from lanscoder.permissions.types import PermissionDecisionKind
+from lanscoder.tools.permission_registry import PermissionAwareToolRegistry
+from lanscoder.tools.registry import ToolRegistry
 
 
 def test_stdio_echo_tool_requires_confirmation_then_executes_after_explicit_allow(tmp_path) -> None:

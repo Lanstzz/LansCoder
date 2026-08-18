@@ -16,7 +16,6 @@ from benchmark.harbor.firstcoder_agent import (  # noqa: E402
     _install_command,
 )
 from benchmark.harbor.aider_feedback_trial import (  # noqa: E402
-    AiderFeedbackTrial,
     build_aider_feedback,
     create_aider_feedback_trial,
     should_request_feedback_after_missing_reward,
@@ -30,41 +29,45 @@ def test_harbor_agent_builds_quoted_firstcoder_benchmark_command(tmp_path: Path)
 
     command = agent._run_command("Fix the task.\nRun tests.", session_id="task/id")
 
-    assert "/opt/firstcoder-agent/.venv/bin/python -m firstcoder" in command
+    assert "/opt/firstcoder-agent/.venv/bin/python -m lanscoder" in command
     assert "--benchmark --project ." in command
     assert "--data-root /tmp/firstcoder-harbor-sessions" in command
     assert "--session-id task_id" in command
     assert "--max-tool-rounds 77" in command
-    assert '--model "${FIRSTCODER_PROVIDER_NAME}/${FIRSTCODER_MODEL}"' in command
+    assert '--model "${LANSCODER_PROVIDER_NAME}/${LANSCODER_MODEL}"' in command
     assert '"[providers." + quote(provider)' in command
-    assert 'api_key_env = \"FIRSTCODER_API_KEY\"' in command
-    assert "FIRSTCODER_BASE_URL" in command
+    assert 'api_key_env = "LANSCODER_API_KEY"' in command
+    assert "LANSCODER_BASE_URL" in command
     assert "'Fix the task." in command
-    assert "/logs/agent/firstcoder.txt" in command
+    assert "/logs/agent/lanscoder.txt" in command
     assert "set -o pipefail" in command
-    assert "FIRSTCODER_EXIT" in command
-    assert "/logs/agent/firstcoder-session.jsonl" in command
+    assert "LANSCODER_EXIT" in command
+    assert "/logs/agent/lanscoder-session.jsonl" in command
     assert "/tmp/firstcoder-harbor-sessions/sessions/task_id.jsonl" in command
     assert "warning: failed to export FirstCoder benchmark session" in command
-    assert 'api_key = ' not in command
+    assert "api_key = " not in command
 
 
 def test_harbor_catalog_bootstrap_writes_parseable_standard_config(tmp_path: Path) -> None:
-    command = _catalog_bootstrap_command().replace(
-        "/opt/firstcoder-agent/.venv/bin/python",
-        sys.executable,
-    ).replace("/tmp/firstcoder-harbor-config", str(tmp_path / "xdg"))
+    command = (
+        _catalog_bootstrap_command()
+        .replace(
+            "/opt/firstcoder-agent/.venv/bin/python",
+            sys.executable,
+        )
+        .replace("/tmp/firstcoder-harbor-config", str(tmp_path / "xdg"))
+    )
     env = {
         **os.environ,
-        "FIRSTCODER_PROVIDER_NAME": "Yuren",
-        "FIRSTCODER_MODEL": "gpt-test",
-        "FIRSTCODER_BASE_URL": "https://example.test/v1",
+        "LANSCODER_PROVIDER_NAME": "Yuren",
+        "LANSCODER_MODEL": "gpt-test",
+        "LANSCODER_BASE_URL": "https://example.test/v1",
     }
 
     subprocess.run(command, cwd=tmp_path, env=env, shell=True, executable="/bin/zsh", check=True)
 
-    config_path = tmp_path / "xdg" / "firstcoder" / "config.toml"
-    assert not (tmp_path / "firstcoder.toml").exists()
+    config_path = tmp_path / "xdg" / "lanscoder" / "config.toml"
+    assert not (tmp_path / "lanscoder.toml").exists()
     config = config_path.read_text(encoding="utf-8")
     assert 'default_model = "Yuren/gpt-test"' in config
     assert '[providers."Yuren"]' in config
@@ -158,9 +161,9 @@ def test_aider_feedback_plugin_restores_harbor_trial_factory() -> None:
 
 def test_harbor_agent_stages_only_runtime_source_tree(tmp_path: Path) -> None:
     source = tmp_path / "source"
-    package = source / "firstcoder"
+    package = source / "lanscoder"
     package.mkdir(parents=True)
-    (source / "pyproject.toml").write_text("[project]\nname = 'firstcoder'\n")
+    (source / "pyproject.toml").write_text("[project]\nname = 'lanscoder'\n")
     (source / "README.md").write_text("# FirstCoder\n")
     (package / "__init__.py").write_text("__version__ = 'test'\n")
     (package / "module.py").write_text("value = 1\n")
@@ -174,8 +177,8 @@ def test_harbor_agent_stages_only_runtime_source_tree(tmp_path: Path) -> None:
 
     assert (staged / "pyproject.toml").is_file()
     assert (staged / "README.md").is_file()
-    assert (staged / "firstcoder" / "module.py").is_file()
-    assert not (staged / "firstcoder" / "__pycache__").exists()
+    assert (staged / "lanscoder" / "module.py").is_file()
+    assert not (staged / "lanscoder" / "__pycache__").exists()
     assert not (staged / ".env").exists()
 
 
@@ -236,8 +239,8 @@ def test_harbor_install_retries_the_download_step_with_backoff() -> None:
 
 def test_harbor_agent_does_not_require_system_package_installation(tmp_path: Path) -> None:
     source = tmp_path / "source"
-    (source / "firstcoder").mkdir(parents=True)
-    (source / "pyproject.toml").write_text("[project]\nname = 'firstcoder'\n")
+    (source / "lanscoder").mkdir(parents=True)
+    (source / "pyproject.toml").write_text("[project]\nname = 'lanscoder'\n")
     (source / "README.md").write_text("# FirstCoder\n")
 
     agent = FirstCoderHarborAgent(logs_dir=tmp_path / "logs", source_dir=source)
@@ -250,15 +253,15 @@ def test_harbor_agent_bootstraps_python_311_before_installing(tmp_path: Path) ->
 
     command = agent._python_setup_command()
 
-    assert "case \"$PACKAGE_MANAGER\" in" in command
+    assert 'case "$PACKAGE_MANAGER" in' in command
     assert "apt-get update && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates" in command
     assert "apt-get update && apt-get install -y --no-install-recommends python3-venv" in command
     assert "apk add --no-cache python3 py3-pip" in command
     assert "apk add --no-cache py3-pip" in command
     assert "dnf install -y python3 python3-pip" in command
     assert "yum install -y python3 python3-pip" in command
-    assert 'curl -LsSf https://astral.sh/uv/install.sh' in command
-    assert 'wget -qO- https://astral.sh/uv/install.sh' in command
+    assert "curl -LsSf https://astral.sh/uv/install.sh" in command
+    assert "wget -qO- https://astral.sh/uv/install.sh" in command
     assert 'UV_UNMANAGED_INSTALL="' in command
     assert '"$AGENT_ROOT/bin/uv" python find 3.11' in command
     assert 'has_venv "$PYTHON_BIN"' in command

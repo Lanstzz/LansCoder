@@ -1,7 +1,7 @@
 import pytest
 
-from firstcoder.context.checkpoint import Checkpoint, CheckpointIndex
-from firstcoder.context.versions import CHECKPOINT_STRATEGY_VERSION
+from lanscoder.context.checkpoint import Checkpoint, CheckpointIndex
+from lanscoder.context.versions import CHECKPOINT_STRATEGY_VERSION
 
 
 def test_latest_checkpoint_is_selected() -> None:

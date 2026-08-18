@@ -1,10 +1,10 @@
-from firstcoder.mcp.search import (
+from lanscoder.mcp.search import (
     MCP_TOOL_SEARCH_LIMIT,
     McpSearchEntry,
     create_mcp_tool_search,
     search_mcp_tools,
 )
-from firstcoder.providers.types import ToolDefinition
+from lanscoder.providers.types import ToolDefinition
 
 
 def _entry(server: str, tool: str, description: str) -> McpSearchEntry:
@@ -36,17 +36,12 @@ def test_search_mcp_tools_prefers_exact_name_then_name_server_and_description() 
 
 
 def test_search_mcp_tools_is_stable_and_limited() -> None:
-    entries = tuple(
-        _entry("demo", f"lookup_{index:02d}", "Lookup records.")
-        for index in reversed(range(20))
-    )
+    entries = tuple(_entry("demo", f"lookup_{index:02d}", "Lookup records.") for index in reversed(range(20)))
 
     matches = search_mcp_tools(entries, "lookup")
 
     assert len(matches) == MCP_TOOL_SEARCH_LIMIT == 8
-    assert [item.definition.name for item in matches] == sorted(
-        item.definition.name for item in matches
-    )
+    assert [item.definition.name for item in matches] == sorted(item.definition.name for item in matches)
 
 
 def test_mcp_tool_search_returns_activated_names_without_executing_mcp() -> None:
@@ -56,9 +51,7 @@ def test_mcp_tool_search_returns_activated_names_without_executing_mcp() -> None
     result = tool.executor(query="read github issue")
 
     assert result.ok is True
-    assert result.data["mcp_tool_search"]["activated_tools"] == [
-        "mcp__github__get_issue"
-    ]
+    assert result.data["mcp_tool_search"]["activated_tools"] == ["mcp__github__get_issue"]
     assert "mcp__github__get_issue" in result.content
     assert tool.permission is None
     assert tool.definition.parameters["required"] == ["query"]
@@ -66,9 +59,7 @@ def test_mcp_tool_search_returns_activated_names_without_executing_mcp() -> None
 
 
 def test_mcp_tool_search_rejects_blank_query_and_handles_no_match() -> None:
-    tool = create_mcp_tool_search(
-        (_entry("github", "get_issue", "Read one issue."),)
-    )
+    tool = create_mcp_tool_search((_entry("github", "get_issue", "Read one issue."),))
 
     blank = tool.executor(query="   ")
     missing = tool.executor(query="calendar event")

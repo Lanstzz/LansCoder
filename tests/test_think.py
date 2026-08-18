@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from firstcoder.tools.think import create_think_tool
+from lanscoder.tools.think import create_think_tool
 
 
 def test_think_returns_input_as_result():

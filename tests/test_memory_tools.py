@@ -1,14 +1,14 @@
 from pathlib import Path
 
-from firstcoder.context.writer import SessionEventWriter
-from firstcoder.memory.manager import MemoryManager
-from firstcoder.memory.models import MemoryScope
-from firstcoder.tools.memory_tools import create_memory_tools
-from firstcoder.tools.registry import ToolRegistry
+from lanscoder.context.writer import SessionEventWriter
+from lanscoder.memory.manager import MemoryManager
+from lanscoder.memory.models import MemoryScope
+from lanscoder.tools.memory_tools import create_memory_tools
+from lanscoder.tools.registry import ToolRegistry
 
 
 def _registry(tmp_path: Path) -> tuple[ToolRegistry, MemoryManager, SessionEventWriter]:
-    from firstcoder.context.store import JsonlSessionStore
+    from lanscoder.context.store import JsonlSessionStore
 
     store = JsonlSessionStore(tmp_path / "data")
     writer = SessionEventWriter(store=store, session_id="sess_test")

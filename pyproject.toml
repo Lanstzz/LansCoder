@@ -25,13 +25,13 @@ dependencies = [
 dev = ["pytest"]
 
 [project.scripts]
-lanscoder = "firstcoder.cli:main"
+lanscoder = "lanscoder.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["firstcoder*"]
+include = ["lanscoder*"]
 
 [tool.setuptools.package-data]
-firstcoder = ["context/prompts/*.md", "app/*.tcss"]
+lanscoder = ["context/prompts/*.md", "app/*.tcss"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

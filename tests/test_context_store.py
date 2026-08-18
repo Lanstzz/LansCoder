@@ -2,14 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from firstcoder.context.archive import ToolResultArchive
-from firstcoder.context.compaction import CompactionPipeline, CompactionRequest
-from firstcoder.context.events import SessionEvent
-from firstcoder.context.models import AgentMessage, MessagePart, SessionView
-from firstcoder.context.store import JsonlSessionStore, SessionStoreCorruptError
-from firstcoder.context.token_budget import estimate_text_tokens
-from firstcoder.context.versions import CONTEXT_EVENT_SCHEMA_VERSION
-from firstcoder.context.writer import SessionEventWriter
+from lanscoder.context.archive import ToolResultArchive
+from lanscoder.context.compaction import CompactionPipeline, CompactionRequest
+from lanscoder.context.events import SessionEvent
+from lanscoder.context.models import AgentMessage, MessagePart, SessionView
+from lanscoder.context.store import JsonlSessionStore, SessionStoreCorruptError
+from lanscoder.context.token_budget import estimate_text_tokens
+from lanscoder.context.versions import CONTEXT_EVENT_SCHEMA_VERSION
+from lanscoder.context.writer import SessionEventWriter
 
 
 def _request(
@@ -25,17 +25,8 @@ def _request(
         active_task_hash=active_task_hash,
         target_tokens=target_tokens,
         current_turn=current_turn,
-        estimate_tokens=lambda candidate: sum(
-            estimate_text_tokens(part.content)
-            for message in candidate.messages
-            for part in message.parts
-        ),
-        consumed_tool_result_part_ids=frozenset(
-            part.id
-            for message in view.messages
-            for part in message.parts
-            if part.kind == "tool_result"
-        ),
+        estimate_tokens=lambda candidate: sum(estimate_text_tokens(part.content) for message in candidate.messages for part in message.parts),
+        consumed_tool_result_part_ids=frozenset(part.id for message in view.messages for part in message.parts if part.kind == "tool_result"),
         **kwargs,
     )
 
@@ -200,7 +191,7 @@ def test_l2_route_result_with_raw_backing_survives_rebuild_without_l4(tmp_path: 
                 id="part_tool",
                 message_id="msg_tool",
                 kind="tool_result",
-                content="\n".join(f"firstcoder/context.py:{line}: def function_{line}(): pass" for line in range(1, 160)),
+                content="\n".join(f"lanscoder/context.py:{line}: def function_{line}(): pass" for line in range(1, 160)),
                 metadata={"tool_name": "grep", "tool_call_id": "call_1", "ok": True, "data": {}},
             )
         ],
@@ -251,7 +242,7 @@ def test_store_and_compaction_pipeline_share_data_root(tmp_path: Path) -> None:
                 id="part_tool",
                 message_id="msg_tool",
                 kind="tool_result",
-                content="\n".join(f"firstcoder/context.py:{line}: def function_{line}(): pass" for line in range(1, 160)),
+                content="\n".join(f"lanscoder/context.py:{line}: def function_{line}(): pass" for line in range(1, 160)),
                 metadata={"tool_name": "grep", "tool_call_id": "call_1", "ok": True, "data": {}},
             )
         ],
@@ -279,7 +270,7 @@ def test_store_and_compaction_pipeline_share_data_root(tmp_path: Path) -> None:
     assert (tmp_path / "sessions" / "sess_test.jsonl").exists()
     assert (tmp_path / "archives" / "sess_test" / f"{archive_id}.txt").exists()
     assert ToolResultArchive(store.root).read(session_id, archive_id)[1] == message.parts[0].content
-    assert not (tmp_path / ".firstcoder").exists()
+    assert not (tmp_path / ".lanscoder").exists()
 
 
 def test_store_raises_clear_corruption_error_for_invalid_task_plan_snapshot(tmp_path: Path) -> None:

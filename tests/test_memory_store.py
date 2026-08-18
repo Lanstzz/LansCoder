@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from firstcoder.memory.models import MemoryRecord, MemoryScope
-from firstcoder.memory.store import MemoryStore
+from lanscoder.memory.models import MemoryRecord, MemoryScope
+from lanscoder.memory.store import MemoryStore
 
 
 def _store(tmp_path: Path) -> MemoryStore:

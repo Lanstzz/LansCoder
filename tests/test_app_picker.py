@@ -1,4 +1,4 @@
-from firstcoder.app.picker import TuiPickerItem, TuiPickerState, render_picker, visible_picker_window
+from lanscoder.app.picker import TuiPickerItem, TuiPickerState, render_picker, visible_picker_window
 
 
 def test_picker_moves_within_bounds() -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from firstcoder.tools.ask_user import create_ask_user_tool
+from lanscoder.tools.ask_user import create_ask_user_tool
 
 
 def test_ask_user_returns_question_and_input_flag():

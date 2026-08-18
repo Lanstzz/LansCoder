@@ -15,9 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from firstcoder.agent.worktree import (
+from lanscoder.agent.worktree import (
     WORKTREE_DIRNAME,
-    Worktree,
     WorktreeError,
     WorktreeManager,
     is_git_repo,

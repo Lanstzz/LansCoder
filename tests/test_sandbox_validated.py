@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 
-from firstcoder.utils.sandbox import PathSandbox
+from lanscoder.utils.sandbox import PathSandbox
 
 
 def test_resolve_validated_file_exists(tmp_path):

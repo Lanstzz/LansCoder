@@ -4,17 +4,17 @@ import json
 
 import pytest
 
-from firstcoder.agent.session import AgentSession
-from firstcoder.agent.tool_flow import tool_result_to_part
-from firstcoder.context.archive import ToolResultArchive
-from firstcoder.context.models import MessagePart
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.providers.types import ToolCall
-from firstcoder.session.fork import ForkSessionService
-from firstcoder.tools import create_builtin_registry
-from firstcoder.tools.retrieve_archive import create_retrieve_archive_tool
-from firstcoder.tools.session_registry import create_session_tool_registry
-from firstcoder.tools.think import create_think_tool
+from lanscoder.agent.session import AgentSession
+from lanscoder.agent.tool_flow import tool_result_to_part
+from lanscoder.context.archive import ToolResultArchive
+from lanscoder.context.models import MessagePart
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.providers.types import ToolCall
+from lanscoder.session.fork import ForkSessionService
+from lanscoder.tools import create_builtin_registry
+from lanscoder.tools.retrieve_archive import create_retrieve_archive_tool
+from lanscoder.tools.session_registry import create_session_tool_registry
+from lanscoder.tools.think import create_think_tool
 
 
 def _seed(tmp_path, content: str, *, session_id: str = "sess_test") -> str:

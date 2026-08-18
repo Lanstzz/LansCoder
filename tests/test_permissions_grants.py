@@ -1,5 +1,5 @@
-from firstcoder.permissions.grants import FilePermissionGrantStore, PermissionGrantStore
-from firstcoder.permissions.types import (
+from lanscoder.permissions.grants import FilePermissionGrantStore, PermissionGrantStore
+from lanscoder.permissions.types import (
     PermissionAction,
     PermissionDecisionKind,
     PermissionGrant,
@@ -94,7 +94,7 @@ def test_git_command_prefix_grant_does_not_match_compound_target() -> None:
 
 def test_path_grants_match_exact_path_and_tree(tmp_path) -> None:
     exact = tmp_path / "README.md"
-    tree = tmp_path / "firstcoder"
+    tree = tmp_path / "lanscoder"
     store = PermissionGrantStore(
         [
             _grant(
@@ -132,12 +132,12 @@ def test_path_tree_grant_does_not_match_sibling_prefix(tmp_path) -> None:
                 "grant_tree",
                 action=PermissionAction.WRITE_PATH,
                 scope_type=PermissionScopeType.PATH_TREE,
-                scope_value=str(tmp_path / "firstcoder"),
+                scope_value=str(tmp_path / "lanscoder"),
             )
         ]
     )
 
-    decision = store.matching_decision(PermissionRequest(id="req_1", action=PermissionAction.WRITE_PATH, target=str(tmp_path / "firstcoder2" / "x.py")))
+    decision = store.matching_decision(PermissionRequest(id="req_1", action=PermissionAction.WRITE_PATH, target=str(tmp_path / "lanscoder2" / "x.py")))
 
     assert decision is None
 
@@ -155,13 +155,13 @@ def test_host_and_env_key_grants_match_normalized_values() -> None:
                 "grant_env",
                 action=PermissionAction.READ_ENV,
                 scope_type=PermissionScopeType.ENV_KEY,
-                scope_value="firstcoder_mode",
+                scope_value="lanscoder_mode",
             ),
         ]
     )
 
     host_decision = store.matching_decision(PermissionRequest(id="req_host", action=PermissionAction.NETWORK_REQUEST, target="https://example.com/a"))
-    env_decision = store.matching_decision(PermissionRequest(id="req_env", action=PermissionAction.READ_ENV, target="FIRSTCODER_MODE"))
+    env_decision = store.matching_decision(PermissionRequest(id="req_env", action=PermissionAction.READ_ENV, target="LANSCODER_MODE"))
 
     assert host_decision is not None
     assert host_decision.grant is not None

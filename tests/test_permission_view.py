@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from firstcoder.app.permission_view import (
+from lanscoder.app.permission_view import (
     ask_user_choice_for_text,
     ask_user_prompt_text,
 )

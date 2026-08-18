@@ -1,17 +1,16 @@
 from pathlib import Path
 
-from firstcoder.context.checkpoint import Checkpoint
-from firstcoder.context.llm_compact import (
-    InvalidLlmCheckpointBoundaryError,
+from lanscoder.context.checkpoint import Checkpoint
+from lanscoder.context.llm_compact import (
     LlmCompactRequest,
     LlmCompactService,
     LlmCompactSummary,
     LlmSourceFingerprintMismatchError,
     NoSummaryError,
 )
-from firstcoder.context.models import AgentMessage, MessagePart, SessionView
-from firstcoder.context.runtime_state import SessionRuntimeState
-from firstcoder.context.store import JsonlSessionStore
+from lanscoder.context.models import AgentMessage, MessagePart, SessionView
+from lanscoder.context.runtime_state import SessionRuntimeState
+from lanscoder.context.store import JsonlSessionStore
 
 
 class FakeSummarizer:
@@ -53,28 +52,13 @@ def _request(
     **kwargs,
 ) -> LlmCompactRequest:
     if consumed_tool_result_part_ids is None:
-        consumed_tool_result_part_ids = frozenset(
-            part.id
-            for message in view.messages
-            for part in message.parts
-            if part.kind == "tool_result"
-        )
+        consumed_tool_result_part_ids = frozenset(part.id for message in view.messages for part in message.parts if part.kind == "tool_result")
     return LlmCompactRequest(
         view=view,
         runtime_state=runtime_state,
         consumed_tool_result_part_ids=consumed_tool_result_part_ids,
         **kwargs,
     )
-
-
-def _generate_and_commit(
-    service: LlmCompactService,
-    request: LlmCompactRequest,
-):
-    candidate = service.generate_candidate(request)
-    if candidate.event.status == "success":
-        service.commit_candidate(candidate, runtime_state=request.runtime_state)
-    return candidate
 
 
 def _tool_transaction_view() -> SessionView:

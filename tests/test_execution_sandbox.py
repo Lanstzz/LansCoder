@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from firstcoder.utils.execution_sandbox import ExecutionSandbox
-from firstcoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
+from lanscoder.utils.execution_sandbox import ExecutionSandbox
+from lanscoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
 
 
 def test_execution_sandbox_filters_sensitive_environment(monkeypatch, tmp_path):

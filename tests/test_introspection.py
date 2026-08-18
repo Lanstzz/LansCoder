@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from firstcoder.utils.introspection import function_to_parameters, tool_from_function
-from firstcoder.tools.types import ToolResult, make_text_result
+from lanscoder.utils.introspection import function_to_parameters, tool_from_function
+from lanscoder.tools.types import ToolResult, make_text_result
 
 
 def sample_tool(path: str, max_chars: int = 100, dry_run: bool = False, ratio: float = 0.5) -> ToolResult:

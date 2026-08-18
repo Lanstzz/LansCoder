@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from enum import Enum
 
-from firstcoder.context.identity import (
+from lanscoder.context.identity import (
     content_fingerprint,
     new_event_id,
     new_message_id,

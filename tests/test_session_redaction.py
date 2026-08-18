@@ -1,5 +1,5 @@
-from firstcoder.session.models import RedactionOptions
-from firstcoder.session.redaction import redact_text
+from lanscoder.session.models import RedactionOptions
+from lanscoder.session.redaction import redact_text
 
 
 def test_redact_text_redacts_secret_assignments() -> None:

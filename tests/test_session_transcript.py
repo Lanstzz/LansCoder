@@ -2,14 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from firstcoder.context.events import SessionEvent
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.context.writer import SessionEventWriter
-from firstcoder.providers.types import ChatResponse, ToolCall
-from firstcoder.session.models import ShareOptions
-from firstcoder.session.errors import SessionCorruptError, SessionEmptyError
-from firstcoder.session.transcript import TranscriptBuilder
-from firstcoder.tools.types import ToolResult
+from lanscoder.context.events import SessionEvent
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.context.writer import SessionEventWriter
+from lanscoder.providers.types import ChatResponse, ToolCall
+from lanscoder.session.models import ShareOptions
+from lanscoder.session.errors import SessionCorruptError, SessionEmptyError
+from lanscoder.session.transcript import TranscriptBuilder
+from lanscoder.tools.types import ToolResult
 
 
 def test_transcript_builder_keeps_conversation_order_and_redacts_text(tmp_path: Path) -> None:

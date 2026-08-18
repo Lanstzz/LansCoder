@@ -4,14 +4,14 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from firstcoder.agent.background import BackgroundJobManager
-from firstcoder.agent.loop import AgentLoop
-from firstcoder.agent.session import AgentSession
-from firstcoder.agent.subagent import SubagentRequest, SubagentRunner
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.providers.base import ChatProvider
-from firstcoder.providers.types import ChatRequest, ChatResponse, ProviderCapabilities, ToolCall, ToolDefinition
-from firstcoder.tools.types import Tool, ToolResult, make_text_result
+from lanscoder.agent.background import BackgroundJobManager
+from lanscoder.agent.loop import AgentLoop
+from lanscoder.agent.session import AgentSession
+from lanscoder.agent.subagent import SubagentRequest, SubagentRunner
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.providers.base import ChatProvider
+from lanscoder.providers.types import ChatRequest, ChatResponse, ProviderCapabilities, ToolCall, ToolDefinition
+from lanscoder.tools.types import Tool, ToolResult, make_text_result
 
 
 @dataclass
@@ -91,7 +91,7 @@ def test_subagent_runner_creates_metadata_tagged_child_session(tmp_path) -> None
             task="inspect context",
             parent_session_id="parent_1",
             parent_task_hash="task_abc",
-            path_hints=["firstcoder/agent"],
+            path_hints=["lanscoder/agent"],
         )
     )
 
@@ -110,7 +110,7 @@ def test_agent_loop_registers_delegate_and_foreground_returns_summary(tmp_path) 
     store = JsonlSessionStore(tmp_path)
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="child summary")])
     session = AgentSession.create(store=store, session_id="parent_delegate", tools=[_tool("view")])
-    loop = AgentLoop(session=session, provider=provider)
+    AgentLoop(session=session, provider=provider)
 
     assert "delegate" in session.tool_registry.names()
     result = session.tool_registry.execute("delegate", {"role": "researcher", "task": "read docs"})
@@ -224,10 +224,10 @@ def _write_call(call_id: str, path: str, content: str) -> ToolCall:
 def test_isolated_coder_writes_only_in_worktree(tmp_path) -> None:
     """Phase 4: a worktree-isolated coder mutates the worktree, never the parent tree."""
 
-    from firstcoder.permissions.manager import PermissionManager
-    from firstcoder.permissions.policy import DefaultPermissionPolicy
-    from firstcoder.permissions.types import PermissionMode
-    from firstcoder.agent.subagent import SubagentRequest, SubagentRunner
+    from lanscoder.permissions.manager import PermissionManager
+    from lanscoder.permissions.policy import DefaultPermissionPolicy
+    from lanscoder.permissions.types import PermissionMode
+    from lanscoder.agent.subagent import SubagentRequest, SubagentRunner
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -281,10 +281,10 @@ def test_isolated_coder_writes_only_in_worktree(tmp_path) -> None:
 def test_isolated_coder_can_delete_inside_worktree_without_parent_delete(tmp_path) -> None:
     """DELETE_PATH is allowed only in the isolated worktree, never in the parent tree."""
 
-    from firstcoder.permissions.manager import PermissionManager
-    from firstcoder.permissions.policy import DefaultPermissionPolicy
-    from firstcoder.permissions.types import PermissionMode
-    from firstcoder.agent.subagent import SubagentRequest, SubagentRunner
+    from lanscoder.permissions.manager import PermissionManager
+    from lanscoder.permissions.policy import DefaultPermissionPolicy
+    from lanscoder.permissions.types import PermissionMode
+    from lanscoder.agent.subagent import SubagentRequest, SubagentRunner
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -330,7 +330,7 @@ def test_isolated_coder_can_delete_inside_worktree_without_parent_delete(tmp_pat
 def test_isolated_coder_waiting_for_permission_is_failure_with_diff(tmp_path) -> None:
     """If a child still needs user input, background delegate must not report success."""
 
-    from firstcoder.agent.subagent import SubagentRequest, SubagentRunner
+    from lanscoder.agent.subagent import SubagentRequest, SubagentRunner
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -373,9 +373,9 @@ def test_isolated_coder_waiting_for_permission_is_failure_with_diff(tmp_path) ->
 def test_background_coder_uses_worktree_and_leaves_parent_untouched(tmp_path) -> None:
     """Phase 4: background delegate for coder runs isolated and reports a diff summary."""
 
-    from firstcoder.permissions.manager import PermissionManager
-    from firstcoder.permissions.policy import DefaultPermissionPolicy
-    from firstcoder.permissions.types import PermissionMode
+    from lanscoder.permissions.manager import PermissionManager
+    from lanscoder.permissions.policy import DefaultPermissionPolicy
+    from lanscoder.permissions.types import PermissionMode
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -440,7 +440,7 @@ def test_background_coder_uses_worktree_and_leaves_parent_untouched(tmp_path) ->
 def test_isolated_coder_without_git_repo_returns_error(tmp_path) -> None:
     """When isolation is requested but the project is not a git repo, fail cleanly."""
 
-    from firstcoder.agent.subagent import SubagentRequest, SubagentRunner
+    from lanscoder.agent.subagent import SubagentRequest, SubagentRunner
 
     provider = FakeProvider([])
     runner = SubagentRunner(

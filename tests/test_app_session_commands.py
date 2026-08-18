@@ -1,28 +1,26 @@
 from pathlib import Path
 
-from firstcoder.app.commands import ContextCommandHandler
-from firstcoder.app.router import CompositeCommandHandler
-from firstcoder.app.runtime import CurrentSessionState
-from firstcoder.app.session_commands import SessionCommandHandler
-from firstcoder.agent.session import AgentSession
-from firstcoder.context.events import SessionEvent
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.context.token_budget import build_context_budget
+from lanscoder.app.commands import ContextCommandHandler
+from lanscoder.app.router import CompositeCommandHandler
+from lanscoder.app.runtime import CurrentSessionState
+from lanscoder.app.session_commands import SessionCommandHandler
+from lanscoder.agent.session import AgentSession
+from lanscoder.context.events import SessionEvent
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.context.token_budget import build_context_budget
+from lanscoder.context.writer import SessionEventWriter
+from lanscoder.planning.models import Task, TaskPlan
+from lanscoder.session.catalog import SessionCatalog
+from lanscoder.session.fork import ForkSessionService
+from lanscoder.session.new import NewSessionService
+from lanscoder.session.resume import ResumeService
+from lanscoder.session.share import SessionShareService
+from lanscoder.tools.types import Tool, ToolResult
+from lanscoder.providers.types import ToolDefinition
 
 
 def _context_budget(view):
-    return build_context_budget(
-        messages=[], tools=[], context_window=32_768, max_output_tokens=4_096
-    )
-from firstcoder.context.writer import SessionEventWriter
-from firstcoder.planning.models import Task, TaskPlan
-from firstcoder.session.catalog import SessionCatalog
-from firstcoder.session.fork import ForkSessionService
-from firstcoder.session.new import NewSessionService
-from firstcoder.session.resume import ResumeService
-from firstcoder.session.share import SessionShareService
-from firstcoder.tools.types import Tool, ToolResult
-from firstcoder.providers.types import ToolDefinition
+    return build_context_budget(messages=[], tools=[], context_window=32_768, max_output_tokens=4_096)
 
 
 class CurrentSession:
@@ -37,7 +35,10 @@ def _tool(name: str) -> Tool:
 def test_new_fork_and_resume_use_current_tool_provider(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     current_tools = [_tool("mcp__demo__one")]
-    provider = lambda: list(current_tools)
+
+    def provider():
+        return list(current_tools)
+
     initial = AgentSession.create(store=store, session_id="sess_one", agents_md="", tools=provider())
     AgentSession.create(store=store, session_id="sess_two", agents_md="", tools=provider())
     state = CurrentSessionState(initial)

@@ -23,7 +23,7 @@ build/
 .release-dist/
 .release-dist-*/
 .codex_tmp/
-.firstcoder/
+.lanscoder/
 logs/
 runs/
 data/

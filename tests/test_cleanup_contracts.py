@@ -3,12 +3,12 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from firstcoder.agent.loop import AgentLoop
-from firstcoder.config import AppConfig
-from firstcoder.context import token_budget
-from firstcoder.mcp.manager import McpManager
-from firstcoder.mcp import transport as mcp_transport
-from firstcoder.providers import factory as provider_factory
+from lanscoder.agent.loop import AgentLoop
+from lanscoder.config import AppConfig
+from lanscoder.context import token_budget
+from lanscoder.mcp.manager import McpManager
+from lanscoder.mcp import transport as mcp_transport
+from lanscoder.providers import factory as provider_factory
 
 
 ROOT = Path(__file__).resolve().parents[1]

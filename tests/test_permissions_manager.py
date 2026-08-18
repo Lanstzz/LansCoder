@@ -1,7 +1,7 @@
-from firstcoder.permissions.grants import PermissionGrantStore
-from firstcoder.permissions.manager import PermissionManager
-from firstcoder.permissions.policy import DefaultPermissionPolicy
-from firstcoder.permissions.types import (
+from lanscoder.permissions.grants import PermissionGrantStore
+from lanscoder.permissions.manager import PermissionManager
+from lanscoder.permissions.policy import DefaultPermissionPolicy
+from lanscoder.permissions.types import (
     PermissionAction,
     PermissionConfirmationChoice,
     PermissionDecisionKind,
@@ -44,7 +44,7 @@ def test_manager_falls_back_to_mode_aware_policy(tmp_path) -> None:
         mode=PermissionMode.AGGRESSIVE,
     )
 
-    decision = manager.preflight(PermissionRequest(id="req_1", action=PermissionAction.WRITE_PATH, target="firstcoder/new.py"))
+    decision = manager.preflight(PermissionRequest(id="req_1", action=PermissionAction.WRITE_PATH, target="lanscoder/new.py"))
 
     assert decision.kind == PermissionDecisionKind.ALLOW
 
@@ -59,7 +59,7 @@ def test_manager_deny_grant_still_overrides_aggressive_policy(tmp_path) -> None:
                     effect="deny",
                     action=PermissionAction.WRITE_PATH,
                     scope_type=PermissionScopeType.PATH_TREE,
-                    scope_value=str(tmp_path / "firstcoder"),
+                    scope_value=str(tmp_path / "lanscoder"),
                     created_at="2026-06-04T00:00:00+08:00",
                 )
             ]
@@ -71,7 +71,7 @@ def test_manager_deny_grant_still_overrides_aggressive_policy(tmp_path) -> None:
         PermissionRequest(
             id="req_1",
             action=PermissionAction.WRITE_PATH,
-            target=str(tmp_path / "firstcoder" / "new.py"),
+            target=str(tmp_path / "lanscoder" / "new.py"),
         )
     )
 
@@ -121,7 +121,7 @@ def test_manager_builds_permission_confirmation_request(tmp_path) -> None:
     request = PermissionRequest(
         id="perm_write",
         action=PermissionAction.WRITE_PATH,
-        target=str(tmp_path / "firstcoder" / "new.py"),
+        target=str(tmp_path / "lanscoder" / "new.py"),
         reason="需要写入实现文件",
     )
 
