@@ -47,6 +47,8 @@ READ_ONLY_TOOL_NAMES = frozenset(
         "diagnostics",
         "think",
         "retrieve_archive",
+        "web_search",
+        "fetch",
     }
 )
 REVIEWER_TOOL_NAMES = frozenset({"view", "grep", "git_status", "git_diff", "git_log", "read_multi", "think", "retrieve_archive"})
