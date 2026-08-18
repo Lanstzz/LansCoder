@@ -48,6 +48,24 @@ class SessionIndex:
         records = [_record_from_dict(item) for item in data.get("sessions", {}).values() if isinstance(item, dict)]
         return sorted(records, key=session_sort_key, reverse=True)
 
+    def rebuild_session(self, session_id: str) -> None:
+        """Rebuild the index entry for a single session from its JSONL file."""
+        from lanscoder.session.catalog import record_from_path
+
+        path = self.root / "sessions" / f"{session_id}.jsonl"
+        if not path.exists():
+            with _INDEX_LOCK:
+                data = self._load_data()
+                data["sessions"].pop(session_id, None)
+                self._write_data(data)
+            return
+
+        record = record_from_path(path)
+        with _INDEX_LOCK:
+            data = self._load_data()
+            data["sessions"][session_id] = _record_to_dict(record)
+            self._write_data(data)
+
     def rebuild(self) -> None:
         from lanscoder.session.catalog import record_from_path
 
