@@ -309,7 +309,7 @@ def test_run_repl_sends_multiple_user_messages(capsys):
     run_repl(runner, ["hello", "continue"])
 
     assert runner.turns == ["hello", "continue"]
-    assert capsys.readouterr().out == "FirstCoder> first reply\nFirstCoder> second reply\n"
+    assert capsys.readouterr().out == "LansCoder> first reply\nLansCoder> second reply\n"
 
 
 def test_run_repl_routes_next_line_to_pending_permission(capsys):
@@ -325,7 +325,7 @@ def test_run_repl_routes_next_line_to_pending_permission(capsys):
 
     assert runner.turns == ["write file"]
     assert runner.resumes == [("perm_1", "allow_once")]
-    assert capsys.readouterr().out == ("FirstCoder> need permission\n" "Permission> Allow?\n" "Choose:\n" "  1. Deny\n" "  2. Allow once\n" "  3. Allow always for same scope\n" "FirstCoder> done\n")
+    assert capsys.readouterr().out == ("LansCoder> need permission\n" "Permission> Allow?\n" "Choose:\n" "  1. Deny\n" "  2. Allow once\n" "  3. Allow always for same scope\n" "LansCoder> done\n")
 
 
 def test_run_repl_accepts_human_permission_aliases(capsys):

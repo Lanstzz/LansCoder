@@ -2,7 +2,7 @@
   <img src="assets/firstcoder-logo.png" alt="FirstCoder logo" width="156">
 </p>
 
-<h1 align="center">FirstCoder</h1>
+<h1 align="center">LansCoder</h1>
 
 <p align="center">
   <strong>一个把 coding agent 内部机制摊开给你看的本地 Python 项目。</strong>
@@ -23,23 +23,23 @@
 
 ---
 
-FirstCoder 是一个能真实运行的本地 coding agent，带有 Textual TUI、工具调用、权限系统、会话持久化和上下文压缩。它既可以日常使用，也刻意保持了适合阅读和学习的 Python 代码结构。
+LansCoder 是一个能真实运行的本地 coding agent，带有 Textual TUI、工具调用、权限系统、会话持久化和上下文压缩。它既可以日常使用，也刻意保持了适合阅读和学习的 Python 代码结构。
 
-如果你想真正理解 coding agent 是怎么工作的，FirstCoder 会尽量把关键环节展示出来，而不是把它们藏在黑盒后面。
+如果你想真正理解 coding agent 是怎么工作的，LansCoder 会尽量把关键环节展示出来，而不是把它们藏在黑盒后面。
 
 - 学习 agent loop、工具调用、权限系统、session 和上下文处理。
 - 基于一个模块边界清晰的小型 Python 代码库继续改造。
 - 一边使用本地 coding agent，一边读懂它的内部机制。
 
-![FirstCoder 规划、请求权限并完成本地任务](docs/images/firstcoder-demo.gif)
+![LansCoder 规划、请求权限并完成本地任务](docs/images/firstcoder-demo.gif)
 
-## 为什么做 FirstCoder
+## 为什么做 LansCoder
 
-大多数 coding-agent 演示展示的是表面：一个 prompt 进去，代码改完出来。FirstCoder 关注的是中间的机械结构。
+大多数 coding-agent 演示展示的是表面：一个 prompt 进去，代码改完出来。LansCoder 关注的是中间的机械结构。
 
-和 OpenCode 这类更大的项目相比，FirstCoder 刻意把范围收得更小。
+和 OpenCode 这类更大的项目相比，LansCoder 刻意把范围收得更小。
 
-| 维度 | FirstCoder | OpenCode 这类更大的项目 |
+| 维度 | LansCoder | OpenCode 这类更大的项目 |
 | --- | --- | --- |
 | 主要目标 | 把 agent 内部机制做得可读、可学、可讲清楚 | 提供更完整、更偏产品化的 coding-agent 平台 |
 | 代码形态 | 当前 `firstcoder/` 约 2.5 万行 Python（174 个文件） | TS/JS 代码规模约 57 万行，平台层和工程表面也更多 |
@@ -48,11 +48,11 @@ FirstCoder 是一个能真实运行的本地 coding agent，带有 Textual TUI�
 
 目标不是在功能数量上和更大的 coding agent 正面对抗，而是把系统做得既足够真实可用，又足够小，让你还能从头到尾读懂它，并理解每个子系统为什么存在。
 
-这也意味着 FirstCoder 很适合被深入学习、按自己的工作流继续改造，并在做出有代表性的扩展后，作为一个能写进简历或作品集的项目来展示。
+这也意味着 LansCoder 很适合被深入学习、按自己的工作流继续改造，并在做出有代表性的扩展后，作为一个能写进简历或作品集的项目来展示。
 
-和更偏教程型、轻量参考型的学习项目相比，FirstCoder 也尽量保持它更像一个“小而完整、可验证”的工程系统。
+和更偏教程型、轻量参考型的学习项目相比，LansCoder 也尽量保持它更像一个“小而完整、可验证”的工程系统。
 
-| 维度 | FirstCoder | 常见学习型 agent 项目 |
+| 维度 | LansCoder | 常见学习型 agent 项目 |
 | --- | --- | --- |
 | 学习价值 | 子系统边界清楚，文档明确，适合按模块阅读 | 往往更偏单一路径教程或 demo 流程 |
 | 实用表面 | 有真实 TUI、tools、permissions、sessions、provider adapters | 往往更聚焦某个更窄的 loop 或概念验证 |
@@ -74,25 +74,25 @@ FirstCoder 是一个能真实运行的本地 coding agent，带有 Textual TUI�
 推荐用 `pipx` 安装：
 
 ```sh
-pipx install firstcoder
+pipx install lanscoder
 ```
 
 启动 TUI：
 
 ```sh
-firstcoder
+lanscoder
 ```
 
 不打开 TUI，直接跑一轮消息：
 
 ```sh
-firstcoder --message "用一段话介绍这个仓库"
+lanscoder --message "用一段话介绍这个仓库"
 ```
 
 使用行式交互模式：
 
 ```sh
-firstcoder --interactive
+lanscoder --interactive
 ```
 
 ## 你会得到什么
@@ -108,9 +108,9 @@ firstcoder --interactive
 创建初始配置：
 
 ```sh
-firstcoder config init
-firstcoder config path
-firstcoder config show
+lanscoder config init
+lanscoder config path
+lanscoder config show
 ```
 
 密钥建议放在环境变量里：
@@ -143,7 +143,7 @@ reasoning_effort = "high"
 extra_body = { reasoning_summary = "auto" }
 ```
 
-命令行可以用 `firstcoder --model provider/model` 指定本次运行的初始模型。TUI 中 `/models` 会打开已配置模型的选择器，`/model provider/model` 可以立即切换。`firstcoder config show` 只显示模型引用和标签，不会显示 API key、环境变量值、请求体或模型状态文件内容。
+命令行可以用 `lanscoder --model provider/model` 指定本次运行的初始模型。TUI 中 `/models` 会打开已配置模型的选择器，`/model provider/model` 可以立即切换。`lanscoder config show` 只显示模型引用和标签，不会显示 API key、环境变量值、请求体或模型状态文件内容。
 
 `temperature`、`max_tokens` 和 `extra_body` 会随主模型请求发送。`reasoning_effort` 作为请求扩展参数透传；是否支持取决于所选 provider，不支持的 provider 可能忽略或拒绝它。内部分类器和上下文压缩仍使用各自固定的 token 上限。
 
@@ -158,17 +158,17 @@ extra_body = { reasoning_summary = "auto" }
 
 ## TUI
 
-FirstCoder 的 TUI 不是为了把 agent loop 藏起来，而是为了把它展示出来。你可以在一个界面里看到 session 状态、流式输出、工具调用、工具结果和权限请求。
+LansCoder 的 TUI 不是为了把 agent loop 藏起来，而是为了把它展示出来。你可以在一个界面里看到 session 状态、流式输出、工具调用、工具结果和权限请求。
 
-`write`、`edit`、`apply_patch` 或 `delete` 真正修改本地文件前，FirstCoder 会先生成可信的 unified diff：删除行标红、新增行标绿，并显示每个文件的增删统计和有界展开控制。standard 模式中它会随普通权限确认一同展示；已有长期授权或 aggressive 模式也仍需一次仅用于 review 的 Apply 确认。你可以批准本次已预览操作、直接拒绝，或回复 `reject: <反馈>` 让模型按意见重做。FirstCoder 会在调度实际写入前再次核对文件快照并阻止过期预览，这能降低外部并发修改造成的误覆盖风险，但不等同于文件系统级原子事务。bypass 模式不等待确认，但默认仍会发出非阻塞的写前 diff 事件并立即执行；非交互 benchmark adapter 会显式关闭该事件。`shell` 无法安全预计算任意命令的文件影响，因此只遵循当前模式的权限策略。
+`write`、`edit`、`apply_patch` 或 `delete` 真正修改本地文件前，LansCoder 会先生成可信的 unified diff：删除行标红、新增行标绿，并显示每个文件的增删统计和有界展开控制。standard 模式中它会随普通权限确认一同展示；已有长期授权或 aggressive 模式也仍需一次仅用于 review 的 Apply 确认。你可以批准本次已预览操作、直接拒绝，或回复 `reject: <反馈>` 让模型按意见重做。LansCoder 会在调度实际写入前再次核对文件快照并阻止过期预览，这能降低外部并发修改造成的误覆盖风险，但不等同于文件系统级原子事务。bypass 模式不等待确认，但默认仍会发出非阻塞的写前 diff 事件并立即执行；非交互 benchmark adapter 会显式关闭该事件。`shell` 无法安全预计算任意命令的文件影响，因此只遵循当前模式的权限策略。
 
 空闲状态：
 
-![FirstCoder 空闲状态](docs/images/firstcoder-ready.png)
+![LansCoder 空闲状态](docs/images/firstcoder-ready.png)
 
 基础对话流：
 
-![FirstCoder 基础对话流](docs/images/tui-empty.png)
+![LansCoder 基础对话流](docs/images/tui-empty.png)
 
 ## 文档
 
@@ -203,7 +203,7 @@ python -m venv .venv
 
 ## 设计理念
 
-FirstCoder 想回答的是一个很多 coding agent 不会正面回答的问题：
+LansCoder 想回答的是一个很多 coding agent 不会正面回答的问题：
 
 > 当 agent 在流式输出、调用工具、申请权限、压缩上下文、恢复会话时，
 > 内部到底发生了什么？

@@ -1,1 +1,1 @@
-"""Tests for FirstCoder."""
+"""Tests for LansCoder."""

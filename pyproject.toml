@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "firstcoder"
-version = "0.1.12"
+name = "LansCoder"
+version = "1.0.0"
 description = "A local Python coding agent with a Textual TUI."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,7 +25,7 @@ dependencies = [
 dev = ["pytest"]
 
 [project.scripts]
-firstcoder = "firstcoder.cli:main"
+lanscoder = "firstcoder.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["firstcoder*"]
