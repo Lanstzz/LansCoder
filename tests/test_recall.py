@@ -200,3 +200,182 @@ class TestSessionIndexRebuildSession:
         assert len(records_after) == 1
         assert records_after[0].user_turn_count == 1
         assert records_after[0].message_count == 2  # msg_01 + msg_02
+
+
+# ---------------------------------------------------------------------------
+# Task 3: RecallCommandHandler tests
+# ---------------------------------------------------------------------------
+
+
+from lanscoder.app.recall_commands import RecallCommandHandler
+from lanscoder.app.commands import CommandResult
+from lanscoder.agent.session import AgentSession
+from lanscoder.session.bootstrap import SessionBootstrap
+
+
+class _FakeSessionLike:
+    """Minimal SessionLike for RecallCommandHandler tests."""
+
+    def __init__(self, session_id: str, messages: list):
+        self.session_id = session_id
+        self._messages = messages
+
+    def rebuild_view(self):
+        from lanscoder.context.models import SessionView
+        return SessionView(session_id=self.session_id, messages=list(self._messages))
+
+    @property
+    def runtime_state(self):
+        from lanscoder.context.runtime_state import SessionRuntimeState
+        return SessionRuntimeState()
+
+    @property
+    def current_turn(self):
+        return max(
+            (part.metadata.get("created_turn", 0) for msg in self._messages for part in msg.parts),
+            default=0,
+        )
+
+
+def _make_msg(msg_id: str, role: str, content: str, turn: int = 1):
+    from lanscoder.context.models import AgentMessage, MessagePart
+    return AgentMessage(
+        id=msg_id,
+        session_id="sess_test",
+        role=role,
+        parts=[MessagePart(
+            id=f"part_{msg_id}",
+            message_id=msg_id,
+            kind="text",
+            content=content,
+            metadata={"created_turn": turn, "turn_id": turn},
+        )],
+    )
+
+
+class TestRecallCommandHandler:
+    def test_handler_lists_user_messages(self):
+        messages = [
+            _make_msg("msg_01", "user", "hello world", 1),
+            _make_msg("msg_02", "assistant", "hi there", 1),
+            _make_msg("msg_03", "user", "do something please", 2),
+            _make_msg("msg_04", "assistant", "ok", 2),
+            _make_msg("msg_05", "user", "another thing", 3),
+            _make_msg("msg_06", "assistant", "done", 3),
+        ]
+        session = _FakeSessionLike("sess_test", messages)
+        handler = RecallCommandHandler(
+            session=session,
+            store=None,  # type: ignore[arg-type]
+            bootstrap=None,  # type: ignore[arg-type]
+            on_recall=None,  # type: ignore[arg-type]
+        )
+
+        result = handler.handle("/recall")
+
+        assert result.handled is True
+        assert result.action is not None
+        assert result.action["type"] == "recall_picker"
+        turns = result.action["turns"]
+        assert len(turns) == 3
+        assert turns[0]["turn_number"] == 1
+        assert turns[0]["message_id"] == "msg_01"
+        assert "hello world" in turns[0]["summary"]
+        assert turns[1]["turn_number"] == 2
+        assert turns[1]["message_id"] == "msg_03"
+        assert turns[2]["turn_number"] == 3
+        assert turns[2]["message_id"] == "msg_05"
+
+    def test_handler_ignores_non_recall_commands(self):
+        handler = RecallCommandHandler(
+            session=_FakeSessionLike("sess_test", []),
+            store=None,  # type: ignore[arg-type]
+            bootstrap=None,  # type: ignore[arg-type]
+            on_recall=None,  # type: ignore[arg-type]
+        )
+
+        result = handler.handle("/help")
+
+        assert result.handled is False
+
+    def test_handler_empty_session(self):
+        handler = RecallCommandHandler(
+            session=_FakeSessionLike("sess_test", []),
+            store=None,  # type: ignore[arg-type]
+            bootstrap=None,  # type: ignore[arg-type]
+            on_recall=None,  # type: ignore[arg-type]
+        )
+
+        result = handler.handle("/recall")
+
+        assert result.handled is True
+        assert "No messages" in result.output
+
+    def test_handler_single_turn(self):
+        messages = [
+            _make_msg("msg_01", "user", "hello", 1),
+            _make_msg("msg_02", "assistant", "hi", 1),
+        ]
+        session = _FakeSessionLike("sess_test", messages)
+        handler = RecallCommandHandler(
+            session=session,
+            store=None,  # type: ignore[arg-type]
+            bootstrap=None,  # type: ignore[arg-type]
+            on_recall=None,  # type: ignore[arg-type]
+        )
+
+        result = handler.handle("/recall")
+
+        assert result.handled is True
+        assert "Nothing to recall" in result.output
+        assert result.action is None
+
+    def test_recall_to_truncates_and_swaps(self, tmp_path):
+        store = JsonlSessionStore(tmp_path)
+        sid = "sess_recall_test"
+        events = [
+            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_user_message_event(sid, "msg_01", "turn 1", 1),
+            _make_assistant_message_event(sid, "msg_02", "response 1"),
+            _make_user_message_event(sid, "msg_03", "turn 2", 2),
+            _make_assistant_message_event(sid, "msg_04", "response 2"),
+            _make_user_message_event(sid, "msg_05", "turn 3", 3),
+            _make_assistant_message_event(sid, "msg_06", "response 3"),
+        ]
+        _write_session_jsonl(store._session_path(sid), events)
+
+        # Build a real AgentSession so we can resume it
+        bootstrap = SessionBootstrap(
+            store=store,
+            project_root=tmp_path,
+            data_root=tmp_path,
+        )
+        session = bootstrap.create(session_id=sid)
+        # Rebuild the session from the pre-written events
+        session = bootstrap.resume(sid)
+
+        swapped_session = None
+
+        def on_recall(new_session):
+            nonlocal swapped_session
+            swapped_session = new_session
+
+        handler = RecallCommandHandler(
+            session=session,
+            store=store,
+            bootstrap=bootstrap,
+            on_recall=on_recall,
+        )
+
+        output = handler.recall_to("msg_03")
+
+        assert "Recalled" in output
+        assert "turn 2" not in output  # removed
+        assert swapped_session is not None
+        assert swapped_session.session_id == sid
+
+        # Verify the truncated session has correct messages
+        view = swapped_session.rebuild_view()
+        user_messages = [m for m in view.messages if m.role == "user"]
+        assert len(user_messages) == 1
+        assert user_messages[0].id == "msg_01"
