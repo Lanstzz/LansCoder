@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Iterable
 
@@ -66,6 +68,69 @@ class JsonlSessionStore:
 
     def _session_path(self, session_id: str) -> Path:
         return self.sessions_dir / f"{session_id}.jsonl"
+
+    def truncate_before_message(self, session_id: str, message_id: str) -> int:
+        """Truncate the session JSONL to exclude the given message and everything after it.
+
+        The target message_id must belong to a user_message event. The file is
+        truncated to the line immediately before that event. The session_created
+        event (first line) is always preserved.
+
+        Returns:
+            The number of lines retained after truncation.
+
+        Raises:
+            FileNotFoundError: if the session file does not exist.
+            ValueError: if message_id is not found or does not belong to a user_message.
+        """
+        path = self._session_path(session_id)
+        if not path.exists():
+            raise FileNotFoundError(f"Session file not found: {path}")
+
+        events = self.list_events(session_id)
+        if not events:
+            raise ValueError(f"Session {session_id} has no events")
+
+        # Find the target line index (0-based)
+        target_line: int | None = None
+        for index, event in enumerate(events):
+            if event.type == "user_message" and str(event.payload.get("message_id") or "") == message_id:
+                target_line = index
+                break
+
+        if target_line is None:
+            # Check if the message_id exists at all (but with wrong type)
+            for index, event in enumerate(events):
+                if str(event.payload.get("message_id") or "") == message_id:
+                    raise ValueError(
+                        f"message_id {message_id} is not a user_message event (type={event.type}); "
+                        f"can only recall to user message boundaries"
+                    )
+            raise ValueError(f"message_id not found: {message_id} in session {session_id}")
+
+        # Read all lines from the file
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+        # Validate: first line must be session_created
+        if target_line == 0:
+            raise ValueError("Cannot truncate before the session_created event")
+
+        retained_lines = lines[:target_line]
+
+        # Atomic write via temp file
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=f".{session_id}.", suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.writelines(retained_lines)
+            os.replace(tmp_path, path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+        return len(retained_lines)
 
     def _apply_event(self, view: SessionView, event: SessionEvent, *, sequence: int) -> None:
         if event.type in {"session_created", "session_metadata_updated"}:
