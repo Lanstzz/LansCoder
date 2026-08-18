@@ -503,10 +503,10 @@ def test_factory_background_controls_remain_session_scoped(tmp_path: Path) -> No
         release.set()
         assert manager.wait(timeout=5) is True
         loop_b._append_background_notifications()
-        assert not any(message.role == "user" and "<task_notification>" in message.parts[0].content for message in session_b.rebuild_view().messages)
+        assert not any(message.role == "notification" and "<task_notification>" in message.parts[0].content for message in session_b.rebuild_view().messages)
 
         loop_a._append_background_notifications()
-        assert sum(1 for message in session_a.rebuild_view().messages if message.role == "user" and "<task_notification>" in message.parts[0].content) == 1
+        assert sum(1 for message in session_a.rebuild_view().messages if message.role == "notification" and "<task_notification>" in message.parts[0].content) == 1
     finally:
         release.set()
         manager.shutdown()

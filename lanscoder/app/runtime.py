@@ -167,6 +167,12 @@ class AgentChatRunner:
         return self.last_pending_input
 
     def add_guidance(self, content: str) -> None:
+        """把一条程序化「运行时指令」塞进待注入队列，下一轮作为 user 消息追加。
+
+        NOTE: 当前生产代码尚未调用此方法（只有测试在用），是一条预留扩展点——设计上供
+        hook / 自动化 / 外部触发在运行中给 agent 递一句指令（例如「你现在先做 X」）。
+        注入走 append_user_message，因此目前仍算作真实用户轮次（会进 /recall、占 turn）。
+        """
         text = content.strip()
         if not text:
             return

@@ -363,3 +363,44 @@ def test_store_rejects_non_contiguous_task_plan_event_chain(
 
     with pytest.raises(SessionStoreCorruptError, match="revision chain"):
         store.rebuild_session_view("sess_plan")
+
+
+def test_delete_session_removes_jsonl_index_and_archives(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session_id = "sess_delete"
+    store.append_event(
+        SessionEvent(
+            id="evt_1",
+            session_id=session_id,
+            type="session_created",
+            payload={"context_event_schema_version": CONTEXT_EVENT_SCHEMA_VERSION},
+            created_at="2026-06-01T00:00:00Z",
+        )
+    )
+    store.append_event(
+        SessionEvent(
+            id="evt_2",
+            session_id=session_id,
+            type="user_message",
+            payload={"message_id": "msg_1", "parts": [], "metadata": {}},
+            created_at="2026-06-01T00:00:01Z",
+        )
+    )
+
+    # A session may own content-addressed archives that must be cleaned up too.
+    archive_dir = store.root / "archives" / session_id
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    (archive_dir / "ar_x.txt").write_text("payload", encoding="utf-8")
+
+    from lanscoder.session.index import SessionIndex
+
+    index = SessionIndex(tmp_path)
+    assert any(record.session_id == session_id for record in index.list_records())
+
+    assert store.delete_session(session_id) is True
+    assert not store._session_path(session_id).exists()
+    assert not archive_dir.exists()
+    assert all(record.session_id != session_id for record in index.list_records())
+
+    # Deleting an unknown session is a no-op, not an error.
+    assert store.delete_session(session_id) is False

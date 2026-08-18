@@ -80,10 +80,32 @@ def test_subagent_runner_filters_tools_by_profile(tmp_path) -> None:
     assert "write" not in [tool.name for tool in runner.tools_for_role("researcher")]
 
 
-def test_subagent_runner_creates_metadata_tagged_child_session(tmp_path) -> None:
+def test_child_session_is_metadata_tagged(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    runner = SubagentRunner(store=store, provider=FakeProvider([]), tools=[_tool("view")])
+
+    child = runner.create_child_session(
+        SubagentRequest(
+            role="researcher",
+            task="inspect context",
+            parent_session_id="parent_1",
+            parent_task_hash="task_abc",
+            path_hints=["lanscoder/agent"],
+        ),
+        profile=runner.profile("researcher"),
+    )
+
+    view = store.rebuild_session_view(child.session_id)
+    assert view.metadata["parent_session_id"] == "parent_1"
+    assert view.metadata["parent_task_hash"] == "task_abc"
+    assert view.metadata["delegate_role"] == "researcher"
+    assert view.metadata["delegate_task"] == "inspect context"
+
+
+def test_subagent_run_restricts_child_tools_and_deletes_session(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="child done")])
-    runner = SubagentRunner(store=store, provider=provider, tools=[_tool("view")])
+    runner = SubagentRunner(store=store, provider=provider, tools=[_tool("view"), _tool("delegate")])
 
     result = runner.run(
         SubagentRequest(
@@ -97,13 +119,15 @@ def test_subagent_runner_creates_metadata_tagged_child_session(tmp_path) -> None
 
     assert result.ok is True
     assert result.summary == "child done"
-    view = store.rebuild_session_view(result.child_session_id)
-    assert view.metadata["parent_session_id"] == "parent_1"
-    assert view.metadata["parent_task_hash"] == "task_abc"
-    assert view.metadata["delegate_role"] == "researcher"
-    assert view.metadata["delegate_task"] == "inspect context"
+    # The child request excludes delegate and includes the profile's tools.
     assert "delegate" not in [definition.name for definition in provider.requests[0].tools]
     assert "view" in [definition.name for definition in provider.requests[0].tools]
+    # The finished child session is removed from disk and the resume index.
+    assert not store._session_path(result.child_session_id).exists()
+    from lanscoder.session.index import SessionIndex
+
+    records = SessionIndex(tmp_path).list_records()
+    assert all(record.session_id != result.child_session_id for record in records)
 
 
 def test_agent_loop_registers_delegate_and_foreground_returns_summary(tmp_path) -> None:
@@ -162,7 +186,7 @@ def test_background_delegate_returns_placeholder_and_notification(tmp_path) -> N
         gate.set()
         assert manager.wait(timeout=5) is True
         loop._append_background_notifications()
-        notifications = [message.parts[0].content for message in session.rebuild_view().messages if message.role == "user" and "<task_notification>" in message.parts[0].content]
+        notifications = [message.parts[0].content for message in session.rebuild_view().messages if message.role == "notification" and "<task_notification>" in message.parts[0].content]
         assert len(notifications) == 1
         assert "<task_id>research_a</task_id>" in notifications[0]
         assert "background child done" in notifications[0]
@@ -276,6 +300,8 @@ def test_isolated_coder_writes_only_in_worktree(tmp_path) -> None:
     assert (Path(result.worktree_path) / "newfile.py").exists()
     assert not (repo / "newfile.py").exists()
     assert (repo / "seed.txt").read_text(encoding="utf-8").strip() == "seed dirty"
+    # 子会话在完成后被删除，不会出现在 /resume 里。
+    assert not store._session_path(result.child_session_id).exists()
 
 
 def test_isolated_coder_can_delete_inside_worktree_without_parent_delete(tmp_path) -> None:
@@ -451,7 +477,7 @@ def test_background_coder_uses_worktree_and_leaves_parent_untouched(tmp_path) ->
 
         assert manager.wait(timeout=10) is True
         loop._append_background_notifications()
-        notifications = [message.parts[0].content for message in session.rebuild_view().messages if message.role == "user" and "<task_notification>" in message.parts[0].content]
+        notifications = [message.parts[0].content for message in session.rebuild_view().messages if message.role == "notification" and "<task_notification>" in message.parts[0].content]
         assert len(notifications) == 1
         assert "bg_new.py" in notifications[0]
         assert "<task_id>impl</task_id>" in notifications[0]

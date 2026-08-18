@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Iterable
@@ -19,7 +20,7 @@ EVENT_ROLE_MAP = {
     "user_message": "user",
     "assistant_message": "assistant",
     "tool_result": "tool",
-    "background_notification": "user",
+    "background_notification": "notification",
 }
 
 
@@ -131,6 +132,27 @@ class JsonlSessionStore:
             raise
 
         return len(retained_lines)
+
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session's persisted artifacts (JSONL, index entry, archives).
+
+        Idempotent and best-effort: deleting an unknown session returns ``False``
+        without raising. Child (subagent) sessions call this after finishing so
+        their ephemeral transcripts never surface in ``/resume``.
+        """
+        path = self._session_path(session_id)
+        if not path.exists():
+            return False
+        path.unlink()
+
+        archive_dir = self.root / "archives" / session_id
+        if archive_dir.exists():
+            shutil.rmtree(archive_dir, ignore_errors=True)
+
+        from lanscoder.session.index import SessionIndex
+
+        SessionIndex(self.root).rebuild_session(session_id)
+        return True
 
     def _apply_event(self, view: SessionView, event: SessionEvent, *, sequence: int) -> None:
         if event.type in {"session_created", "session_metadata_updated"}:

@@ -894,6 +894,10 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                             label=f"tool {name} running",
                             status="running",
                         )
+            elif message.role == "notification":
+                content = "\n".join(part.content for part in message.parts if part.kind == "text" and part.content)
+                if content:
+                    self._write_line(content, kind=TuiEntryKind.SYSTEM)
             else:
                 for part in message.parts:
                     if part.kind != "tool_result":
