@@ -1265,6 +1265,7 @@ class FakeSubagentRunner(FakeChatRunner):
 
     def __init__(self, pending: list[BackgroundJob] | None = None) -> None:
         super().__init__()
+        self.nudges: list[bool] = []
         self.current_session = FakeCurrentSession()
         self.background_manager = FakeBackgroundManager(pending)
 
@@ -1279,6 +1280,12 @@ class FakeSubagentRunner(FakeChatRunner):
         # A real turn drains pending completions at its first provider request.
         self.background_manager.drain()
         return ChatResponse(provider="fake", model="fake", content=f"reply:{content}")
+
+    async def anudge_turn(self) -> ChatResponse:
+        self.nudges.append(True)
+        # A real nudge drains pending completions at its first provider request.
+        self.background_manager.drain()
+        return ChatResponse(provider="fake", model="fake", content="reply:nudge")
 
 
 class UnhandledCommandHandler:
@@ -3264,7 +3271,8 @@ async def test_subagent_completed_idle_auto_turns_without_session_write() -> Non
         await pilot.pause()
 
     assert runner.current_session.session.writes == []
-    assert runner.inputs == ["子agent任务已完成，请查看结果并汇报。"]
+    assert runner.inputs == []
+    assert runner.nudges == [True]
 
 
 @pytest.mark.anyio
@@ -3283,6 +3291,7 @@ async def test_subagent_completed_busy_does_not_write_or_auto_turn() -> None:
 
     assert runner.current_session.session.writes == []
     assert runner.inputs == []
+    assert runner.nudges == []
 
 
 @pytest.mark.anyio
@@ -3299,7 +3308,8 @@ async def test_finish_chat_turn_wakes_main_agent_for_pending_completions() -> No
         app._finish_chat_turn(app._chat_turn_token)
         await pilot.pause()
 
-    assert runner.inputs == ["子agent任务已完成，请查看结果并汇报。"]
+    assert runner.inputs == []
+    assert runner.nudges == [True]
 
 
 @pytest.mark.anyio
@@ -3315,6 +3325,7 @@ async def test_finish_chat_turn_does_not_wake_when_no_pending_completions() -> N
         await pilot.pause()
 
     assert runner.inputs == []
+    assert runner.nudges == []
 
 
 @pytest.mark.anyio

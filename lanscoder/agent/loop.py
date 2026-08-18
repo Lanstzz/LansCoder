@@ -236,6 +236,19 @@ class AgentLoop:
             return await self._run_user_turn_streaming(content, attachments=attachments)
         return await anyio.to_thread.run_sync(lambda: self._run_user_turn_sync(content, attachments=attachments))
 
+    async def run_nudge_turn(self, *, streaming: bool = False) -> AgentTurnResult:
+        """Execute one provider turn with no user message (subagent wake-up).
+
+        后台子 agent 完成后，TUI 用它唤醒主 agent 汇报结果。与 run_user_turn 的区别是
+        不写 user_message、不递增 current_turn；待投递的完成通知由
+        _prepare_main_provider_request 里的 _append_background_notifications 投影成
+        provider 的 user 内容。
+        """
+
+        if streaming:
+            return await self._run_nudge_turn_streaming()
+        return await anyio.to_thread.run_sync(self._run_nudge_turn_sync)
+
     def replace_cancellation_token(self, token: CancellationToken | None) -> None:
         """Rebind cooperative cancellation when a paused turn resumes in the runner."""
 
@@ -290,6 +303,26 @@ class AgentLoop:
         return self._run_tool_loop_interactive(
             self._complete_once_with_recovery,
         )
+
+    def _run_nudge_turn_sync(self) -> AgentTurnResult:
+        """同步版唤醒轮次：不追加用户消息，仅投递后台完成通知并跑工具循环。"""
+
+        if self.session.pending_permission_execution is not None:
+            pending = self.session.pending_permission_execution
+            return AgentTurnResult(
+                status=AgentTurnStatus.WAITING_FOR_USER_INPUT,
+                pending_input=self.tool_executor.permission_input_request_from_pending(pending),
+            )
+        if self.background_manager is None or not self.background_manager.pending_completions(
+            session_id=self.session.session_id
+        ):
+            # 无待投递通知：不空转，避免模型被空输入唤醒。
+            return AgentTurnResult(status=AgentTurnStatus.COMPLETED, response=None)
+
+        self._begin_turn()
+        self._repair_interrupted_tool_calls_before_provider_request()
+        self._check_cancelled()
+        return self._run_tool_loop_interactive(self._complete_once_with_recovery)
 
     # ============================================================================
     # resume_with_user_input — 权限确认恢复的异步入口
@@ -404,6 +437,27 @@ class AgentLoop:
             self._stream_once_with_recovery,
         )
         return result
+
+    async def _run_nudge_turn_streaming(self) -> AgentTurnResult:
+        """streaming 版唤醒轮次：语义与同步版一致。"""
+
+        self.last_stream_events = []
+        if self.session.pending_permission_execution is not None:
+            pending = self.session.pending_permission_execution
+            pending_input = self.tool_executor.permission_input_request_from_pending(pending)
+            return AgentTurnResult(
+                status=AgentTurnStatus.WAITING_FOR_USER_INPUT,
+                pending_input=pending_input,
+            )
+        if self.background_manager is None or not self.background_manager.pending_completions(
+            session_id=self.session.session_id
+        ):
+            return AgentTurnResult(status=AgentTurnStatus.COMPLETED, response=None)
+
+        self._begin_turn()
+        self._repair_interrupted_tool_calls_before_provider_request()
+        self._check_cancelled()
+        return await self._run_tool_loop_interactive_async(self._stream_once_with_recovery)
 
     def _initialize_active_task_if_missing(self, basis_message_id: str):
         service = TaskBoundaryService(known_message_ids=self.session.known_message_ids)
