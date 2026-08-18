@@ -365,6 +365,7 @@ class TestRecallCommandHandler:
         assert result.handled is True
         assert "Recalled" in result.output
         assert "msg_03" in result.output
+        assert result.action == {"type": "replay_session"}
         assert swapped is not None
         assert swapped.session_id == sid
 
