@@ -2,7 +2,7 @@
 
 from mcp.server.fastmcp import FastMCP
 
-server = FastMCP("firstcoder-integration-echo")
+server = FastMCP("lanscoder-integration-echo")
 
 
 @server.tool()

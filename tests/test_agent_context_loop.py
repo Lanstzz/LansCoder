@@ -8,48 +8,41 @@ import time
 
 import pytest
 
-from firstcoder.agent.loop import AgentLoop, ToolExecutionEvent
-from firstcoder.agent.task_boundary_classifier import CLASSIFICATION_PROMPT
-from firstcoder.agent.loop_limits import AgentLoopLimits
-from firstcoder.agent.user_input import AgentTurnStatus
-from firstcoder.agent.session import AgentSession
-from firstcoder.context.manager import ContextCompactResult, ContextWindowTrigger
-from firstcoder.context.runtime_replay import replay_runtime_state
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.input.attachments import attach_path
-from firstcoder.runtime.cancellation import CancellationToken
-from firstcoder.permissions.types import PermissionMode
-from firstcoder.mcp.adapter import adapt_mcp_tool
-from firstcoder.mcp.models import McpToolDescription
-from firstcoder.mcp.search import McpSearchEntry, create_mcp_tool_search
-from firstcoder.providers.base import ChatProvider
-from firstcoder.providers.errors import ProviderError, ProviderErrorKind
-from firstcoder.providers.types import (
+from lanscoder.agent.loop import AgentLoop, ToolExecutionEvent
+from lanscoder.agent.task_boundary_classifier import CLASSIFICATION_PROMPT
+from lanscoder.agent.loop_limits import AgentLoopLimits
+from lanscoder.agent.user_input import AgentTurnStatus
+from lanscoder.agent.session import AgentSession
+from lanscoder.context.manager import ContextCompactResult, ContextWindowTrigger
+from lanscoder.context.runtime_replay import replay_runtime_state
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.input.attachments import attach_path
+from lanscoder.runtime.cancellation import CancellationToken
+from lanscoder.permissions.types import PermissionMode
+from lanscoder.mcp.adapter import adapt_mcp_tool
+from lanscoder.mcp.models import McpToolDescription
+from lanscoder.mcp.search import McpSearchEntry, create_mcp_tool_search
+from lanscoder.providers.base import ChatProvider
+from lanscoder.providers.errors import ProviderError, ProviderErrorKind
+from lanscoder.providers.types import (
     ChatRequest,
     ChatResponse,
     ChatStreamEvent,
     ProviderDiagnostics,
     ProviderCapabilities,
     ToolCall,
-    ToolChoiceFunction,
     ToolDefinition,
 )
-from firstcoder.tools.task_boundary import create_task_boundary_tool
-from firstcoder.tools.ask_user import create_ask_user_tool
-from firstcoder.tools.write import create_write_tool
-from firstcoder.tools.edit import create_edit_tool
-from firstcoder.tools.shell import create_shell_tool
-from firstcoder.tools.types import Tool, ToolResult
+from lanscoder.tools.task_boundary import create_task_boundary_tool
+from lanscoder.tools.ask_user import create_ask_user_tool
+from lanscoder.tools.write import create_write_tool
+from lanscoder.tools.edit import create_edit_tool
+from lanscoder.tools.shell import create_shell_tool
+from lanscoder.tools.types import Tool, ToolResult
 
 
 def _run_streaming(loop: AgentLoop, content: str):
     result = asyncio.run(loop.run_user_turn(content, streaming=True))
-    assert result.response is not None
-    return result.response
-
-
-def _run_sync(loop: AgentLoop, content: str):
-    result = asyncio.run(loop.run_user_turn(content))
     assert result.response is not None
     return result.response
 
@@ -615,7 +608,7 @@ def test_agent_loop_appends_user_and_assistant_messages(tmp_path) -> None:
 def test_agent_loop_projects_image_attachment_into_provider_request(tmp_path) -> None:
     image = tmp_path / "image.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01")
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.create(store=store, session_id="sess_image_request")
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="收到图片")])
 
@@ -784,7 +777,7 @@ def test_agent_loop_runs_readonly_tool_calls_in_parallel_and_appends_results_in_
 
 
 def test_agent_loop_runs_bypass_allowed_tool_calls_in_parallel(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     execution_intervals: dict[str, tuple[float, float]] = {}
     session = AgentSession.from_project(
         store=store,
@@ -1012,10 +1005,7 @@ def test_agent_loop_streaming_incomplete_message_does_not_persist_assistant(tmp_
     view = store.rebuild_session_view("sess_stream_incomplete")
     assert [message.role for message in view.messages] == ["user"]
     assert session.runtime_state.consumed_tool_result_part_ids == set()
-    assert all(
-        event.type != "provider_projection_consumed"
-        for event in store.list_events("sess_stream_incomplete")
-    )
+    assert all(event.type != "provider_projection_consumed" for event in store.list_events("sess_stream_incomplete"))
 
 
 def test_streaming_success_records_projected_tool_result_as_consumed(tmp_path) -> None:
@@ -1036,16 +1026,12 @@ def test_streaming_success_records_projected_tool_result_as_consumed(tmp_path) -
         tool_call=tool_call,
         result=ToolResult(name="echo", ok=True, content="echo:hello"),
     )
-    provider = StreamingProvider(
-        [ChatResponse(provider="fake-stream", model="fake-stream-model", content="ok")]
-    )
+    provider = StreamingProvider([ChatResponse(provider="fake-stream", model="fake-stream-model", content="ok")])
 
     asyncio.run(AgentLoop(session=session, provider=provider)._stream_once())
 
     assert len(session.runtime_state.consumed_tool_result_part_ids) == 1
-    assert [event.type for event in store.list_events(session.session_id)].count(
-        "provider_projection_consumed"
-    ) == 1
+    assert [event.type for event in store.list_events(session.session_id)].count("provider_projection_consumed") == 1
 
 
 def test_agent_loop_streaming_retries_once_after_prompt_too_long_compaction(tmp_path) -> None:
@@ -1361,12 +1347,7 @@ def test_agent_loop_rejects_guessed_mcp_tool_before_permission_or_transport(tmp_
     AgentLoop(session=session, provider=provider)._run_user_turn_sync("Read issue 12")
 
     assert caller.calls == []
-    tool_part = next(
-        part
-        for message in session.rebuild_view().messages
-        for part in message.parts
-        if part.kind == "tool_result" and part.metadata["tool_name"] == "mcp__github__get_issue"
-    )
+    tool_part = next(part for message in session.rebuild_view().messages for part in message.parts if part.kind == "tool_result" and part.metadata["tool_name"] == "mcp__github__get_issue")
     assert tool_part.metadata["ok"] is False
     assert tool_part.metadata["data"]["mcp_activation_required"] is True
     assert session.pending_permission_execution is None
@@ -1466,16 +1447,12 @@ def test_agent_loop_permission_resume_keeps_mcp_schema_active(tmp_path) -> None:
     waiting = loop._run_user_turn_sync("Read issue")
 
     assert waiting.pending_input is not None
-    assert "mcp__github__get_issue" in {
-        tool.name for tool in provider.requests[1].tools
-    }
+    assert "mcp__github__get_issue" in {tool.name for tool in provider.requests[1].tools}
     result = loop._resume_with_user_input_sync(waiting.pending_input.id, "allow_once")
 
     assert result.response is not None
     assert result.response.content == "done"
-    assert "mcp__github__get_issue" in {
-        tool.name for tool in provider.requests[2].tools
-    }
+    assert "mcp__github__get_issue" in {tool.name for tool in provider.requests[2].tools}
     assert caller.calls == [("github", "get_issue", {})]
 
 
@@ -1816,11 +1793,7 @@ def test_main_provider_request_includes_latest_task_plan_snapshot_without_task_l
 
     AgentLoop(session=session, provider=provider)._run_user_turn_sync("继续执行")
 
-    snapshots = [
-        message.content
-        for message in provider.requests[0].messages
-        if message.role == "system" and message.content.startswith("Current TaskPlan snapshot")
-    ]
+    snapshots = [message.content for message in provider.requests[0].messages if message.role == "system" and message.content.startswith("Current TaskPlan snapshot")]
     assert snapshots == [
         "Current TaskPlan snapshot (authoritative for this request):\n"
         "revision=1 mode=linear\n"
@@ -1870,16 +1843,8 @@ def test_main_provider_request_refreshes_task_plan_snapshot_after_update(tmp_pat
 
     AgentLoop(session=session, provider=provider)._run_user_turn_sync("继续执行")
 
-    first_snapshot = next(
-        message.content
-        for message in provider.requests[0].messages
-        if message.role == "system" and message.content.startswith("Current TaskPlan snapshot")
-    )
-    second_snapshot = next(
-        message.content
-        for message in provider.requests[1].messages
-        if message.role == "system" and message.content.startswith("Current TaskPlan snapshot")
-    )
+    first_snapshot = next(message.content for message in provider.requests[0].messages if message.role == "system" and message.content.startswith("Current TaskPlan snapshot"))
+    second_snapshot = next(message.content for message in provider.requests[1].messages if message.role == "system" and message.content.startswith("Current TaskPlan snapshot"))
     assert "revision=1 mode=linear" in first_snapshot
     assert "- implement [in_progress]: 写实现" in first_snapshot
     assert "revision=2 mode=linear" in second_snapshot
@@ -2537,7 +2502,7 @@ def test_agent_loop_converts_cancellation_during_task_plan_reconciliation_to_int
 
 
 def test_agent_loop_propagates_prewrite_review_from_task_plan_reconciliation_without_duplicate_call(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_task_plan_review_pause",
@@ -2620,7 +2585,7 @@ def test_agent_loop_propagates_prewrite_review_from_task_plan_reconciliation_wit
 
 
 def test_permission_resume_does_not_repeat_task_plan_reconciliation_for_same_user_turn(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_task_plan_review_once",
@@ -2677,7 +2642,7 @@ def test_permission_resume_does_not_repeat_task_plan_reconciliation_for_same_use
 
 
 def test_agent_loop_streaming_propagates_prewrite_review_from_task_plan_reconciliation_without_duplicate_call(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_stream_task_plan_review_pause",
@@ -3108,11 +3073,7 @@ def test_agent_loop_runs_auto_once_before_each_main_provider_request(tmp_path) -
         context_manager=context_manager,
     )._run_user_turn_sync("调用大工具")
 
-    auto_calls = [
-        call
-        for call in context_manager.calls
-        if call.trigger == ContextWindowTrigger.AUTO
-    ]
+    auto_calls = [call for call in context_manager.calls if call.trigger == ContextWindowTrigger.AUTO]
     assert len(auto_calls) == 2
     assert len(provider.requests) == 2
 
@@ -3139,16 +3100,9 @@ def test_sync_main_request_records_projected_tool_result_as_consumed(tmp_path) -
 
     AgentLoop(session=session, provider=provider, tools=[_echo_tool()])._complete_once()
 
-    tool_part = next(
-        part
-        for message in session.rebuild_view().messages
-        for part in message.parts
-        if part.kind == "tool_result"
-    )
+    tool_part = next(part for message in session.rebuild_view().messages for part in message.parts if part.kind == "tool_result")
     assert tool_part.id in session.runtime_state.consumed_tool_result_part_ids
-    assert [event.type for event in store.list_events(session.session_id)].count(
-        "provider_projection_consumed"
-    ) == 1
+    assert [event.type for event in store.list_events(session.session_id)].count("provider_projection_consumed") == 1
 
 
 def test_agent_loop_interactive_pauses_on_ask_user(tmp_path) -> None:
@@ -3267,7 +3221,7 @@ def test_agent_loop_defers_remaining_tools_until_ask_user_answer(tmp_path) -> No
 
 
 def test_agent_loop_permission_pause_does_not_append_confirmation_tool_result(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_pause",
@@ -3313,7 +3267,7 @@ def test_agent_loop_permission_pause_does_not_append_confirmation_tool_result(tm
 
 
 def test_agent_loop_bypass_mode_emits_prewrite_review_and_executes_without_confirmation(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_review_bypass",
@@ -3360,7 +3314,7 @@ def test_agent_loop_bypass_mode_emits_prewrite_review_and_executes_without_confi
 
 
 def test_agent_loop_streaming_bypass_mode_emits_prewrite_review_without_confirmation(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_stream_review_bypass",
@@ -3408,7 +3362,7 @@ def test_agent_loop_streaming_bypass_mode_emits_prewrite_review_without_confirma
 def test_agent_loop_bypass_mode_blocks_mutation_when_prewrite_review_fails(tmp_path) -> None:
     target = tmp_path / "app.py"
     target.write_text("old\nold\n", encoding="utf-8")
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_review_failed_bypass",
@@ -3446,7 +3400,7 @@ def test_agent_loop_bypass_mode_blocks_mutation_when_prewrite_review_fails(tmp_p
 
 
 def test_agent_loop_shell_permission_does_not_claim_precomputed_diff(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_shell_no_review",
@@ -3475,7 +3429,7 @@ def test_agent_loop_shell_permission_does_not_claim_precomputed_diff(tmp_path) -
 def test_agent_loop_blocks_mutation_when_prewrite_review_cannot_be_built(tmp_path) -> None:
     target = tmp_path / "app.py"
     target.write_text("old\nold\n", encoding="utf-8")
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_review_failed",
@@ -3516,7 +3470,7 @@ def test_agent_loop_blocks_mutation_when_prewrite_review_cannot_be_built(tmp_pat
 
 
 def test_agent_loop_permission_deny_appends_denied_result_and_continues(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_deny",
@@ -3562,7 +3516,7 @@ def test_agent_loop_permission_deny_appends_denied_result_and_continues(tmp_path
 
 
 def test_permission_resume_preserves_provider_call_budget_for_same_user_turn(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_provider_budget",
@@ -3602,7 +3556,7 @@ def test_permission_resume_preserves_provider_call_budget_for_same_user_turn(tmp
 
 
 def test_permission_resume_preserves_turn_start_time_for_same_user_turn(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_time_budget",
@@ -3644,7 +3598,7 @@ def test_permission_resume_preserves_turn_start_time_for_same_user_turn(tmp_path
 
 
 def test_permission_resume_preserves_tool_round_budget_for_same_user_turn(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_tool_budget",
@@ -3684,7 +3638,7 @@ def test_permission_resume_preserves_tool_round_budget_for_same_user_turn(tmp_pa
 
 
 def test_agent_loop_permission_reject_with_feedback_returns_feedback_to_model(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_feedback",
@@ -3725,7 +3679,7 @@ def test_agent_loop_permission_reject_with_feedback_returns_feedback_to_model(tm
 
 
 def test_agent_loop_permission_allow_once_executes_without_grant(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_once",
@@ -3767,7 +3721,7 @@ def test_agent_loop_permission_allow_once_executes_without_grant(tmp_path) -> No
 
 
 def test_agent_loop_permission_allow_once_rejects_stale_prewrite_review(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_stale_review",
@@ -3809,7 +3763,7 @@ def test_agent_loop_permission_allow_once_rejects_stale_prewrite_review(tmp_path
 
 
 def test_agent_loop_permission_allow_always_adds_grant_and_executes(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_always",
@@ -3849,7 +3803,7 @@ def test_agent_loop_permission_allow_always_adds_grant_and_executes(tmp_path) ->
 
 
 def test_agent_loop_permission_resume_rejects_unknown_request_id(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_unknown",
@@ -3886,7 +3840,7 @@ def test_agent_loop_permission_resume_rejects_unknown_request_id(tmp_path) -> No
 
 
 def test_agent_loop_permission_pending_blocks_new_user_turn_until_resolved(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_blocks_turn",
@@ -3927,7 +3881,7 @@ def test_agent_loop_permission_pending_blocks_new_user_turn_until_resolved(tmp_p
 
 
 def test_agent_loop_permission_resume_continues_remaining_parallel_tools(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_parallel",
@@ -3975,7 +3929,7 @@ def test_agent_loop_permission_resume_continues_remaining_parallel_tools(tmp_pat
 
 
 def test_agent_loop_chains_permission_prompts_across_deferred_batch(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_chain",
@@ -4083,7 +4037,7 @@ def test_agent_session_restores_pending_ask_user_across_restart(tmp_path) -> Non
 
 
 def test_agent_loop_permission_resume_uses_local_pending_not_ui_payload(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_payload",
@@ -4127,7 +4081,7 @@ def test_agent_loop_permission_resume_uses_local_pending_not_ui_payload(tmp_path
 
 
 def test_agent_loop_permission_resume_ignores_nested_ui_argument_tampering(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
         session_id="sess_perm_nested_payload",

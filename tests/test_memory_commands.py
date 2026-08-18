@@ -1,10 +1,9 @@
 # tests/test_memory_commands.py
 from pathlib import Path
 
-from firstcoder.app.commands import CommandResult
-from firstcoder.app.memory_commands import MemoryCommandHandler
-from firstcoder.memory.manager import MemoryManager
-from firstcoder.memory.models import MemoryRecord, MemoryScope
+from lanscoder.app.memory_commands import MemoryCommandHandler
+from lanscoder.memory.manager import MemoryManager
+from lanscoder.memory.models import MemoryRecord, MemoryScope
 
 
 def _handler(tmp_path: Path) -> tuple[MemoryCommandHandler, MemoryManager]:

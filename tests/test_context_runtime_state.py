@@ -1,4 +1,4 @@
-from firstcoder.context.runtime_state import (
+from lanscoder.context.runtime_state import (
     SessionRuntimeState,
     active_auto_compact_disabled_until,
     auto_compact_circuit_is_open,

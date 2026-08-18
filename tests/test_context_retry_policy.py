@@ -1,4 +1,4 @@
-from firstcoder.context.retry_policy import (
+from lanscoder.context.retry_policy import (
     CompactRetryDecision,
     CompactRetryPolicy,
 )

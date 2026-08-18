@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from firstcoder.agent.session import create_project_permission_manager
-from firstcoder.permissions.types import PermissionMode
-from firstcoder.tools.diagnostics import create_diagnostics_tool
-from firstcoder.tools.python_exec import create_python_exec_tool
-from firstcoder.tools.shell import create_shell_tool
-from firstcoder.tools import create_builtin_registry
-from firstcoder.tools.permission_registry import PermissionAwareToolRegistry
-from firstcoder.utils.subprocess import CommandResult
+from lanscoder.agent.session import create_project_permission_manager
+from lanscoder.permissions.types import PermissionMode
+from lanscoder.tools import create_builtin_registry
+from lanscoder.tools.permission_registry import PermissionAwareToolRegistry
+from lanscoder.utils.subprocess import CommandResult
 
 
 def test_shell_executes_command_inside_root(tmp_path):
@@ -63,7 +60,7 @@ def test_shell_timeout_returns_partial_output_to_model(tmp_path, monkeypatch):
             error="命令执行超时",
         )
 
-    monkeypatch.setattr("firstcoder.utils.execution_sandbox.run_command", fake_run)
+    monkeypatch.setattr("lanscoder.utils.execution_sandbox.run_command", fake_run)
     registry = create_builtin_registry(tmp_path, include_execution_tools=True)
 
     result = registry.execute("shell", {"command": "slow"})
@@ -118,13 +115,13 @@ def test_python_exec_rejects_cwd_outside_root(tmp_path):
 
 def test_python_exec_filters_sensitive_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
-    monkeypatch.setenv("FIRSTCODER_VISIBLE_TEST_FLAG", "visible")
+    monkeypatch.setenv("LANSCODER_VISIBLE_TEST_FLAG", "visible")
     registry = create_builtin_registry(tmp_path, include_execution_tools=True)
 
     result = registry.execute(
         "python_exec",
         {
-            "code": ("import os; " "print(os.environ.get('OPENAI_API_KEY', '<missing>')); " "print(os.environ.get('FIRSTCODER_VISIBLE_TEST_FLAG', '<missing>'))"),
+            "code": ("import os; " "print(os.environ.get('OPENAI_API_KEY', '<missing>')); " "print(os.environ.get('LANSCODER_VISIBLE_TEST_FLAG', '<missing>'))"),
         },
     )
 
@@ -143,7 +140,7 @@ def test_diagnostics_runs_pytest(monkeypatch, tmp_path):
             ok=True,
         )
 
-    monkeypatch.setattr("firstcoder.utils.execution_sandbox.run_command", fake_run)
+    monkeypatch.setattr("lanscoder.utils.execution_sandbox.run_command", fake_run)
     registry = create_builtin_registry(tmp_path)
 
     result = registry.execute("diagnostics")

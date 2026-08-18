@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from firstcoder.planning.models import Task, TaskPlan, TaskPlanError, TaskPlanMode
-from firstcoder.planning.validation import validate_plan
+from lanscoder.planning.models import Task, TaskPlan, TaskPlanError, TaskPlanMode
+from lanscoder.planning.validation import validate_plan
 
 
 def _plan(*tasks: Task, mode: TaskPlanMode = "dag") -> TaskPlan:

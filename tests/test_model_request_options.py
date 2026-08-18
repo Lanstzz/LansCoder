@@ -3,20 +3,20 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
-from firstcoder.agent.loop import AgentLoop
-from firstcoder.agent.session import AgentSession
-from firstcoder.agent.task_boundary_classifier import TaskBoundaryClassifier
-from firstcoder.app.runtime import AgentChatRunner, CurrentSessionState
-from firstcoder.context.context_builder import ContextBuilder
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.providers.base import ChatProvider
-from firstcoder.providers.types import (
+from lanscoder.agent.loop import AgentLoop
+from lanscoder.agent.session import AgentSession
+from lanscoder.agent.task_boundary_classifier import TaskBoundaryClassifier
+from lanscoder.app.runtime import AgentChatRunner, CurrentSessionState
+from lanscoder.context.context_builder import ContextBuilder
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.providers.base import ChatProvider
+from lanscoder.providers.types import (
     ChatRequest,
     ChatResponse,
     ChatStreamEvent,
     MainRequestOptions,
 )
-from firstcoder.runtime.cancellation import CancellationToken
+from lanscoder.runtime.cancellation import CancellationToken
 
 
 @dataclass

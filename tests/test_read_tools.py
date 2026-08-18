@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from firstcoder.agent.session import create_project_permission_manager
-from firstcoder.permissions.types import PermissionMode
-from firstcoder.utils import git as git_utils
-from firstcoder.utils.subprocess import CommandResult
-from firstcoder.utils.sandbox import PathSandbox
-from firstcoder.tools import grep as grep_module
-from firstcoder.tools import create_builtin_registry
-from firstcoder.tools.permission_registry import PermissionAwareToolRegistry
+from lanscoder.agent.session import create_project_permission_manager
+from lanscoder.permissions.types import PermissionMode
+from lanscoder.utils import git as git_utils
+from lanscoder.utils.subprocess import CommandResult
+from lanscoder.utils.sandbox import PathSandbox
+from lanscoder.tools import grep as grep_module
+from lanscoder.tools import create_builtin_registry
+from lanscoder.tools.permission_registry import PermissionAwareToolRegistry
 
 
 def _completed(args, returncode=0, stdout="", stderr=""):
@@ -149,27 +149,27 @@ def test_read_multi_checks_all_requested_paths_before_reading(tmp_path):
 
 
 def test_grep_finds_matching_lines(tmp_path):
-    source = tmp_path / "firstcoder.py"
-    source.write_text("alpha\nFirstCoder agent\nbeta\n", encoding="utf-8")
+    source = tmp_path / "lanscoder.py"
+    source.write_text("alpha\nLansCoder agent\nbeta\n", encoding="utf-8")
     registry = create_builtin_registry(tmp_path)
 
-    result = registry.execute("grep", {"pattern": "firstcoder", "include": "*.py"})
+    result = registry.execute("grep", {"pattern": "lanscoder", "include": "*.py"})
 
     assert result.ok is True
-    assert result.data["results"][0]["path"] == "firstcoder.py"
+    assert result.data["results"][0]["path"] == "lanscoder.py"
     assert result.data["results"][0]["line"] == 2
 
 
 def test_grep_with_rg_filters_sensitive_environment(tmp_path, monkeypatch):
-    source = tmp_path / "firstcoder.py"
-    source.write_text("FirstCoder agent\n", encoding="utf-8")
+    source = tmp_path / "lanscoder.py"
+    source.write_text("LansCoder agent\n", encoding="utf-8")
     captured = {}
 
     def fake_run_command(command, **kwargs):
         captured["env"] = kwargs.get("env")
         return CommandResult(
             exit_code=0,
-            stdout=f"{source}:1:FirstCoder agent\n",
+            stdout=f"{source}:1:LansCoder agent\n",
             stderr="",
             stdout_truncated=False,
             stderr_truncated=False,
@@ -179,28 +179,28 @@ def test_grep_with_rg_filters_sensitive_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(grep_module.shutil, "which", lambda _name: "/usr/bin/rg")
     monkeypatch.setattr(grep_module, "run_command", fake_run_command)
     monkeypatch.setenv("SEARCH_API_KEY", "secret")
-    monkeypatch.setenv("FIRSTCODER_VISIBLE_TEST_FLAG", "visible")
+    monkeypatch.setenv("LANSCODER_VISIBLE_TEST_FLAG", "visible")
     registry = create_builtin_registry(tmp_path)
 
-    result = registry.execute("grep", {"pattern": "firstcoder", "include": "*.py"})
+    result = registry.execute("grep", {"pattern": "lanscoder", "include": "*.py"})
 
     assert result.ok is True
     assert "SEARCH_API_KEY" not in captured["env"]
-    assert captured["env"]["FIRSTCODER_VISIBLE_TEST_FLAG"] == "visible"
+    assert captured["env"]["LANSCODER_VISIBLE_TEST_FLAG"] == "visible"
 
 
 def test_grep_falls_back_to_python_when_rg_is_missing(tmp_path, monkeypatch):
     (tmp_path / "src").mkdir()
-    source = tmp_path / "src" / "firstcoder.py"
-    source.write_text("alpha\nFirstCoder agent\nbeta\n", encoding="utf-8")
+    source = tmp_path / "src" / "lanscoder.py"
+    source.write_text("alpha\nLansCoder agent\nbeta\n", encoding="utf-8")
     monkeypatch.setattr(grep_module.shutil, "which", lambda _name: None)
     registry = create_builtin_registry(tmp_path)
 
-    result = registry.execute("grep", {"pattern": "firstcoder", "include": "*.py"})
+    result = registry.execute("grep", {"pattern": "lanscoder", "include": "*.py"})
 
     assert result.ok is True
     assert result.data["engine"] == "python"
-    assert result.data["results"][0]["path"] == "src/firstcoder.py"
+    assert result.data["results"][0]["path"] == "src/lanscoder.py"
     assert result.data["results"][0]["line"] == 2
 
 
@@ -214,26 +214,26 @@ def test_grep_rejects_non_positive_max_results(tmp_path):
 
 
 def test_grep_parses_rg_output_for_windows_paths(tmp_path):
-    source = tmp_path / "firstcoder.py"
-    source.write_text("FirstCoder agent", encoding="utf-8")
+    source = tmp_path / "lanscoder.py"
+    source.write_text("LansCoder agent", encoding="utf-8")
     sandbox = PathSandbox(tmp_path)
-    output = f"{source}:1:FirstCoder agent\n"
+    output = f"{source}:1:LansCoder agent\n"
 
     results = grep_module._parse_rg_output(sandbox, output, max_results=10)
 
-    assert results == [{"path": "firstcoder.py", "line": 1, "text": "FirstCoder agent"}]
+    assert results == [{"path": "lanscoder.py", "line": 1, "text": "LansCoder agent"}]
 
 
 def test_glob_finds_matching_paths(tmp_path):
-    (tmp_path / "firstcoder").mkdir()
-    (tmp_path / "firstcoder" / "app.py").write_text("print('hi')", encoding="utf-8")
+    (tmp_path / "lanscoder").mkdir()
+    (tmp_path / "lanscoder" / "app.py").write_text("print('hi')", encoding="utf-8")
     (tmp_path / "README.md").write_text("# readme", encoding="utf-8")
     registry = create_builtin_registry(tmp_path)
 
     result = registry.execute("glob", {"pattern": "**/*.py"})
 
     assert result.ok is True
-    assert result.data["matches"] == ["firstcoder/app.py"]
+    assert result.data["matches"] == ["lanscoder/app.py"]
 
 
 def test_glob_respects_max_results_after_sorting(tmp_path):

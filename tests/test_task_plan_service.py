@@ -8,21 +8,16 @@ from threading import Barrier, BrokenBarrierError
 
 import pytest
 
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.context.writer import SessionEventWriter
-from firstcoder.planning.reducer import TaskPlanCommandError, TaskPlanRevisionConflict
-from firstcoder.planning.service import TaskPlanMutation, TaskPlanService
-import firstcoder.planning.service as service_module
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.context.writer import SessionEventWriter
+from lanscoder.planning.reducer import TaskPlanCommandError, TaskPlanRevisionConflict
+from lanscoder.planning.service import TaskPlanMutation, TaskPlanService
+import lanscoder.planning.service as service_module
 
 
 def test_planning_service_uses_cross_platform_file_lock() -> None:
     tree = ast.parse(inspect.getsource(service_module))
-    imported_modules = {
-        alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
-    }
+    imported_modules = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
 
     assert "portalocker" in imported_modules
     assert "fcntl" not in imported_modules
@@ -198,7 +193,7 @@ def test_concurrent_services_atomically_compare_revision_and_append(
     service_a = TaskPlanService(store=store, writer=writer_a)
     service_b = TaskPlanService(store=store, writer=writer_b)
 
-    import firstcoder.planning.service as service_module
+    import lanscoder.planning.service as service_module
 
     original_create_tasks = service_module.create_tasks
     rendezvous = Barrier(2)

@@ -1,11 +1,11 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from firstcoder.agent.loop import AgentLoop
-from firstcoder.agent.session import AgentSession
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.providers.base import ChatProvider
-from firstcoder.providers.types import ChatRequest, ChatResponse, ToolCall
+from lanscoder.agent.loop import AgentLoop
+from lanscoder.agent.session import AgentSession
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.providers.base import ChatProvider
+from lanscoder.providers.types import ChatRequest, ChatResponse, ToolCall
 
 
 @dataclass
@@ -32,7 +32,7 @@ class RecordingProvider(ChatProvider):
 def test_user_language_does_not_auto_load_skill_before_provider_call(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     _write_skill_project(tmp_path)
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(store=store, session_id="sess_skill", project_root=tmp_path)
     provider = RecordingProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
 
@@ -48,7 +48,7 @@ def test_user_language_does_not_auto_load_skill_before_provider_call(tmp_path: P
 def test_model_load_skill_call_returns_body_in_next_provider_request_and_audits(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     _write_skill_project(tmp_path)
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(store=store, session_id="sess_skill", project_root=tmp_path)
     provider = RecordingProvider(
         [
@@ -78,7 +78,7 @@ def test_model_load_skill_call_returns_body_in_next_provider_request_and_audits(
 def test_resume_replays_loaded_skill_tool_result_without_reading_disk(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     _write_skill_project(tmp_path)
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     original = AgentSession.from_project(store=store, session_id="sess_resume", project_root=tmp_path)
     provider = RecordingProvider(
         [

@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from firstcoder.providers.anthropic_provider import AnthropicProvider
-from firstcoder.providers.base import ChatProvider
-from firstcoder.providers.openai_compatible import OpenAICompatibleProvider
+from lanscoder.providers.anthropic_provider import AnthropicProvider
+from lanscoder.providers.base import ChatProvider
+from lanscoder.providers.openai_compatible import OpenAICompatibleProvider
 
 
 def test_readme_provider_scope_matches_current_openai_compatible_mainline() -> None:

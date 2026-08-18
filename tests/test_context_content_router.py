@@ -1,19 +1,18 @@
-from firstcoder.context.content.router import (
+from lanscoder.context.content.router import (
     RouteCompactResult,
-    RouteCompressor,
     RouteContentType,
     RouteContext,
     RouteCompactRouter,
     detect_route_content_type,
 )
-from firstcoder.context.content.build import BuildOutputRouteCompressor
-from firstcoder.context.content.code import SourceCodeRouteCompressor
-from firstcoder.context.content.compressors import PlainTextRouteCompressor
-from firstcoder.context.content.diff import GitDiffRouteCompressor
-from firstcoder.context.content.html import HtmlRouteCompressor
-from firstcoder.context.content.json import JsonRouteCompressor
-from firstcoder.context.content.search import SearchResultsRouteCompressor
-from firstcoder.context.models import MessagePart
+from lanscoder.context.content.build import BuildOutputRouteCompressor
+from lanscoder.context.content.code import SourceCodeRouteCompressor
+from lanscoder.context.content.compressors import PlainTextRouteCompressor
+from lanscoder.context.content.diff import GitDiffRouteCompressor
+from lanscoder.context.content.html import HtmlRouteCompressor
+from lanscoder.context.content.json import JsonRouteCompressor
+from lanscoder.context.content.search import SearchResultsRouteCompressor
+from lanscoder.context.models import MessagePart
 
 
 class StaticCompressor:
@@ -47,7 +46,7 @@ def test_route_compact_dispatches_by_content_type() -> None:
         compressors={RouteContentType.SEARCH_RESULTS: compressor},
         min_original_tokens=1,
     )
-    part = _part("firstcoder/app.py:10:def run():\nfirstcoder/app.py:20:def stop():")
+    part = _part("lanscoder/app.py:10:def run():\nlanscoder/app.py:20:def stop():")
 
     result = router.compact_part(part)
 
@@ -58,7 +57,7 @@ def test_route_compact_dispatches_by_content_type() -> None:
 
 
 def test_route_compact_rejects_output_that_is_not_smaller() -> None:
-    original = "firstcoder/app.py:10:def run():"
+    original = "lanscoder/app.py:10:def run():"
     compressor = StaticCompressor(original + "\nextra metadata that makes output larger")
     router = RouteCompactRouter(
         compressors={RouteContentType.SEARCH_RESULTS: compressor},
@@ -77,7 +76,7 @@ def test_route_compact_adds_metadata() -> None:
         min_original_tokens=1,
     )
 
-    result = router.compact_part(_part("firstcoder/app.py:10:def run():\n" * 20))
+    result = router.compact_part(_part("lanscoder/app.py:10:def run():\n" * 20))
 
     assert result is not None
     assert result.id == "part_1"
@@ -94,7 +93,7 @@ def test_route_compact_adds_metadata() -> None:
 def test_route_compact_skips_when_no_compressor_is_registered() -> None:
     router = RouteCompactRouter(compressors={}, min_original_tokens=1)
 
-    result = router.compact_part(_part("firstcoder/app.py:10:def run():"))
+    result = router.compact_part(_part("lanscoder/app.py:10:def run():"))
 
     assert result is None
 
@@ -135,12 +134,12 @@ def test_detector_prefers_source_code_over_build_keywords() -> None:
 def test_search_results_compressor_groups_files_and_records_omissions() -> None:
     content = "\n".join(
         [
-            "firstcoder/app.py:1: def old_1(): pass",
-            *[f"firstcoder/app.py:{line}: def old_{line}(): pass with repeated context" for line in range(2, 40)],
-            "firstcoder/app.py:3: TODO important path",
-            "firstcoder/tools.py:10: normal match",
-            *[f"firstcoder/tools.py:{line}: normal match with repeated context" for line in range(12, 50)],
-            "firstcoder/tools.py:11: ERROR must keep this",
+            "lanscoder/app.py:1: def old_1(): pass",
+            *[f"lanscoder/app.py:{line}: def old_{line}(): pass with repeated context" for line in range(2, 40)],
+            "lanscoder/app.py:3: TODO important path",
+            "lanscoder/tools.py:10: normal match",
+            *[f"lanscoder/tools.py:{line}: normal match with repeated context" for line in range(12, 50)],
+            "lanscoder/tools.py:11: ERROR must keep this",
         ]
     )
     router = RouteCompactRouter(
@@ -155,14 +154,14 @@ def test_search_results_compressor_groups_files_and_records_omissions() -> None:
     assert result.metadata["compacted_by"] == "l2_search_results"
     assert result.metadata["search_original_matches"] > 70
     assert result.metadata["search_kept_matches"] < result.metadata["search_original_matches"]
-    assert "firstcoder/app.py:1:" in result.content
-    assert "firstcoder/app.py:3: TODO important path" in result.content
-    assert "firstcoder/tools.py:11: ERROR must keep this" in result.content
+    assert "lanscoder/app.py:1:" in result.content
+    assert "lanscoder/app.py:3: TODO important path" in result.content
+    assert "lanscoder/tools.py:11: ERROR must keep this" in result.content
     assert "omitted" in result.content
 
 
 def test_search_results_compressor_parses_windows_paths() -> None:
-    content = "\n".join(rf"C:\repo\firstcoder\app.py:{line}: def run_{line}(): pass with repeated context" for line in range(1, 30))
+    content = "\n".join(rf"C:\repo\lanscoder\app.py:{line}: def run_{line}(): pass with repeated context" for line in range(1, 30))
     router = RouteCompactRouter(
         compressors={RouteContentType.SEARCH_RESULTS: SearchResultsRouteCompressor(max_matches_per_file=2)},
         min_original_tokens=1,
@@ -172,15 +171,15 @@ def test_search_results_compressor_parses_windows_paths() -> None:
 
     assert result is not None
     assert result.metadata["search_file_count"] == 1
-    assert r"C:\repo\firstcoder\app.py:1:" in result.content
+    assert r"C:\repo\lanscoder\app.py:1:" in result.content
 
 
 def test_search_results_compressor_keeps_sentinel_like_matches() -> None:
     content = "\n".join(
         [
-            *[f"firstcoder/context/manager.py:{line}: normal match {line}" for line in range(1, 180)],
-            "firstcoder/context/manager.py:180: SEARCH_SENTINEL_9 important routing evidence",
-            *[f"firstcoder/context/manager.py:{line}: trailing match {line}" for line in range(181, 360)],
+            *[f"lanscoder/context/manager.py:{line}: normal match {line}" for line in range(1, 180)],
+            "lanscoder/context/manager.py:180: SEARCH_SENTINEL_9 important routing evidence",
+            *[f"lanscoder/context/manager.py:{line}: trailing match {line}" for line in range(181, 360)],
         ]
     )
     router = RouteCompactRouter(
@@ -197,9 +196,9 @@ def test_search_results_compressor_keeps_sentinel_like_matches() -> None:
 def test_git_diff_compressor_keeps_headers_changes_and_limited_context() -> None:
     content = "\n".join(
         [
-            "diff --git a/firstcoder/app.py b/firstcoder/app.py",
-            "--- a/firstcoder/app.py",
-            "+++ b/firstcoder/app.py",
+            "diff --git a/lanscoder/app.py b/lanscoder/app.py",
+            "--- a/lanscoder/app.py",
+            "+++ b/lanscoder/app.py",
             "@@ -1,25 +1,25 @@",
             *[f" context line {line}" for line in range(1, 20)],
             "-old behavior",
@@ -222,7 +221,7 @@ def test_git_diff_compressor_keeps_headers_changes_and_limited_context() -> None
     assert result.metadata["diff_additions"] == 2
     assert result.metadata["diff_deletions"] == 1
     assert result.metadata["diff_context_lines_omitted"] > 0
-    assert "diff --git a/firstcoder/app.py b/firstcoder/app.py" in result.content
+    assert "diff --git a/lanscoder/app.py b/lanscoder/app.py" in result.content
     assert "-old behavior" in result.content
     assert "+TODO keep important change" in result.content
     assert "omitted" in result.content
@@ -231,8 +230,8 @@ def test_git_diff_compressor_keeps_headers_changes_and_limited_context() -> None
 def test_git_diff_compressor_counts_unified_diff_without_git_header() -> None:
     content = "\n".join(
         [
-            "--- a/firstcoder/app.py",
-            "+++ b/firstcoder/app.py",
+            "--- a/lanscoder/app.py",
+            "+++ b/lanscoder/app.py",
             "@@ -1,25 +1,25 @@",
             *[f" context line {line}" for line in range(1, 30)],
             "-old behavior",
@@ -249,8 +248,8 @@ def test_git_diff_compressor_counts_unified_diff_without_git_header() -> None:
     assert result is not None
     assert result.metadata["diff_files_affected"] == 1
     assert result.metadata["diff_hidden_files"] == 0
-    assert "--- a/firstcoder/app.py" in result.content
-    assert "+++ b/firstcoder/app.py" in result.content
+    assert "--- a/lanscoder/app.py" in result.content
+    assert "+++ b/lanscoder/app.py" in result.content
 
 
 def test_build_output_compressor_keeps_errors_tracebacks_and_summary() -> None:

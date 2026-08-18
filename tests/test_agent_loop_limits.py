@@ -1,4 +1,4 @@
-from firstcoder.agent.loop_limits import AgentLoopLimits, AgentLoopStopReason
+from lanscoder.agent.loop_limits import AgentLoopLimits, AgentLoopStopReason
 
 
 def test_default_limits_match_tui_goal_profile() -> None:

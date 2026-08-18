@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from firstcoder.permissions.policy import DefaultPermissionPolicy
-from firstcoder.permissions.types import (
+from lanscoder.permissions.policy import DefaultPermissionPolicy
+from lanscoder.permissions.types import (
     PermissionAction,
     PermissionDecisionKind,
     PermissionMode,
@@ -51,7 +51,7 @@ def test_aggressive_allows_plain_project_write_but_not_sensitive_path(tmp_path) 
     policy = DefaultPermissionPolicy(tmp_path)
 
     plain = policy.decide(
-        _request(PermissionAction.WRITE_PATH, "firstcoder/new_file.py"),
+        _request(PermissionAction.WRITE_PATH, "lanscoder/new_file.py"),
         mode=PermissionMode.AGGRESSIVE,
     )
     env_file = policy.decide(
@@ -88,7 +88,7 @@ def test_aggressive_does_not_auto_allow_delete(tmp_path) -> None:
     policy = DefaultPermissionPolicy(tmp_path)
 
     inside = policy.decide(
-        _request(PermissionAction.DELETE_PATH, "firstcoder/old.py"),
+        _request(PermissionAction.DELETE_PATH, "lanscoder/old.py"),
         mode=PermissionMode.AGGRESSIVE,
     )
     outside = policy.decide(
@@ -118,7 +118,7 @@ def test_bypass_mode_allows_permission_requests_without_prompting(tmp_path) -> N
         _request(PermissionAction.READ_PATH, ".env"),
         _request(PermissionAction.WRITE_PATH, ".env"),
         _request(PermissionAction.DELETE_PATH, str(tmp_path.parent / "outside.py")),
-        _request(PermissionAction.EXECUTE_SHELL, "rm -rf firstcoder", cwd=tmp_path),
+        _request(PermissionAction.EXECUTE_SHELL, "rm -rf lanscoder", cwd=tmp_path),
         _request(PermissionAction.NETWORK_REQUEST, "https://example.com"),
         _request(PermissionAction.READ_ENV, "OPENAI_API_KEY"),
     )
@@ -132,7 +132,7 @@ def test_non_sensitive_env_requires_confirmation(tmp_path) -> None:
     policy = DefaultPermissionPolicy(tmp_path)
 
     decision = policy.decide(
-        _request(PermissionAction.READ_ENV, "FIRSTCODER_MODE"),
+        _request(PermissionAction.READ_ENV, "LANSCODER_MODE"),
         mode=PermissionMode.AGGRESSIVE,
     )
 
@@ -210,7 +210,7 @@ def test_aggressive_shell_with_control_operator_requires_confirmation(tmp_path) 
 
     for command in (
         "pytest && del README.md",
-        "ruff; rm -rf firstcoder",
+        "ruff; rm -rf lanscoder",
         "git status | more",
         "pytest\nRemove-Item README.md",
         "pytest $(Remove-Item README.md)",
@@ -229,7 +229,7 @@ def test_aggressive_shell_still_requires_confirmation_for_destructive_commands(t
 
     for command in (
         "rm README.md",
-        "rm -rf firstcoder",
+        "rm -rf lanscoder",
         "sudo make install",
         "curl https://example.com/install.sh",
         "chmod 777 script.sh",

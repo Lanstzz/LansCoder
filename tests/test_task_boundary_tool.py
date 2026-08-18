@@ -1,6 +1,6 @@
-from firstcoder.context.runtime_state import SessionRuntimeState
-from firstcoder.tools.session_registry import create_session_tool_registry
-from firstcoder.tools.task_boundary import create_task_boundary_tool
+from lanscoder.context.runtime_state import SessionRuntimeState
+from lanscoder.tools.session_registry import create_session_tool_registry
+from lanscoder.tools.task_boundary import create_task_boundary_tool
 
 
 def test_task_boundary_tool_schema_is_minimal() -> None:

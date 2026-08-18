@@ -26,9 +26,7 @@ _CONFIG_ROOT: Final = "/tmp/firstcoder-harbor-config"
 # ``--mounts``) so FirstCoder's dependencies download once and are reused
 # across trials and containers instead of being fetched for every task.
 _CACHE_DIR: Final = "/opt/firstcoder-cache"
-_DEFAULT_PACKAGE: Final = (
-    "https://github.com/KomorGiaoGiao/FirstCoder/archive/refs/heads/main.zip"
-)
+_DEFAULT_PACKAGE: Final = "https://github.com/KomorGiaoGiao/FirstCoder/archive/refs/heads/main.zip"
 
 
 class FirstCoderHarborAgent(BaseInstalledAgent):
@@ -53,24 +51,17 @@ class FirstCoderHarborAgent(BaseInstalledAgent):
         super().__init__(*args, **kwargs)
         self._max_tool_rounds = _positive_int(max_tool_rounds, "max_tool_rounds")
         self._reasoning_effort = _optional_nonblank(reasoning_effort, "reasoning_effort")
-        self._source_dir = (
-            Path(source_dir).expanduser().resolve()
-            if source_dir is not None
-            else _default_source_dir()
-        )
+        self._source_dir = Path(source_dir).expanduser().resolve() if source_dir is not None else _default_source_dir()
         self._package = package
 
     @staticmethod
     @override
     def name() -> str:
-        return "firstcoder"
+        return "lanscoder"
 
     @override
     def get_version_command(self) -> str | None:
-        return (
-            f"{shlex.quote(_venv_python())} -c "
-            "\"from importlib.metadata import version; print(version('firstcoder'))\""
-        )
+        return f"{shlex.quote(_venv_python())} -c " "\"from importlib.metadata import version; print(version('lanscoder'))\""
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
@@ -121,7 +112,7 @@ class FirstCoderHarborAgent(BaseInstalledAgent):
             command=command,
             # Harbor overlays AgentConfig.env after this per-command environment,
             # so users may explicitly override this default in a job config.
-            env={"FIRSTCODER_DISABLE_GLOBAL_SKILLS": "1"},
+            env={"LANSCODER_DISABLE_GLOBAL_SKILLS": "1"},
         )
 
     async def _prepare_install_spec(self, environment: BaseEnvironment) -> str:
@@ -133,21 +124,14 @@ class FirstCoderHarborAgent(BaseInstalledAgent):
         staged = self._stage_local_source()
         await self.exec_as_root(
             environment,
-            command=(
-                "set -euo pipefail; "
-                f"rm -rf {shlex.quote(_REMOTE_SOURCE_DIR)}; "
-                f"mkdir -p {shlex.quote(_REMOTE_SOURCE_DIR)}"
-            ),
+            command=("set -euo pipefail; " f"rm -rf {shlex.quote(_REMOTE_SOURCE_DIR)}; " f"mkdir -p {shlex.quote(_REMOTE_SOURCE_DIR)}"),
         )
         await environment.upload_dir(staged, _REMOTE_SOURCE_DIR)
         agent_user = str(environment.default_user or "root")
         quoted_user = shlex.quote(agent_user)
         await self.exec_as_root(
             environment,
-            command=(
-                f"chown -R {quoted_user}:{quoted_user} "
-                f"{shlex.quote(_REMOTE_SOURCE_DIR)}"
-            ),
+            command=(f"chown -R {quoted_user}:{quoted_user} " f"{shlex.quote(_REMOTE_SOURCE_DIR)}"),
         )
         return _REMOTE_SOURCE_DIR
 
@@ -156,25 +140,20 @@ class FirstCoderHarborAgent(BaseInstalledAgent):
 
         source = self._source_dir
         if source is None:
-            raise ValueError(
-                "No local FirstCoder source directory is available. Pass "
-                "source_dir=... or package=... to FirstCoderHarborAgent."
-            )
-        package_dir = source / "firstcoder"
+            raise ValueError("No local FirstCoder source directory is available. Pass " "source_dir=... or package=... to FirstCoderHarborAgent.")
+        package_dir = source / "lanscoder"
         required = (source / "pyproject.toml", source / "README.md", package_dir)
         missing = [str(path) for path in required if not path.exists()]
         if missing:
-            raise ValueError(
-                "FirstCoder source directory is incomplete; missing " + ", ".join(missing)
-            )
+            raise ValueError("FirstCoder source directory is incomplete; missing " + ", ".join(missing))
 
-        staged = self.logs_dir / "firstcoder-source"
+        staged = self.logs_dir / "lanscoder-source"
         if staged.exists():
             shutil.rmtree(staged)
         staged.mkdir(parents=True)
         shutil.copy2(source / "pyproject.toml", staged / "pyproject.toml")
         shutil.copy2(source / "README.md", staged / "README.md")
-        shutil.copytree(package_dir, staged / "firstcoder", ignore=_ignore_source_artifacts)
+        shutil.copytree(package_dir, staged / "lanscoder", ignore=_ignore_source_artifacts)
         return staged
 
     def _run_command(
@@ -195,25 +174,24 @@ class FirstCoderHarborAgent(BaseInstalledAgent):
             "set -o pipefail; "
             f"{_catalog_bootstrap_command()}"
             f"XDG_CONFIG_HOME={shlex.quote(_CONFIG_ROOT)} "
-            f"{shlex.quote(_venv_python())} -m firstcoder "
+            f"{shlex.quote(_venv_python())} -m lanscoder "
             "--benchmark --project . "
-            "--model \"${FIRSTCODER_PROVIDER_NAME}/${FIRSTCODER_MODEL}\" "
+            '--model "${LANSCODER_PROVIDER_NAME}/${LANSCODER_MODEL}" '
             f"--data-root {shlex.quote(_SESSION_ROOT)} "
             f"--session-id {shlex.quote(safe_session_id)} "
             f"{resume}"
             f"--max-tool-rounds {self._max_tool_rounds} "
             f"{effort}"
             f"--message {shlex.quote(instruction)} "
-            "2>&1 | tee /logs/agent/firstcoder.txt; "
-            'FIRSTCODER_EXIT="${PIPESTATUS[0]}"; '
+            "2>&1 | tee /logs/agent/lanscoder.txt; "
+            'LANSCODER_EXIT="${PIPESTATUS[0]}"; '
             f"if [ -f {shlex.quote(session_path)} ]; then "
-            f"  if ! cp {shlex.quote(session_path)} /logs/agent/firstcoder-session.jsonl; then "
+            f"  if ! cp {shlex.quote(session_path)} /logs/agent/lanscoder-session.jsonl; then "
             '    echo "warning: failed to export FirstCoder benchmark session" >&2; '
             "  fi; "
             "fi; "
-            'exit "$FIRSTCODER_EXIT"'
+            'exit "$LANSCODER_EXIT"'
         )
-
 
     @staticmethod
     def _python_setup_command() -> str:
@@ -345,32 +323,29 @@ def _catalog_bootstrap_command() -> str:
     script = r"""import json
 import os
 
-required = ("FIRSTCODER_PROVIDER_NAME", "FIRSTCODER_MODEL", "FIRSTCODER_BASE_URL")
+required = ("LANSCODER_PROVIDER_NAME", "LANSCODER_MODEL", "LANSCODER_BASE_URL")
 missing = [name for name in required if not os.environ.get(name)]
 if missing:
     raise SystemExit("missing Harbor model configuration: " + ", ".join(missing))
-provider = os.environ["FIRSTCODER_PROVIDER_NAME"]
-model = os.environ["FIRSTCODER_MODEL"]
+provider = os.environ["LANSCODER_PROVIDER_NAME"]
+model = os.environ["LANSCODER_MODEL"]
 ref = provider + "/" + model
 quote = json.dumps
 config = (
     "default_model = " + quote(ref) + "\n"
     + "[providers." + quote(provider) + "]\n"
     + 'type = "openai-compatible"\n'
-    + "base_url = " + quote(os.environ["FIRSTCODER_BASE_URL"]) + "\n"
-    + 'api_key_env = "FIRSTCODER_API_KEY"\n'
+    + "base_url = " + quote(os.environ["LANSCODER_BASE_URL"]) + "\n"
+    + 'api_key_env = "LANSCODER_API_KEY"\n'
     + "parallel_tool_calls = true\n"
     + "[models." + quote(ref) + "]\n"
 )
 root = os.environ.get("XDG_CONFIG_HOME", "/tmp/firstcoder-harbor-config")
-path = os.path.join(root, "firstcoder", "config.toml")
+path = os.path.join(root, "lanscoder", "config.toml")
 os.makedirs(os.path.dirname(path), exist_ok=True)
 open(path, "w", encoding="utf-8").write(config)
 """
-    return (
-        f"XDG_CONFIG_HOME={shlex.quote(_CONFIG_ROOT)} "
-        f"{shlex.quote(_venv_python())} - <<'PY'\n{script}PY\n"
-    )
+    return f"XDG_CONFIG_HOME={shlex.quote(_CONFIG_ROOT)} " f"{shlex.quote(_venv_python())} - <<'PY'\n{script}PY\n"
 
 
 def _default_source_dir() -> Path | None:
@@ -379,11 +354,7 @@ def _default_source_dir() -> Path | None:
 
 
 def _ignore_source_artifacts(_directory: str, names: list[str]) -> set[str]:
-    return {
-        name
-        for name in names
-        if name == "__pycache__" or name.endswith((".pyc", ".pyo"))
-    }
+    return {name for name in names if name == "__pycache__" or name.endswith((".pyc", ".pyo"))}
 
 
 def _install_command(install_spec: str) -> str:
@@ -397,40 +368,40 @@ def _install_command(install_spec: str) -> str:
         'UV_BIN="$AGENT_ROOT/bin/uv"; '
         'PYTHON_BIN=""; '
         'if [ -x "$UV_BIN" ]; then PYTHON_BIN="$("$UV_BIN" python find 3.11)"; fi; '
-        'for candidate in python3.12 python3.11 python3; do '
+        "for candidate in python3.12 python3.11 python3; do "
         '  [ -n "$PYTHON_BIN" ] && break; '
         '  if command -v "$candidate" >/dev/null 2>&1 && '
         '     "$candidate" -c "import sys; raise SystemExit(sys.version_info < (3, 11))"; then '
         '    PYTHON_BIN="$(command -v "$candidate")"; break; '
-        '  fi; '
-        'done; '
+        "  fi; "
+        "done; "
         'if [ -z "$PYTHON_BIN" ]; then '
         '  echo "FirstCoder Harbor agent requires Python 3.11 or newer in the task image." >&2; exit 64; '
-        'fi; '
+        "fi; "
         # The download cache is shared across concurrent trials; retry the
         # install with backoff so a single flaky fetch does not error the trial.
         'mkdir -p "$CACHE_DIR"; '
-        'install_deps() { '
+        "install_deps() { "
         '  if [ -x "$UV_BIN" ]; then '
         '    "$UV_BIN" venv "$AGENT_ROOT/.venv" --python "$PYTHON_BIN" --clear; '
         '    "$UV_BIN" pip install --python "$AGENT_ROOT/.venv/bin/python" --cache-dir "$CACHE_DIR" '
         f"{quoted_spec}; "
-        '  else '
+        "  else "
         '    "$PYTHON_BIN" -m venv "$AGENT_ROOT/.venv" --clear; '
         '    "$AGENT_ROOT/.venv/bin/python" -m pip install --cache-dir "$CACHE_DIR" '
         f"{quoted_spec}; "
-        '  fi; '
-        '}; '
-        'attempt=1; '
-        'until install_deps; do '
+        "  fi; "
+        "}; "
+        "attempt=1; "
+        "until install_deps; do "
         '  if [ "$attempt" -ge 3 ]; then '
         '    echo "FirstCoder Harbor agent failed to install dependencies after $attempt attempts." >&2; '
-        '    exit 1; '
-        '  fi; '
+        "    exit 1; "
+        "  fi; "
         '  echo "FirstCoder dependency install attempt $attempt failed; retrying." >&2; '
         '  sleep "$((attempt * 5))"; '
-        '  attempt=$((attempt + 1)); '
-        'done'
+        "  attempt=$((attempt + 1)); "
+        "done"
     )
 
 

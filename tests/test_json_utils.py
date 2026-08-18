@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from firstcoder.utils.json_utils import dumps_json, loads_json_object
+from lanscoder.utils.json_utils import dumps_json, loads_json_object
 
 
 def test_dumps_json_uses_compact_non_ascii_json():

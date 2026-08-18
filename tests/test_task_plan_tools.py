@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.context.writer import SessionEventWriter
-from firstcoder.planning.service import TaskPlanService
-from firstcoder.tools.task_create import create_task_create_tool
-from firstcoder.tools.task_list import create_task_list_tool
-from firstcoder.tools.task_revise import create_task_revise_tool
-from firstcoder.tools.task_update import create_task_update_tool
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.context.writer import SessionEventWriter
+from lanscoder.planning.service import TaskPlanService
+from lanscoder.tools.task_create import create_task_create_tool
+from lanscoder.tools.task_list import create_task_list_tool
+from lanscoder.tools.task_revise import create_task_revise_tool
+from lanscoder.tools.task_update import create_task_update_tool
 
 
 def _tools(tmp_path):
@@ -35,9 +35,7 @@ def test_task_plan_tool_schemas_are_incremental_and_exact(tmp_path) -> None:
         "expected_revision",
         "tasks",
     ]
-    assert tools["task_create"].definition.parameters["properties"]["start_new_plan"] == {
-        "type": "boolean"
-    }
+    assert tools["task_create"].definition.parameters["properties"]["start_new_plan"] == {"type": "boolean"}
     assert tools["task_update"].definition.parameters["required"] == [
         "expected_revision",
         "updates",

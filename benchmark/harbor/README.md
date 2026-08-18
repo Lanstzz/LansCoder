@@ -15,8 +15,8 @@ the only benchmark integration maintained by this repository.
 
 `benchmark.harbor.firstcoder_agent:FirstCoderHarborAgent` is an installed-agent
 adapter. For each task it stages only `pyproject.toml`, `README.md`, and
-`firstcoder/`, creates an isolated agent virtual environment, and runs one
-non-interactive `firstcoder --benchmark` turn in Harbor's task directory.
+`lanscoder/`, creates an isolated agent virtual environment, and runs one
+non-interactive `lanscoder --benchmark` turn in Harbor's task directory.
 
 The adapter does not copy `.git`, `.venv`, local sessions, `.env`, or other
 workspace files. It receives the task instruction but does not inspect verifier
@@ -89,15 +89,15 @@ zsh -lic 'export PYTHONPATH="$PWD"; .venv/bin/harbor run \
   -m Yuren/gpt-5.6-terra \
   -n 1 -k 1 --ak max_tool_rounds=120 --ak reasoning_effort=medium \
   --agent-setup-timeout-multiplier 3 \
-  --ae FIRSTCODER_PROVIDER_NAME=PROVIDER \
-  --ae FIRSTCODER_MODEL=gpt-5.6-terra \
-  --ae FIRSTCODER_BASE_URL=https://provider.example/v1 \
-  --ae "FIRSTCODER_API_KEY=\${FIRSTCODER_API_KEY}" \
-  --ae FIRSTCODER_DISABLE_GLOBAL_SKILLS=1 \
+  --ae LANSCODER_PROVIDER_NAME=PROVIDER \
+  --ae LANSCODER_MODEL=gpt-5.6-terra \
+  --ae LANSCODER_BASE_URL=https://provider.example/v1 \
+  --ae "LANSCODER_API_KEY=\${LANSCODER_API_KEY}" \
+  --ae LANSCODER_DISABLE_GLOBAL_SKILLS=1 \
   -o benchmark/runs/harbor/smoke -y'
 ```
 
-`-m` records model metadata in Harbor. The `FIRSTCODER_*` variables configure
+`-m` records model metadata in Harbor. The `LANSCODER_*` variables configure
 the FirstCoder process inside the task. Do not add `--upload` unless publishing
 results is explicitly intended.
 
@@ -114,10 +114,10 @@ there with Harbor's `--mounts` so wheels download once and are reused across
 trials and concurrent containers:
 
 ```sh
-mkdir -p "$HOME/.cache/firstcoder-harbor"
+mkdir -p "$HOME/.cache/lanscoder-harbor"
 .venv/bin/harbor run \
   ... \
-  --mounts '[{"type":"bind","source":"'"$HOME"'/.cache/firstcoder-harbor","target":"/opt/firstcoder-cache"}]' \
+  --mounts '[{"type":"bind","source":"'"$HOME"'/.cache/lanscoder-harbor","target":"/opt/firstcoder-cache"}]' \
   ...
 ```
 

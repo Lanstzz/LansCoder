@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from firstcoder.app.model_commands import ModelCommandHandler, ModelState
+from lanscoder.app.model_commands import ModelCommandHandler, ModelState
 
 
 @dataclass

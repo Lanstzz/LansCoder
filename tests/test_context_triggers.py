@@ -1,8 +1,8 @@
-from firstcoder.context.checkpoint import Checkpoint
-from firstcoder.context.models import AgentMessage, MessagePart, SessionView
-from firstcoder.providers.types import ChatMessage, ToolDefinition
-from firstcoder.context.token_budget import build_context_budget
-from firstcoder.context.triggers import ContextCompactionConfig, evaluate_context_triggers
+from lanscoder.context.checkpoint import Checkpoint
+from lanscoder.context.models import AgentMessage, MessagePart, SessionView
+from lanscoder.providers.types import ChatMessage, ToolDefinition
+from lanscoder.context.token_budget import build_context_budget
+from lanscoder.context.triggers import ContextCompactionConfig, evaluate_context_triggers
 
 
 def _message(

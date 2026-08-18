@@ -70,15 +70,11 @@ class AiderFeedbackTrial(SingleStepTrial):
         try:
             await self._run_verifier()
         except RewardFileNotFoundError:
-            missing_reward_compile_failure = should_request_feedback_after_missing_reward(
-                self._read_verifier_output()
-            )
+            missing_reward_compile_failure = should_request_feedback_after_missing_reward(self._read_verifier_output())
             if not missing_reward_compile_failure:
                 raise
 
-        failed_reward = should_request_feedback_round(
-            self.result.verifier_result.rewards if self.result.verifier_result else None
-        )
+        failed_reward = should_request_feedback_round(self.result.verifier_result.rewards if self.result.verifier_result else None)
         if self.result.exception_info is None and (failed_reward or missing_reward_compile_failure):
             feedback = build_aider_feedback(self._read_verifier_output())
             await self._run_agent_with_instruction(feedback)

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from firstcoder.providers.types import ToolCall
-from firstcoder.tools.review import build_prewrite_review
+from lanscoder.providers.types import ToolCall
+from lanscoder.tools.review import build_prewrite_review
 
 
 def test_write_review_describes_new_file_without_writing(tmp_path) -> None:

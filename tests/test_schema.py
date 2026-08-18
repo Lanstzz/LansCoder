@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from firstcoder.utils.schema import object_schema, property_schema
+from lanscoder.utils.schema import object_schema, property_schema
 
 
 def test_object_schema_builds_required_properties():

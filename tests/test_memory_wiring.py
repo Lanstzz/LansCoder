@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.memory.manager import project_memory_root
-from firstcoder.session.bootstrap import SessionBootstrap
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.memory.manager import project_memory_root
+from lanscoder.session.bootstrap import SessionBootstrap
 
 
 def test_session_has_memory_tools_and_prefix(tmp_path: Path) -> None:
@@ -36,8 +36,8 @@ def test_session_has_memory_tools_and_prefix(tmp_path: Path) -> None:
 
 
 def test_session_without_memory_manager_has_no_memory_tools(tmp_path: Path) -> None:
-    from firstcoder.agent.session import AgentSession
-    from firstcoder.context.identity import new_session_id
+    from lanscoder.agent.session import AgentSession
+    from lanscoder.context.identity import new_session_id
 
     store = JsonlSessionStore(tmp_path / "data")
     session = AgentSession.create(store=store, session_id=new_session_id())

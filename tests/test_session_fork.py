@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from firstcoder.context.events import SessionEvent
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.context.writer import SessionEventWriter
-from firstcoder.session.errors import SessionUnsupportedSchemaError
-from firstcoder.session.fork import ForkSessionService
+from lanscoder.context.events import SessionEvent
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.context.writer import SessionEventWriter
+from lanscoder.session.errors import SessionUnsupportedSchemaError
+from lanscoder.session.fork import ForkSessionService
 
 
 @pytest.mark.parametrize(
@@ -23,7 +23,7 @@ def test_fork_rejects_unsupported_schema_without_writing_or_copying(
     schema_payload: dict[str, str] | None,
     actual_version: str,
 ) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     store.append_event(
         SessionEvent(
             id="evt_created",
@@ -46,7 +46,7 @@ def test_fork_rejects_unsupported_schema_without_writing_or_copying(
     before_files = {path.relative_to(store.root): path.read_bytes() for path in store.root.rglob("*") if path.is_file()}
     tool_calls: list[str] = []
     monkeypatch.setattr(
-        "firstcoder.session.fork.new_session_id",
+        "lanscoder.session.fork.new_session_id",
         lambda: (_ for _ in ()).throw(AssertionError("new ID must not be created")),
     )
     service = ForkSessionService(
@@ -67,7 +67,7 @@ def test_fork_rejects_unsupported_schema_without_writing_or_copying(
 
 
 def test_fork_accepts_v2_session_and_copies_events_and_archives(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     writer = SessionEventWriter(store=store, session_id="sess_source")
     writer.append_session_created(title="Source")
     writer.append_user_message("历史消息")
@@ -85,7 +85,7 @@ def test_fork_accepts_v2_session_and_copies_events_and_archives(tmp_path: Path) 
 
 
 def test_fork_rejects_future_schema_before_parsing_later_events(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path / ".firstcoder")
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
     path = store.sessions_dir / "sess_future.jsonl"
     path.write_text(
         '{"id":"evt_created","session_id":"sess_future","type":"session_created",' '"payload":{"context_event_schema_version":"v3"}}\n' '{"future_event_shape":true}\n',

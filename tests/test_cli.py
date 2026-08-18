@@ -2,8 +2,8 @@ from pathlib import Path
 
 from dataclasses import dataclass, field
 
-import firstcoder.cli as cli
-from firstcoder.cli import CliConfig, main, read_message, run_repl
+import lanscoder.cli as cli
+from lanscoder.cli import CliConfig, main, read_message, run_repl
 
 
 @dataclass
@@ -139,8 +139,8 @@ def test_main_config_path_prints_global_and_project_paths(tmp_path: Path, monkey
 
     output = capsys.readouterr().out
     assert exit_code == 0
-    assert f"global: {tmp_path / 'xdg' / 'firstcoder' / 'config.toml'}" in output
-    assert f"project: {tmp_path / 'firstcoder.toml'}" in output
+    assert f"global: {tmp_path / 'xdg' / 'lanscoder' / 'config.toml'}" in output
+    assert f"project: {tmp_path / 'lanscoder.toml'}" in output
 
 
 def test_main_config_init_creates_global_config(tmp_path: Path, monkeypatch, capsys):
@@ -148,7 +148,7 @@ def test_main_config_init_creates_global_config(tmp_path: Path, monkeypatch, cap
 
     exit_code = main(["config", "init"])
 
-    config_path = tmp_path / "xdg" / "firstcoder" / "config.toml"
+    config_path = tmp_path / "xdg" / "lanscoder" / "config.toml"
     assert exit_code == 0
     assert config_path.exists()
     assert "api_key_env" in config_path.read_text(encoding="utf-8")
@@ -170,7 +170,7 @@ def test_main_mcp_add_remote_accepts_bearer_token_environment_variable(tmp_path:
         ]
     )
 
-    config = (tmp_path / "xdg" / "firstcoder" / "config.toml").read_text(encoding="utf-8")
+    config = (tmp_path / "xdg" / "lanscoder" / "config.toml").read_text(encoding="utf-8")
     assert exit_code == 0
     assert 'bearer_token_env_var = "GITHUB_PAT_TOKEN"' in config
     assert "Added remote MCP server: github" in capsys.readouterr().out
@@ -178,7 +178,7 @@ def test_main_mcp_add_remote_accepts_bearer_token_environment_variable(tmp_path:
 
 def test_main_config_init_refuses_to_overwrite_without_force(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    config_path = tmp_path / "xdg" / "firstcoder" / "config.toml"
+    config_path = tmp_path / "xdg" / "lanscoder" / "config.toml"
     config_path.parent.mkdir(parents=True)
     config_path.write_text("existing", encoding="utf-8")
 
@@ -190,18 +190,18 @@ def test_main_config_init_refuses_to_overwrite_without_force(tmp_path: Path, mon
 
 
 def test_main_config_show_uses_project_config_without_leaking_key(tmp_path: Path, monkeypatch, capsys):
-    monkeypatch.delenv("FIRSTCODER_PROVIDER", raising=False)
-    monkeypatch.setenv("YURENAPI_API_KEY", "secret-key")
-    (tmp_path / "firstcoder.toml").write_text(
+    monkeypatch.delenv("LANSCODER_PROVIDER", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-key")
+    (tmp_path / "lanscoder.toml").write_text(
         "\n".join(
             [
-                'default_model = "yurenapi/gpt-5.5"',
-                "[providers.yurenapi]",
+                'default_model = "deepseek/deepseek-v4-flash"',
+                "[providers.deepseek]",
                 'type = "openai-compatible"',
-                'base_url = "https://yurenapi.cn/v1"',
-                'api_key_env = "YURENAPI_API_KEY"',
+                'base_url = "https://api.deepseek.com"',
+                'api_key_env = "DEEPSEEK_API_KEY"',
                 "parallel_tool_calls = true",
-                '[models."yurenapi/gpt-5.5"]',
+                '[models."deepseek/deepseek-v4-flash"]',
             ]
         ),
         encoding="utf-8",
@@ -211,17 +211,17 @@ def test_main_config_show_uses_project_config_without_leaking_key(tmp_path: Path
 
     output = capsys.readouterr().out
     assert exit_code == 0
-    assert "provider: yurenapi" in output
-    assert "model: yurenapi/gpt-5.5" in output
-    assert "base_url: https://yurenapi.cn/v1" in output
+    assert "provider: deepseek" in output
+    assert "model: deepseek/deepseek-v4-flash" in output
+    assert "base_url: https://api.deepseek.com" in output
     assert "parallel_tool_calls: true" in output
     assert "secret-key" not in output
 
 
 def test_main_config_show_lists_catalog_refs_without_secrets_or_state(tmp_path: Path, monkeypatch, capsys):
-    monkeypatch.delenv("FIRSTCODER_PROVIDER", raising=False)
+    monkeypatch.delenv("LANSCODER_PROVIDER", raising=False)
     monkeypatch.setenv("YURENAPI_API_KEY", "secret-key")
-    (tmp_path / "firstcoder.toml").write_text(
+    (tmp_path / "lanscoder.toml").write_text(
         "\n".join(
             [
                 'default_model = "yuren/gpt-5.6-terra"',
@@ -242,8 +242,8 @@ def test_main_config_show_lists_catalog_refs_without_secrets_or_state(tmp_path: 
         ),
         encoding="utf-8",
     )
-    (tmp_path / ".firstcoder" / "model_state.json").parent.mkdir(parents=True)
-    (tmp_path / ".firstcoder" / "model_state.json").write_text(
+    (tmp_path / ".lanscoder" / "model_state.json").parent.mkdir(parents=True)
+    (tmp_path / ".lanscoder" / "model_state.json").write_text(
         '{"last_selected":"yuren/gpt-5.6-terra","recent":["openai/gpt-5.5"]}',
         encoding="utf-8",
     )

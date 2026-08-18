@@ -2,14 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from firstcoder.context.events import SessionEvent
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.context.writer import SessionEventWriter
-from firstcoder.providers.types import ChatResponse, ToolCall
-from firstcoder.session.models import ShareOptions
-from firstcoder.session.errors import SessionCorruptError
-from firstcoder.session.share import SessionShareService
-from firstcoder.tools.types import ToolResult
+from lanscoder.context.events import SessionEvent
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.context.writer import SessionEventWriter
+from lanscoder.providers.types import ChatResponse, ToolCall
+from lanscoder.session.models import ShareOptions
+from lanscoder.session.errors import SessionCorruptError
+from lanscoder.session.share import SessionShareService
+from lanscoder.tools.types import ToolResult
 
 
 def test_share_service_exports_markdown_to_default_path(tmp_path: Path) -> None:

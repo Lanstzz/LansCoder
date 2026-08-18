@@ -1,10 +1,10 @@
-from firstcoder.agent.prompt_inputs import (
+from lanscoder.agent.prompt_inputs import (
     DEFAULT_PERMISSION_POLICY,
     build_system_prompt_inputs,
     provider_capabilities_for,
     read_agents_md,
 )
-from firstcoder.context.system_prompt import SystemPromptBuilder
+from lanscoder.context.system_prompt import SystemPromptBuilder
 
 
 def test_read_agents_md_reads_project_root_file(tmp_path) -> None:

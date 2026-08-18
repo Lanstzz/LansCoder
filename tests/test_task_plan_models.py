@@ -5,7 +5,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from firstcoder.planning.models import Task, TaskPlan, TaskPlanError
+from lanscoder.planning.models import Task, TaskPlan, TaskPlanError
 
 
 def test_task_defaults_and_models_are_frozen() -> None:

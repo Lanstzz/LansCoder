@@ -1,4 +1,4 @@
-from firstcoder.context.system_prompt import (
+from lanscoder.context.system_prompt import (
     PromptPrefixCache,
     SystemPromptInputs,
     SystemPromptBuilder,
@@ -7,8 +7,8 @@ from firstcoder.context.system_prompt import (
 
 def _inputs(**overrides: object) -> SystemPromptInputs:
     values = {
-        "base_rules": "你是 FirstCoder。",
-        "agents_md": "项目规则：上下文放在 firstcoder/context。",
+        "base_rules": "你是 LansCoder。",
+        "agents_md": "项目规则：上下文放在 lanscoder/context。",
         "provider_name": "openai-compatible",
         "provider_capabilities": {"tool_calling": True, "parallel_tool_calls": False},
         "permission_policy": {"shell": "confirm", "read": "allow"},
@@ -35,7 +35,7 @@ def test_system_prompt_cache_reuses_prefix_when_fingerprint_matches() -> None:
     assert first.fingerprint == second.fingerprint
     assert first is second
     assert first.messages[0].role == "system"
-    assert "你是 FirstCoder。" in first.messages[0].content
+    assert "你是 LansCoder。" in first.messages[0].content
 
 
 def test_agents_md_change_invalidates_system_prompt_fingerprint() -> None:
@@ -161,9 +161,7 @@ def test_benchmark_system_prompt_uses_benchmark_role_without_repeating_task() ->
 def test_benchmark_task_content_does_not_change_system_prompt_fingerprint() -> None:
     builder = SystemPromptBuilder()
 
-    assert builder.fingerprint(_inputs(benchmark_task="Fix A.")) == builder.fingerprint(
-        _inputs(benchmark_task="Fix B.")
-    )
+    assert builder.fingerprint(_inputs(benchmark_task="Fix A.")) == builder.fingerprint(_inputs(benchmark_task="Fix B."))
 
 
 def test_system_prompt_delegates_task_boundary_to_runtime() -> None:

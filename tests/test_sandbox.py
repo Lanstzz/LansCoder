@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from firstcoder.utils.sandbox import PathSandbox
-from firstcoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
+from lanscoder.utils.sandbox import PathSandbox
+from lanscoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
 
 
 def test_path_sandbox_resolves_relative_path_inside_root(tmp_path):

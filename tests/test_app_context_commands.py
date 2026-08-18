@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from firstcoder.context.compaction import CompactionEvent
-from firstcoder.app.commands import ContextCommandHandler
-from firstcoder.context.manager import ContextCompactResult
-from firstcoder.context.models import AgentMessage, MessagePart, SessionView
-from firstcoder.context.runtime_state import CompactionHistoryEntry, SessionRuntimeState
-from firstcoder.context.token_budget import ContextBudget
+from lanscoder.context.compaction import CompactionEvent
+from lanscoder.app.commands import ContextCommandHandler
+from lanscoder.context.manager import ContextCompactResult
+from lanscoder.context.models import AgentMessage, MessagePart, SessionView
+from lanscoder.context.runtime_state import CompactionHistoryEntry, SessionRuntimeState
+from lanscoder.context.token_budget import ContextBudget
 
 
 def _budget_provider(view: SessionView) -> ContextBudget:

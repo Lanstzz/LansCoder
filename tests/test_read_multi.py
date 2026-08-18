@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from firstcoder.tools.read_multi import create_read_multi_tool
+from lanscoder.tools.read_multi import create_read_multi_tool
 
 
 def test_read_multi_reads_multiple_files(tmp_path):

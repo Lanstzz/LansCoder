@@ -1,10 +1,10 @@
-from firstcoder.agent.prompt_inputs import build_system_prompt_inputs
-from firstcoder.context.system_prompt import SystemPromptBuilder, SystemPromptInputs
+from lanscoder.agent.prompt_inputs import build_system_prompt_inputs
+from lanscoder.context.system_prompt import SystemPromptBuilder, SystemPromptInputs
 
 
 def _inputs(**overrides: object) -> SystemPromptInputs:
     values = {
-        "base_rules": "你是 FirstCoder。",
+        "base_rules": "你是 LansCoder。",
         "agents_md": "",
         "provider_name": "openai-compatible",
         "provider_capabilities": {"tool_calling": True, "parallel_tool_calls": False},
@@ -35,9 +35,7 @@ def test_empty_memory_index_omits_section() -> None:
 
 def test_memory_section_rendered_in_prefix() -> None:
     builder = SystemPromptBuilder()
-    entry = builder.build(
-        _inputs(memory_index="Project memory:\n- [build-commands](build-commands.md) — How to build")
-    )
+    entry = builder.build(_inputs(memory_index="Project memory:\n- [build-commands](build-commands.md) — How to build"))
     content = entry.messages[0].content
     assert "Memory:" in content
     assert "build-commands" in content

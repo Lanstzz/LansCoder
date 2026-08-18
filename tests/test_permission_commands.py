@@ -1,14 +1,14 @@
-from firstcoder.agent.session import AgentSession
-from firstcoder.app.permission_commands import PermissionCommandHandler
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.permissions.types import PermissionMode
-from firstcoder.tools.builtin import create_builtin_registry
-from firstcoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
+from lanscoder.agent.session import AgentSession
+from lanscoder.app.permission_commands import PermissionCommandHandler
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.permissions.types import PermissionMode
+from lanscoder.tools.builtin import create_builtin_registry
+from lanscoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
 
 
 def test_permission_mode_command_shows_current_mode(tmp_path) -> None:
     session = AgentSession.from_project(
-        store=JsonlSessionStore(tmp_path / ".firstcoder"),
+        store=JsonlSessionStore(tmp_path / ".lanscoder"),
         session_id="sess_mode",
         project_root=tmp_path,
         tools=[],
@@ -25,7 +25,7 @@ def test_permission_mode_command_shows_current_mode(tmp_path) -> None:
 
 def test_permission_mode_command_updates_session_and_manager(tmp_path) -> None:
     session = AgentSession.from_project(
-        store=JsonlSessionStore(tmp_path / ".firstcoder"),
+        store=JsonlSessionStore(tmp_path / ".lanscoder"),
         session_id="sess_mode",
         project_root=tmp_path,
         tools=[],
@@ -44,7 +44,7 @@ def test_permission_mode_command_updates_session_and_manager(tmp_path) -> None:
 def test_permission_mode_command_accepts_bypass(tmp_path) -> None:
     access = SandboxAccess()
     session = AgentSession.from_project(
-        store=JsonlSessionStore(tmp_path / ".firstcoder"),
+        store=JsonlSessionStore(tmp_path / ".lanscoder"),
         session_id="sess_mode",
         project_root=tmp_path,
         tools=create_builtin_registry(tmp_path, access=access).tools(),
@@ -66,7 +66,7 @@ def test_permission_mode_command_accepts_bypass(tmp_path) -> None:
 def test_permission_mode_command_restores_project_sandbox_after_bypass(tmp_path) -> None:
     access = SandboxAccess(SandboxAccessMode.UNRESTRICTED)
     session = AgentSession.from_project(
-        store=JsonlSessionStore(tmp_path / ".firstcoder"),
+        store=JsonlSessionStore(tmp_path / ".lanscoder"),
         session_id="sess_mode",
         project_root=tmp_path,
         tools=create_builtin_registry(tmp_path, access=access).tools(),
@@ -88,7 +88,7 @@ def test_bypass_mode_lets_existing_tools_access_outside_project(tmp_path) -> Non
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
     session = AgentSession.from_project(
-        store=JsonlSessionStore(tmp_path / ".firstcoder"),
+        store=JsonlSessionStore(tmp_path / ".lanscoder"),
         session_id="sess_mode",
         project_root=tmp_path,
         tools=create_builtin_registry(tmp_path, access=access).tools(),
@@ -113,7 +113,7 @@ def test_bypass_mode_lets_existing_tools_access_outside_project(tmp_path) -> Non
 
 def test_permission_mode_command_rejects_unknown_mode(tmp_path) -> None:
     session = AgentSession.from_project(
-        store=JsonlSessionStore(tmp_path / ".firstcoder"),
+        store=JsonlSessionStore(tmp_path / ".lanscoder"),
         session_id="sess_mode",
         project_root=tmp_path,
         tools=[],
@@ -129,7 +129,7 @@ def test_permission_mode_command_rejects_unknown_mode(tmp_path) -> None:
 
 def test_permission_mode_command_rejects_removed_conservative_mode(tmp_path) -> None:
     session = AgentSession.from_project(
-        store=JsonlSessionStore(tmp_path / ".firstcoder"),
+        store=JsonlSessionStore(tmp_path / ".lanscoder"),
         session_id="sess_mode",
         project_root=tmp_path,
         tools=[],

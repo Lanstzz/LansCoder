@@ -1,4 +1,4 @@
-from firstcoder.app.help_commands import HelpCommandHandler
+from lanscoder.app.help_commands import HelpCommandHandler
 
 
 def test_help_command_lists_current_slash_commands() -> None:

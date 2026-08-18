@@ -1,12 +1,12 @@
 from pathlib import Path
 
-from firstcoder.context.archive import ToolResultArchive
-from firstcoder.context.checkpoint import Checkpoint
-from firstcoder.context.compaction import CompactionPipeline, CompactionRequest
-from firstcoder.context.identity import session_view_fingerprint
-from firstcoder.context.models import AgentMessage, MessagePart, SessionView
-from firstcoder.context.token_budget import estimate_text_tokens
-from firstcoder.context.tool_sequence import validate_tool_call_sequence
+from lanscoder.context.archive import ToolResultArchive
+from lanscoder.context.checkpoint import Checkpoint
+from lanscoder.context.compaction import CompactionPipeline, CompactionRequest
+from lanscoder.context.identity import session_view_fingerprint
+from lanscoder.context.models import AgentMessage, MessagePart, SessionView
+from lanscoder.context.token_budget import estimate_text_tokens
+from lanscoder.context.tool_sequence import validate_tool_call_sequence
 
 
 def _message(
@@ -107,18 +107,12 @@ def _request(
     **kwargs,
 ) -> CompactionRequest:
     if estimate_tokens is None:
-        estimate_tokens = lambda candidate: sum(
-            estimate_text_tokens(part.content)
-            for message in candidate.messages
-            for part in message.parts
-        )
+
+        def estimate_tokens(candidate):
+            return sum(estimate_text_tokens(part.content) for message in candidate.messages for part in message.parts)
+
     if consumed_tool_result_part_ids is None:
-        consumed_tool_result_part_ids = frozenset(
-            part.id
-            for message in view.messages
-            for part in message.parts
-            if part.kind == "tool_result"
-        )
+        consumed_tool_result_part_ids = frozenset(part.id for message in view.messages for part in message.parts if part.kind == "tool_result")
     return CompactionRequest(
         view=view,
         active_task_hash=active_task_hash,
@@ -186,11 +180,7 @@ def test_unconsumed_derived_result_is_not_l2_or_l3_candidate(tmp_path) -> None:
     view, part = _derived_tool_result_view(content="FAILED\n" + "x" * 8_000)
 
     def estimate(candidate: SessionView) -> int:
-        return sum(
-            estimate_text_tokens(item.content)
-            for message in candidate.messages
-            for item in message.parts
-        )
+        return sum(estimate_text_tokens(item.content) for message in candidate.messages for item in message.parts)
 
     protected = CompactionPipeline(root=tmp_path).compact(
         _request(
@@ -289,7 +279,7 @@ def test_compaction_event_records_full_schema(tmp_path: Path) -> None:
 
 
 def test_l2_routes_derived_search_and_stores_raw_backing(tmp_path: Path) -> None:
-    raw_content = "\n".join(f"firstcoder/app.py:{line}: def function_{line}(): pass" for line in range(1, 160))
+    raw_content = "\n".join(f"lanscoder/app.py:{line}: def function_{line}(): pass" for line in range(1, 160))
     view = SessionView(
         session_id="sess_test",
         messages=[
@@ -324,13 +314,13 @@ def test_l2_never_routes_fresh_source_and_does_not_create_backing(tmp_path: Path
     view = SessionView(
         session_id="sess_test",
         messages=[
-            _tool_call("view_l2_fresh", "view", {"path": "firstcoder/context.py", "offset": 0, "limit": 500}),
+            _tool_call("view_l2_fresh", "view", {"path": "lanscoder/context.py", "offset": 0, "limit": 500}),
             _tool_result(
                 "view_l2_fresh",
                 "view",
                 content=raw_content,
                 data={
-                    "path": "firstcoder/context.py",
+                    "path": "lanscoder/context.py",
                     "start_line": 1,
                     "end_line": 500,
                     "total_lines": 2_000,
@@ -393,9 +383,9 @@ def test_l2_routes_build_and_diff_derived_results_with_raw_backing(tmp_path: Pat
     )
     diff_raw = "\n".join(
         [
-            "diff --git a/firstcoder/app.py b/firstcoder/app.py",
-            "--- a/firstcoder/app.py",
-            "+++ b/firstcoder/app.py",
+            "diff --git a/lanscoder/app.py b/lanscoder/app.py",
+            "--- a/lanscoder/app.py",
+            "+++ b/lanscoder/app.py",
             "@@ -1,4 +1,4 @@",
             *[f" context {line}" for line in range(1, 100)],
             "-old line",
@@ -407,7 +397,7 @@ def test_l2_routes_build_and_diff_derived_results_with_raw_backing(tmp_path: Pat
         messages=[
             _tool_call("build_l2", "pytest", {"command": "pytest"}),
             _tool_result("build_l2", "pytest", content=build_raw),
-            _tool_call("diff_l2", "git_diff", {"path": "firstcoder/app.py"}),
+            _tool_call("diff_l2", "git_diff", {"path": "lanscoder/app.py"}),
             _tool_result("diff_l2", "git_diff", content=diff_raw),
         ],
     )
@@ -434,7 +424,7 @@ def test_l2_routes_build_and_diff_derived_results_with_raw_backing(tmp_path: Pat
 
 
 def test_l2_then_l3_uses_existing_raw_backing_and_is_idempotent(tmp_path: Path) -> None:
-    raw_content = "\n".join(f"firstcoder/app.py:{line}: def function_{line}(): pass" for line in range(1, 160))
+    raw_content = "\n".join(f"lanscoder/app.py:{line}: def function_{line}(): pass" for line in range(1, 160))
     view = SessionView(
         session_id="sess_test",
         messages=[
@@ -475,7 +465,7 @@ def test_l2_then_l3_uses_existing_raw_backing_and_is_idempotent(tmp_path: Path) 
 
 
 def test_per_result_pressure_runs_l2_then_l3_below_total_budget(tmp_path: Path) -> None:
-    raw_content = "\n".join(f"firstcoder/app.py:{line}: def function_{line}(): pass" for line in range(1, 160))
+    raw_content = "\n".join(f"lanscoder/app.py:{line}: def function_{line}(): pass" for line in range(1, 160))
     view = SessionView(
         session_id="sess_test",
         messages=[
@@ -508,13 +498,13 @@ def test_per_result_pressure_does_not_bypass_fresh_source_noop(tmp_path: Path) -
     view = SessionView(
         session_id="sess_test",
         messages=[
-            _tool_call("pressure_fresh", "view", {"path": "firstcoder/context.py", "offset": 0, "limit": 500}),
+            _tool_call("pressure_fresh", "view", {"path": "lanscoder/context.py", "offset": 0, "limit": 500}),
             _tool_result(
                 "pressure_fresh",
                 "view",
                 content=raw_content,
                 data={
-                    "path": "firstcoder/context.py",
+                    "path": "lanscoder/context.py",
                     "start_line": 1,
                     "end_line": 500,
                     "total_lines": 2_000,
@@ -655,9 +645,9 @@ def test_l3_skips_pinned_derived_result(tmp_path: Path) -> None:
 def test_l3_never_routes_text_even_when_force_flag_is_set(tmp_path: Path) -> None:
     content = "\n".join(
         [
-            "diff --git a/firstcoder/app.py b/firstcoder/app.py",
-            "--- a/firstcoder/app.py",
-            "+++ b/firstcoder/app.py",
+            "diff --git a/lanscoder/app.py b/lanscoder/app.py",
+            "--- a/lanscoder/app.py",
+            "+++ b/lanscoder/app.py",
             "@@ -1,4 +1,4 @@",
             *[f" context {line}" for line in range(1, 40)],
             "-old line",
@@ -986,7 +976,7 @@ def test_l1_l3_skip_checkpoint_covered_history(tmp_path: Path) -> None:
 
 
 def test_l3_keeps_fresh_large_view_and_structured_tool_call_byte_identical(tmp_path: Path) -> None:
-    call = _tool_call("view_fresh", "view", {"path": "firstcoder/context.py", "offset": 0, "limit": 500})
+    call = _tool_call("view_fresh", "view", {"path": "lanscoder/context.py", "offset": 0, "limit": 500})
     raw_call = call.parts[0].to_dict()
     raw_content = "source line\n" * 1_000
     result = _tool_result(
@@ -994,7 +984,7 @@ def test_l3_keeps_fresh_large_view_and_structured_tool_call_byte_identical(tmp_p
         "view",
         content=raw_content,
         data={
-            "path": "firstcoder/context.py",
+            "path": "lanscoder/context.py",
             "start_line": 1,
             "end_line": 500,
             "total_lines": 2_000,
@@ -1025,21 +1015,21 @@ def test_l3_archives_stale_view_and_keeps_raw_backing(tmp_path: Path) -> None:
     view = SessionView(
         session_id="sess_test",
         messages=[
-            _tool_call("view_stale", "view", {"path": "firstcoder/context.py", "offset": 0, "limit": 500}),
+            _tool_call("view_stale", "view", {"path": "lanscoder/context.py", "offset": 0, "limit": 500}),
             _tool_result(
                 "view_stale",
                 "view",
                 content=raw_content,
                 data={
-                    "path": "firstcoder/context.py",
+                    "path": "lanscoder/context.py",
                     "start_line": 1,
                     "end_line": 500,
                     "total_lines": 2_000,
                     "truncated": True,
                 },
             ),
-            _tool_call("edit_stale", "edit", {"path": "firstcoder/context.py"}),
-            _tool_result("edit_stale", "edit", content="updated", data={"path": "firstcoder/context.py"}),
+            _tool_call("edit_stale", "edit", {"path": "lanscoder/context.py"}),
+            _tool_result("edit_stale", "edit", content="updated", data={"path": "lanscoder/context.py"}),
         ],
     )
 
@@ -1071,19 +1061,19 @@ def test_l3_archives_superseded_view_after_later_covering_view(tmp_path: Path) -
     view = SessionView(
         session_id="sess_test",
         messages=[
-            _tool_call("view_first", "view", {"path": "firstcoder/context.py", "offset": 0, "limit": 100}),
+            _tool_call("view_first", "view", {"path": "lanscoder/context.py", "offset": 0, "limit": 100}),
             _tool_result(
                 "view_first",
                 "view",
                 content=first_content,
-                data={"path": "firstcoder/context.py", "start_line": 1, "end_line": 100, "total_lines": 500, "truncated": True},
+                data={"path": "lanscoder/context.py", "start_line": 1, "end_line": 100, "total_lines": 500, "truncated": True},
             ),
-            _tool_call("view_second", "view", {"path": "firstcoder/context.py", "offset": 0, "limit": 500}),
+            _tool_call("view_second", "view", {"path": "lanscoder/context.py", "offset": 0, "limit": 500}),
             _tool_result(
                 "view_second",
                 "view",
                 content=second_content,
-                data={"path": "firstcoder/context.py", "start_line": 1, "end_line": 500, "total_lines": 500, "truncated": False},
+                data={"path": "lanscoder/context.py", "start_line": 1, "end_line": 500, "total_lines": 500, "truncated": False},
             ),
         ],
     )
@@ -1177,15 +1167,15 @@ def test_required_l3_runs_below_budget_and_repeat_is_idempotent(tmp_path: Path) 
     source_view = SessionView(
         session_id="sess_test",
         messages=[
-            _tool_call("view_required", "view", {"path": "firstcoder/context.py", "offset": 0, "limit": 20}),
+            _tool_call("view_required", "view", {"path": "lanscoder/context.py", "offset": 0, "limit": 20}),
             _tool_result(
                 "view_required",
                 "view",
                 content=raw_content,
-                data={"path": "firstcoder/context.py", "start_line": 1, "end_line": 20, "total_lines": 200, "truncated": True},
+                data={"path": "lanscoder/context.py", "start_line": 1, "end_line": 20, "total_lines": 200, "truncated": True},
             ),
-            _tool_call("write_required", "write", {"path": "firstcoder/context.py"}),
-            _tool_result("write_required", "write", content="updated", data={"path": "firstcoder/context.py"}),
+            _tool_call("write_required", "write", {"path": "lanscoder/context.py"}),
+            _tool_result("write_required", "write", content="updated", data={"path": "lanscoder/context.py"}),
         ],
     )
     pipeline = CompactionPipeline(root=tmp_path)
@@ -1224,7 +1214,7 @@ def test_task_switch_compaction_saves_context_without_breaking_tool_transaction(
     """A task switch must release old dialogue/output while retaining legal calls."""
 
     old_dialogue = "old-task discussion that is no longer actionable\n" * 240
-    old_search_output = "\n".join(f"firstcoder/old_module.py:{line}: obsolete_symbol_{line}" for line in range(1, 500))
+    old_search_output = "\n".join(f"lanscoder/old_module.py:{line}: obsolete_symbol_{line}" for line in range(1, 500))
     current_request = "Implement the new task and keep this request visible."
     view = SessionView(
         session_id="sess_test",

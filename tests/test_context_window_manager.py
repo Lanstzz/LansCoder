@@ -2,22 +2,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from firstcoder.context.compaction import CompactionEvent, CompactionResult
-from firstcoder.context.checkpoint import Checkpoint
-from firstcoder.context.events import SessionEvent
-from firstcoder.context.llm_compact import LlmCompactCandidate, LlmCompactEvent
-from firstcoder.context.manager import (
+from lanscoder.context.compaction import CompactionEvent, CompactionResult
+from lanscoder.context.checkpoint import Checkpoint
+from lanscoder.context.events import SessionEvent
+from lanscoder.context.llm_compact import LlmCompactCandidate, LlmCompactEvent
+from lanscoder.context.manager import (
     ContextCompactMode,
     ContextCompactRequest,
     ContextWindowManager,
     ContextWindowTrigger,
 )
-from firstcoder.context.models import AgentMessage, MessagePart, SessionView
-from firstcoder.context.runtime_state import SessionRuntimeState
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.context.token_budget import ContextBudget
-from firstcoder.context.triggers import ContextCompactionConfig
-from firstcoder.context.writer import SessionEventWriter
+from lanscoder.context.models import AgentMessage, MessagePart, SessionView
+from lanscoder.context.runtime_state import SessionRuntimeState
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.context.token_budget import ContextBudget
+from lanscoder.context.triggers import ContextCompactionConfig
+from lanscoder.context.writer import SessionEventWriter
 
 
 class FakePipeline:
@@ -150,24 +150,21 @@ def _compact_request(
 ) -> ContextCompactRequest:
     if estimate_budget is None:
         if estimate_tokens is not None:
-            estimate_budget = lambda candidate: _budget(
-                input_tokens=estimate_tokens(candidate)
-            )
+
+            def estimate_budget(candidate):
+                return _budget(input_tokens=estimate_tokens(candidate))
+
         else:
-            estimate_budget = lambda candidate: _budget(
-                input_tokens=(
-                    estimated_tokens
-                    if estimated_tokens is not None
-                    else 30
-                    if candidate.checkpoints
-                    or any(
-                        part.content == "short"
-                        for message in candidate.messages
-                        for part in message.parts
+
+            def estimate_budget(candidate):
+                return _budget(
+                    input_tokens=(
+                        estimated_tokens
+                        if estimated_tokens is not None
+                        else 30 if candidate.checkpoints or any(part.content == "short" for message in candidate.messages for part in message.parts) else 100
                     )
-                    else 100
                 )
-            )
+
     return ContextCompactRequest(
         view=view,
         runtime_state=runtime_state,
@@ -227,14 +224,10 @@ def test_manager_fails_without_l4_when_fixed_context_exceeds_low_watermark(tmp_p
 def test_manager_reports_unconsumed_result_when_input_exceeds_capacity(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "content"))
-    l4 = FakeL4(
-        _l4_result(status="failed", failure_reason="unconsumed_boundary")
-    )
+    l4 = FakeL4(_l4_result(status="failed", failure_reason="unconsumed_boundary"))
     manager = ContextWindowManager(
         store=store,
-        pipeline=FakePipeline(
-            _programmatic_result(view, before_tokens=30_000, after_tokens=28_000)
-        ),
+        pipeline=FakePipeline(_programmatic_result(view, before_tokens=30_000, after_tokens=28_000)),
         l4_service=l4,
     )
     over_capacity = _budget(input_tokens=28_000)

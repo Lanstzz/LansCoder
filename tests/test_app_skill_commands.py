@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from firstcoder.app.skill_commands import SkillCommandHandler
-from firstcoder.skills.discovery import discover_all_skills
-from firstcoder.skills.models import SkillCatalog
+from lanscoder.app.skill_commands import SkillCommandHandler
+from lanscoder.skills.discovery import discover_all_skills
+from lanscoder.skills.models import SkillCatalog
 
 
 def test_skills_command_lists_discovered_skills(tmp_path: Path, monkeypatch) -> None:

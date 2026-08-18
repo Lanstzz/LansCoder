@@ -3,9 +3,9 @@
 
 from pathlib import Path
 
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.memory.manager import project_memory_root
-from firstcoder.session.bootstrap import SessionBootstrap
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.memory.manager import project_memory_root
+from lanscoder.session.bootstrap import SessionBootstrap
 
 
 def test_memory_lifecycle_end_to_end(tmp_path: Path) -> None:

@@ -10,8 +10,8 @@ import time
 
 import pytest
 
-from firstcoder.runtime.cancellation import CancellationToken
-from firstcoder.utils.subprocess import CommandResult, run_command
+from lanscoder.runtime.cancellation import CancellationToken
+from lanscoder.utils.subprocess import CommandResult, run_command
 
 
 class TestRunCommand:
@@ -39,15 +39,8 @@ class TestRunCommand:
     @pytest.mark.skipif(os.name == "nt", reason="进程组断言使用 POSIX 进程组语义")
     def test_timeout_kills_process_group_and_collects_partial_output(self, tmp_path):
         marker = tmp_path / "grandchild-survived"
-        child_code = (
-            "import pathlib, time; time.sleep(0.5); "
-            f"pathlib.Path({str(marker)!r}).write_text('survived')"
-        )
-        command = (
-            f"printf 'before-timeout\\n'; "
-            f"{sys.executable} -c \"{child_code}\" & "
-            "wait"
-        )
+        child_code = "import pathlib, time; time.sleep(0.5); " f"pathlib.Path({str(marker)!r}).write_text('survived')"
+        command = f"printf 'before-timeout\\n'; " f'{sys.executable} -c "{child_code}" & ' "wait"
 
         result = run_command(command, cwd=tmp_path, timeout_seconds=0.1, shell=True)
 

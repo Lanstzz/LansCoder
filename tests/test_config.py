@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from firstcoder.config import AppConfig, load_config
-from firstcoder.config.models import ModelCatalogError
-from firstcoder.config.settings import default_global_config_path, render_default_config
-from firstcoder.providers.anthropic_provider import AnthropicProvider
-from firstcoder.providers.factory import (
+from lanscoder.config import AppConfig, load_config
+from lanscoder.config.models import ModelCatalogError
+from lanscoder.config.settings import default_global_config_path, render_default_config
+from lanscoder.providers.anthropic_provider import AnthropicProvider
+from lanscoder.providers.factory import (
     ProviderConfigError,
     create_provider_for_model,
 )
-from firstcoder.providers.openai_compatible import OpenAICompatibleProvider
-from firstcoder.providers.presets import PROVIDER_PRESETS
+from lanscoder.providers.openai_compatible import OpenAICompatibleProvider
+from lanscoder.providers.presets import PROVIDER_PRESETS
 
 
 def test_load_config_has_no_implicit_provider_without_catalog(tmp_path, monkeypatch):
@@ -24,9 +24,9 @@ def test_load_config_has_no_implicit_provider_without_catalog(tmp_path, monkeypa
     assert config.model_catalog().profiles == ()
 
 
-def test_load_config_reads_project_firstcoder_toml(tmp_path, monkeypatch):
-    monkeypatch.delenv("FIRSTCODER_PROVIDER", raising=False)
-    (tmp_path / "firstcoder.toml").write_text(
+def test_load_config_reads_project_lanscoder_toml(tmp_path, monkeypatch):
+    monkeypatch.delenv("LANSCODER_PROVIDER", raising=False)
+    (tmp_path / "lanscoder.toml").write_text(
         "\n".join(
             [
                 'default_model = "custom/custom-model"',
@@ -45,12 +45,12 @@ def test_load_config_reads_project_firstcoder_toml(tmp_path, monkeypatch):
     assert config.model_catalog().require("custom/custom-model").provider.id == "custom"
     assert config.get_config_value("default_model") == "custom/custom-model"
     assert config.model_catalog().require("custom/custom-model").provider.base_url == "https://example.com/v1"
-    assert config.project_config_path == tmp_path / "firstcoder.toml"
+    assert config.project_config_path == tmp_path / "lanscoder.toml"
 
 
 def test_legacy_environment_provider_does_not_override_catalog(tmp_path, monkeypatch):
-    monkeypatch.setenv("FIRSTCODER_PROVIDER", "deepseek")
-    (tmp_path / "firstcoder.toml").write_text(
+    monkeypatch.setenv("LANSCODER_PROVIDER", "deepseek")
+    (tmp_path / "lanscoder.toml").write_text(
         "\n".join(['default_model = "custom/model"', "[providers.custom]", 'type = "openai-compatible"', '[models."custom/model"]']),
         encoding="utf-8",
     )
@@ -123,7 +123,7 @@ def test_model_catalog_rejects_output_reserve_that_exhausts_window() -> None:
 def test_default_global_config_path_respects_xdg_config_home(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
-    assert default_global_config_path() == tmp_path / "firstcoder" / "config.toml"
+    assert default_global_config_path() == tmp_path / "lanscoder" / "config.toml"
 
 
 def test_mcp_config_merges_servers_without_using_provider_accessors():
@@ -160,7 +160,7 @@ def test_openai_compatible_presets_have_constructable_metadata():
         assert preset.capabilities.supports_tools is True
 
 
-def test_catalog_preset_provider_passes_openrouter_headers():
+def test_catalog_preset_builds_openrouter_provider_without_extra_headers():
     config = AppConfig(
         env={"OPENROUTER_API_KEY": "test-key"},
         project_config={
@@ -173,7 +173,7 @@ def test_catalog_preset_provider_passes_openrouter_headers():
 
     assert isinstance(provider, OpenAICompatibleProvider)
     assert provider.base_url == "https://openrouter.ai/api/v1"
-    assert provider.extra_headers["X-Title"] == "FirstCoder"
+    assert not provider.extra_headers
 
 
 def test_model_catalog_deep_merges_global_and_project_entries() -> None:

@@ -1,10 +1,10 @@
 import json
 from pathlib import Path
 
-from firstcoder.context.events import SessionEvent
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.session.catalog import SessionCatalog
-from firstcoder.session.index import SessionIndex
+from lanscoder.context.events import SessionEvent
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.session.catalog import SessionCatalog
+from lanscoder.session.index import SessionIndex
 
 
 def test_store_append_event_updates_session_index(tmp_path: Path) -> None:

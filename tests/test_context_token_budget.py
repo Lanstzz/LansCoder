@@ -1,8 +1,8 @@
 import pytest
 
-from firstcoder.context.token_budget import build_context_budget
-from firstcoder.context.budget_defaults import DEFAULT_CONTEXT_WINDOW
-from firstcoder.providers.types import ChatMessage, ContentPart, ToolDefinition
+from lanscoder.context.token_budget import build_context_budget
+from lanscoder.context.budget_defaults import DEFAULT_CONTEXT_WINDOW
+from lanscoder.providers.types import ChatMessage, ContentPart, ToolDefinition
 
 
 @pytest.mark.parametrize(

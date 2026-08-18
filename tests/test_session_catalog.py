@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from firstcoder.context.events import SessionEvent
-from firstcoder.context.store import JsonlSessionStore
-from firstcoder.session.catalog import SessionCatalog
-from firstcoder.session.errors import SessionInvalidIdError, SessionNotFoundError
+from lanscoder.context.events import SessionEvent
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.session.catalog import SessionCatalog
+from lanscoder.session.errors import SessionInvalidIdError, SessionNotFoundError
 
 
 def _append(store: JsonlSessionStore, event: SessionEvent) -> None:
