@@ -853,6 +853,74 @@ def test_end_to_end_model_receives_task_notification(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# nudge turn（唤醒轮次）：不写 user_message，仅投递待处理通知
+# ---------------------------------------------------------------------------
+
+
+def test_nudge_turn_drains_pending_completion_without_user_message(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    manager = BackgroundJobManager()
+    try:
+        provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="reported")])
+        loop = _loop_with_manager(
+            store,
+            "sess_bg_nudge",
+            tools=[_bg_tool("shell")],
+            manager=manager,
+            provider=provider,
+        )
+        session = loop.session
+        session.append_user_message("go")
+        call = _tool_call("call_bg", "shell", text="ok", run_in_background=True)
+        session.append_assistant_response(_assistant_with_tool_call(call))
+        loop.tool_executor.execute_interactive([call])
+        assert manager.wait(timeout=5) is True
+        assert manager.pending_completions(session_id=session.session_id), "job should be pending"
+
+        turn_before = session.current_turn
+        user_ids_before = {m.id for m in session.rebuild_view().messages if m.role == "user"}
+
+        result = loop._run_nudge_turn_sync()
+
+        assert result.content == "reported"
+
+        view = session.rebuild_view()
+        # 没有新增 user 消息，turn 计数不变。
+        assert session.current_turn == turn_before
+        assert {m.id for m in view.messages if m.role == "user"} == user_ids_before
+        # 通知以 notification role 落库，模型汇报以 assistant 落库。
+        assert any(m.role == "notification" and "<task_notification>" in m.parts[0].content for m in view.messages)
+        assert any(m.role == "assistant" and m.parts[0].content == "reported" for m in view.messages)
+    finally:
+        manager.shutdown()
+
+
+def test_nudge_turn_noop_when_no_pending_completions(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    manager = BackgroundJobManager()
+    try:
+        provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="should not run")])
+        loop = _loop_with_manager(
+            store,
+            "sess_bg_nudge_noop",
+            tools=[_bg_tool("shell")],
+            manager=manager,
+            provider=provider,
+        )
+        session = loop.session
+        session.append_user_message("go")
+
+        result = loop._run_nudge_turn_sync()
+
+        # 无待投递：短路，不调用 provider、不写 assistant 消息。
+        assert result.response is None
+        assert provider.requests == []
+        assert not any(m.role == "assistant" for m in session.rebuild_view().messages)
+    finally:
+        manager.shutdown()
+
+
+# ---------------------------------------------------------------------------
 # control tools
 # ---------------------------------------------------------------------------
 

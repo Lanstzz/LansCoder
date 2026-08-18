@@ -313,6 +313,27 @@ class AgentChatRunner:
             self._finish_cancellable_turn(cancellation_token)
         return self._finish_agent_result(before_count, loop, result)
 
+    async def anudge_turn(self) -> ChatResponse:
+        """运行一个不带用户输入的唤醒轮次，投递待处理的后台完成通知。
+
+        用于子 agent 完成后唤醒主 agent 汇报结果。与 arun_user_turn 的区别是
+        不写 user_message、不递增 current_turn；通知内容由 AgentLoop 内部
+        _append_background_notifications 投影成 provider 的 user 消息。
+        """
+
+        before_count, cancellation_token, loop = self._start_turn(streaming=self.use_streaming)
+        try:
+            result = await anyio.to_thread.run_sync(
+                _run_coroutine_in_thread,
+                loop.run_nudge_turn(streaming=self.use_streaming),
+            )
+        finally:
+            self._finish_cancellable_turn(cancellation_token)
+        if result.response is None:
+            # 无待投递通知：不产生任何输出。
+            return ChatResponse(provider=self.provider.name, model=self.provider.model, content="")
+        return self._finish_agent_result(before_count, loop, result)
+
     # 异步权限恢复入口，流程同 arun_user_turn()，但走 _resume_turn() 复用
     # 暂停的 AgentLoop，调用 AgentLoop.resume_with_user_input()。
     async def aresume_with_user_input(self, request_id: str, answer: str) -> ChatResponse:

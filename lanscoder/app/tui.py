@@ -290,7 +290,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
 
         # If idle, start a new turn so the model can report immediately.
         if not self._chat_busy and self.chat_runner is not None:
-            self._submit_chat_text("子agent任务已完成，请查看结果并汇报。")
+            self._submit_nudge_turn()
 
     def _has_pending_background_completions(self) -> bool:
         """Whether completed background jobs are still awaiting delivery.
@@ -550,7 +550,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         #    drains completions on its next provider request, so this only
         #    fires when something is genuinely still undelivered.
         if self._has_pending_background_completions():
-            self._submit_chat_text("子agent任务已完成，请查看结果并汇报。")
+            self._submit_nudge_turn()
             return
 
     def _handle_escape_interrupt(self) -> bool:
@@ -665,6 +665,15 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._chat_busy = True
         token = self._begin_active_chat_turn()
         self._chat_worker = self.run_worker(self._run_chat_turn(text, token, attachments=attachments))
+
+    def _submit_nudge_turn(self) -> None:
+        """开始一个不带用户输入的唤醒轮次，投递后台子 agent 完成通知。"""
+
+        if self.chat_runner is None or self._chat_busy:
+            return
+        self._chat_busy = True
+        token = self._begin_active_chat_turn()
+        self._chat_worker = self.run_worker(self._run_nudge_turn(token))
 
     def _handle_command_action(self, action: dict[str, Any] | None, *, output: str = "") -> bool:
         if not action:
@@ -975,6 +984,35 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             self._finish_chat_turn(token)
 
         if self._is_current_chat_turn(token):
+            self._write_chat_response(response)
+
+    async def _run_nudge_turn(self, token: int) -> None:
+        previous_stream_handler = None
+        previous_tool_handler = None
+        try:
+            previous_stream_handler = self._install_stream_event_handler(token)
+            previous_tool_handler = self._install_tool_event_handler(token)
+            if self._active_chat_turn is None:
+                self._start_turn_metrics()
+                self._active_chat_turn = _ActiveChatTurn(
+                    id=uuid4().hex,
+                    token=token,
+                )
+            self._show_working_indicator("planning next step...")
+            response = await self.chat_runner.anudge_turn()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            if self._is_current_chat_turn(token):
+                self._write_line(f"Chat error: {exc}", kind=TuiEntryKind.ERROR)
+                self._refresh_session_subtitle()
+            return
+        finally:
+            self._restore_tool_event_handler(previous_tool_handler)
+            self._restore_stream_event_handler(previous_stream_handler)
+            self._finish_chat_turn(token)
+
+        if self._is_current_chat_turn(token) and getattr(response, "content", ""):
             self._write_chat_response(response)
 
     def _write_chat_response(self, response) -> None:
