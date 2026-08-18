@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from lanscoder.context.checkpoint import Checkpoint
 
 
-MessageRole = Literal["user", "assistant", "tool", "system_meta"]
+MessageRole = Literal["user", "assistant", "tool", "notification", "system_meta"]
 PartKind = Literal[
     "text",
     "tool_call",

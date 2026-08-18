@@ -250,6 +250,28 @@ def _make_msg(msg_id: str, role: str, content: str, turn: int = 1):
     )
 
 
+def _make_background_notification(msg_id: str, content: str, turn: int = 1):
+    from lanscoder.context.models import AgentMessage, MessagePart
+    return AgentMessage(
+        id=msg_id,
+        session_id="sess_test",
+        role="notification",
+        parts=[MessagePart(
+            id=f"part_{msg_id}",
+            message_id=msg_id,
+            kind="text",
+            content=content,
+            metadata={
+                "created_turn": turn,
+                "turn_id": turn,
+                "background_job_id": "bg_0001",
+                "background_tool_name": "delegate",
+                "background_status": "completed",
+            },
+        )],
+    )
+
+
 class TestRecallCommandHandler:
     def test_handler_lists_user_messages(self):
         messages = [
@@ -282,6 +304,30 @@ class TestRecallCommandHandler:
         assert turns[1]["message_id"] == "msg_03"
         assert turns[2]["turn_number"] == 3
         assert turns[2]["message_id"] == "msg_05"
+
+    def test_handler_excludes_background_notifications(self):
+        messages = [
+            _make_msg("msg_01", "user", "hello world", 1),
+            _make_msg("msg_02", "assistant", "hi there", 1),
+            _make_background_notification("msg_notif", "<task_notification>…</task_notification>", 1),
+            _make_msg("msg_03", "user", "do something please", 2),
+            _make_msg("msg_04", "assistant", "ok", 2),
+        ]
+        session = _FakeSessionLike("sess_test", messages)
+        handler = RecallCommandHandler(
+            session=session,
+            store=None,  # type: ignore[arg-type]
+            bootstrap=None,  # type: ignore[arg-type]
+            on_recall=None,  # type: ignore[arg-type]
+        )
+
+        result = handler.handle("/recall")
+
+        assert result.handled is True
+        assert result.action is not None
+        assert result.action["type"] == "recall_picker"
+        turns = result.action["turns"]
+        assert [turn["message_id"] for turn in turns] == ["msg_01", "msg_03"]
 
     def test_handler_ignores_non_recall_commands(self):
         handler = RecallCommandHandler(

@@ -130,6 +130,14 @@ class ContextBuilder:
                 return []
             return [ChatMessage(role="user", content=content, content_parts=content_parts)]
 
+        if message.role == "notification":
+            # 后台完成通知需要以 user 角色发给 provider，但它不是真正的用户轮次，因此不
+            # 带 basis_message_id 锚点，也不参与 task_boundary 的任务哈希。
+            content = _join_visible_text(message.parts, preserve_trimmed_text=preserve_trimmed_text)
+            if not content:
+                return []
+            return [ChatMessage(role="user", content=content)]
+
         return []
 
 

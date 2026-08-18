@@ -211,39 +211,42 @@ class SubagentRunner:
         """Original Phase 2 behaviour: run the child against the parent-rooted tools."""
 
         child_session = self.create_child_session(request, profile=profile)
-        prompt = self._child_prompt(request, profile=profile)
-        from lanscoder.agent.loop import AgentLoop
-
-        loop = AgentLoop(
-            session=child_session,
-            provider=self.provider,
-            tools=self.tools_for_role(request.role),
-            limits=self.limits,
-            request_options=self.request_options,
-            background_manager=None,
-            enable_delegate_tool=False,
-            progress_callback=self._make_progress_callback(),
-        )
         try:
-            result = asyncio.run(loop.run_user_turn(prompt))
-            response = result.response
-            if response is None:
-                raise RuntimeError("subagent paused for user input")
-        except Exception as exc:  # noqa: BLE001 - delegate must return a tool result, not break parent loop
+            prompt = self._child_prompt(request, profile=profile)
+            from lanscoder.agent.loop import AgentLoop
+
+            loop = AgentLoop(
+                session=child_session,
+                provider=self.provider,
+                tools=self.tools_for_role(request.role),
+                limits=self.limits,
+                request_options=self.request_options,
+                background_manager=None,
+                enable_delegate_tool=False,
+                progress_callback=self._make_progress_callback(),
+            )
+            try:
+                result = asyncio.run(loop.run_user_turn(prompt))
+                response = result.response
+                if response is None:
+                    raise RuntimeError("subagent paused for user input")
+            except Exception as exc:  # noqa: BLE001 - delegate must return a tool result, not break parent loop
+                return SubagentResult(
+                    ok=False,
+                    role=request.role,
+                    child_session_id=child_session.session_id,
+                    summary=f"Subagent failed: {exc}",
+                    error=str(exc),
+                )
+            content = response.content.strip() or "Subagent finished without text output."
             return SubagentResult(
-                ok=False,
+                ok=True,
                 role=request.role,
                 child_session_id=child_session.session_id,
-                summary=f"Subagent failed: {exc}",
-                error=str(exc),
+                summary=content,
             )
-        content = response.content.strip() or "Subagent finished without text output."
-        return SubagentResult(
-            ok=True,
-            role=request.role,
-            child_session_id=child_session.session_id,
-            summary=content,
-        )
+        finally:
+            self._delete_child_session(child_session.session_id)
 
     def _run_isolated(self, request: SubagentRequest, *, profile: SubagentProfile) -> SubagentResult:
         """Phase 4: run a mutation-capable child inside a dedicated git worktree.
@@ -287,61 +290,64 @@ class SubagentRunner:
 
         try:
             child_session = self._create_isolated_child_session(request, profile=profile, worktree=worktree, session_id=session_id)
-            prompt = self._child_prompt(request, profile=profile, worktree=worktree)
-            from lanscoder.agent.loop import AgentLoop
-
-            loop = AgentLoop(
-                session=child_session,
-                provider=self.provider,
-                tools=self._worktree_child_tools(worktree.path, profile=profile, access=child_session.sandbox_access),
-                limits=self.limits,
-                request_options=self.request_options,
-                background_manager=None,
-                enable_delegate_tool=False,
-                progress_callback=self._make_progress_callback(),
-            )
             try:
-                result = asyncio.run(loop.run_user_turn(prompt))
-                response = result.response
-                if response is None:
+                prompt = self._child_prompt(request, profile=profile, worktree=worktree)
+                from lanscoder.agent.loop import AgentLoop
+
+                loop = AgentLoop(
+                    session=child_session,
+                    provider=self.provider,
+                    tools=self._worktree_child_tools(worktree.path, profile=profile, access=child_session.sandbox_access),
+                    limits=self.limits,
+                    request_options=self.request_options,
+                    background_manager=None,
+                    enable_delegate_tool=False,
+                    progress_callback=self._make_progress_callback(),
+                )
+                try:
+                    result = asyncio.run(loop.run_user_turn(prompt))
+                    response = result.response
+                    if response is None:
+                        diff = manager.diff(worktree)
+                        return SubagentResult(
+                            ok=False,
+                            role=request.role,
+                            child_session_id=session_id,
+                            summary="隔离 coder 等待用户输入，无法在后台继续。",
+                            error="waiting_for_user_input",
+                            files_changed=diff.files_changed,
+                            worktree_path=str(worktree.path),
+                            worktree_branch=worktree.branch,
+                            diff_summary=diff.render(),
+                        )
+                except Exception as exc:  # noqa: BLE001 - never break the parent loop
                     diff = manager.diff(worktree)
                     return SubagentResult(
                         ok=False,
                         role=request.role,
                         child_session_id=session_id,
-                        summary="隔离 coder 等待用户输入，无法在后台继续。",
-                        error="waiting_for_user_input",
+                        summary=f"隔离 coder 执行失败：{exc}",
+                        error=str(exc),
                         files_changed=diff.files_changed,
                         worktree_path=str(worktree.path),
                         worktree_branch=worktree.branch,
                         diff_summary=diff.render(),
                     )
-            except Exception as exc:  # noqa: BLE001 - never break the parent loop
                 diff = manager.diff(worktree)
+                content = response.content.strip() or "Subagent finished without text output."
+                summary = self._compose_isolated_summary(content, worktree=worktree, diff=diff)
                 return SubagentResult(
-                    ok=False,
+                    ok=True,
                     role=request.role,
                     child_session_id=session_id,
-                    summary=f"隔离 coder 执行失败：{exc}",
-                    error=str(exc),
+                    summary=summary,
                     files_changed=diff.files_changed,
                     worktree_path=str(worktree.path),
                     worktree_branch=worktree.branch,
                     diff_summary=diff.render(),
                 )
-            diff = manager.diff(worktree)
-            content = response.content.strip() or "Subagent finished without text output."
-            summary = self._compose_isolated_summary(content, worktree=worktree, diff=diff)
-            return SubagentResult(
-                ok=True,
-                role=request.role,
-                child_session_id=session_id,
-                summary=summary,
-                files_changed=diff.files_changed,
-                worktree_path=str(worktree.path),
-                worktree_branch=worktree.branch,
-                diff_summary=diff.render(),
-            )
+            finally:
+                self._delete_child_session(session_id)
         except Exception as exc:  # noqa: BLE001 - defensive: setup failures must not break parent loop
             return SubagentResult(
                 ok=False,
@@ -376,6 +382,18 @@ class SubagentRunner:
             delegate_task=request.task,
         )
         return child
+
+    def _delete_child_session(self, session_id: str) -> None:
+        """Best-effort cleanup of a finished child session.
+
+        Child sessions are ephemeral working transcripts; once the subagent has
+        produced its result they must not linger in ``/resume``. Cleanup must
+        never break the parent loop, so failures are swallowed.
+        """
+        try:
+            self.store.delete_session(session_id)
+        except Exception:  # noqa: BLE001 - cleanup must never break the parent loop
+            pass
 
     def _supplied_tools_for_child(self, role: str) -> list[Tool]:
         """Tools passed into AgentSession.create, excluding session-reserved tools.
