@@ -57,7 +57,59 @@ class ComposerTextArea(TextArea):
     class Submitted(Message):
         pass
 
+    def _get_slash_suggest(self):
+        """Return the SlashSuggest widget, or None if not found."""
+        try:
+            return self.app.query_one("#slash-suggest")
+        except Exception:
+            return None
+
+    def _update_slash_suggest(self, suggest) -> None:
+        """Update slash-command suggestions based on current input text."""
+        suggest.update_suggestions(self.text)
+
     async def _on_key(self, event: events.Key) -> None:
+        # ── slash-command autocomplete ──────────────────────────────
+        suggest = self._get_slash_suggest()
+        if suggest is not None and suggest.has_class("--visible"):
+            if event.key == "enter":
+                event.stop()
+                event.prevent_default()
+                cmd = suggest.selected_command()
+                if cmd:
+                    self.load_text(cmd)
+                    self.cursor_location = self.document.end
+                suggest.remove_class("--visible")
+                self.post_message(self.Submitted())
+                return
+            if event.key == "tab":
+                event.stop()
+                event.prevent_default()
+                cmd = suggest.selected_command()
+                if cmd:
+                    self.load_text(cmd)
+                    self.cursor_location = self.document.end
+                suggest.remove_class("--visible")
+                return
+            if event.key == "escape":
+                event.stop()
+                event.prevent_default()
+                suggest.remove_class("--visible")
+                return
+            if event.key == "up":
+                event.stop()
+                event.prevent_default()
+                if suggest.highlight is not None and suggest.highlight > 0:
+                    suggest.action_cursor_up()
+                return
+            if event.key == "down":
+                event.stop()
+                event.prevent_default()
+                options = suggest._options
+                if suggest.highlight is not None and suggest.highlight < len(options) - 1:
+                    suggest.action_cursor_down()
+                return
+        # ── existing key handling ───────────────────────────────────
         if event.key == "enter":
             event.stop()
             event.prevent_default()
@@ -69,6 +121,9 @@ class ComposerTextArea(TextArea):
             self.insert("\n")
             return
         await super()._on_key(event)
+        # ── update suggestions after text change ────────────────────
+        if suggest is not None:
+            self._update_slash_suggest(suggest)
 
     async def _on_paste(self, event: events.Paste) -> None:
         """Stage pasted files before TextArea inserts their paths as text."""

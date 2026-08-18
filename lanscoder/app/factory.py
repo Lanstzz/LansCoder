@@ -353,7 +353,7 @@ def create_lanscoder_app(
     )
     help_handler = HelpCommandHandler(command_handler=command_handler)
     command_handler.handlers.insert(0, help_handler)
-    return LansCoderApp(
+    app = LansCoderApp(
         command_handler=command_handler,
         chat_runner=chat_runner,
         current_session=current,
@@ -365,6 +365,8 @@ def create_lanscoder_app(
         ),
         on_shutdown=mcp_manager.close,
     )
+    app.set_slash_commands(command_handler.all_commands())
+    return app
 
 
 # streaming 需要双重确认：provider 能力（capabilities.supports_streaming）+

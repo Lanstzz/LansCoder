@@ -28,6 +28,7 @@ from textual.widgets import Static, TextArea
 
 from lanscoder.app.ports import ChatRunnerLike, CommandHandlerLike, CurrentSessionLike
 from lanscoder.app.picker import TuiPickerState, render_picker
+from lanscoder.app.slash_suggest import SlashSuggest
 from lanscoder.app.picker_adapters import (
     model_picker_item,
     picker_command,
@@ -185,6 +186,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             yield _plain_static("", id="task-plan-panel", classes="task-plan-panel hidden")
             yield Static("idle · ready", id="activity", classes="activity-line")
             with Vertical(id="composer", classes="composer"):
+                yield SlashSuggest(id="slash-suggest")
                 yield ComposerTextArea(
                     placeholder="输入消息，Enter 发送，Shift+Enter 换行，Ctrl/Cmd+V 粘贴图片",
                     id="input",
@@ -198,6 +200,23 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._refresh_session_subtitle()
         self._show_welcome()
         self._sync_provider_glow()
+        commands = getattr(self, "_slash_commands", None)
+        if commands is None and self.command_handler is not None:
+            fetch = getattr(self.command_handler, "all_commands", None)
+            if fetch is not None:
+                commands = fetch()
+        if commands is not None:
+            suggest = self.query_one("#slash-suggest", SlashSuggest)
+            suggest.set_commands(commands)
+
+    def set_slash_commands(self, commands: list[tuple[str, str]]) -> None:
+        """Set the full command list for the slash-command autocomplete dropdown."""
+        self._slash_commands = commands
+        try:
+            suggest = self.query_one("#slash-suggest", SlashSuggest)
+            suggest.set_commands(commands)
+        except Exception:
+            pass  # DOM not composed yet; on_mount will apply
 
     def _on_terminal_resized(self) -> None:
         """Refresh chrome after Textual has applied a terminal-size change."""
