@@ -8,12 +8,12 @@ environment, and a verifier. Harbor resolves the dataset, starts the task
 environment, runs the selected agent, invokes the verifier after the agent
 exits, and records job and trial artifacts.
 
-FirstCoder deliberately does not implement dataset-specific runners. Harbor is
+LansCoder deliberately does not implement dataset-specific runners. Harbor is
 the only benchmark integration maintained by this repository.
 
-## How FirstCoder participates
+## How LansCoder participates
 
-`benchmark.harbor.firstcoder_agent:FirstCoderHarborAgent` is an installed-agent
+`benchmark.harbor.lanscoder_agent:LansCoderHarborAgent` is an installed-agent
 adapter. For each task it stages only `pyproject.toml`, `README.md`, and
 `lanscoder/`, creates an isolated agent virtual environment, and runs one
 non-interactive `lanscoder --benchmark` turn in Harbor's task directory.
@@ -28,7 +28,7 @@ The upstream Aider Polyglot benchmark permits one repair turn after the first
 test run fails. For an Aider-comparable local run, opt in to the benchmark-only
 plugin below. It keeps the first agent turn blind to verifier files, and only
 after a real `reward=0` sends the verifier's test output back through the same
-FirstCoder session. Timeouts, missing reward files, and provider failures do
+LansCoder session. Timeouts, missing reward files, and provider failures do
 not receive a repair turn.
 
 For a long-running local suite, classify infrastructure failures separately from `reward=0`: network/provider errors, Docker environment failures, timeouts, and a verifier that fails before writing `reward.txt` do not carry the same interpretation as an implementation failing its tests. The run report documents examples and recovery commands.
@@ -36,7 +36,7 @@ For a long-running local suite, classify infrastructure failures separately from
 ```sh
 PYTHONPATH="$PWD" .venv/bin/harbor run \
   -p .local/harbor-datasets/aider-polyglot \
-  -a benchmark.harbor.firstcoder_agent:FirstCoderHarborAgent \
+  -a benchmark.harbor.lanscoder_agent:LansCoderHarborAgent \
   --plugin benchmark.harbor.aider_feedback_plugin:AiderFeedbackPlugin \
   -m gpt-5.6-luna -n 2 -k 1 \
   --ak max_tool_rounds=120 --ak reasoning_effort=high \
@@ -48,7 +48,7 @@ protocol does not explicitly allow test-feedback repair rounds.
 
 ## Install Harbor
 
-Install Harbor in FirstCoder's development environment:
+Install Harbor in LansCoder's development environment:
 
 ```sh
 .venv/bin/python -m pip install 'harbor==0.18.0'
@@ -85,7 +85,7 @@ your own values:
 zsh -lic 'export PYTHONPATH="$PWD"; .venv/bin/harbor run \
   -d DATASET_NAME \
   -i TASK_NAME \
-  -a benchmark.harbor.firstcoder_agent:FirstCoderHarborAgent \
+  -a benchmark.harbor.lanscoder_agent:LansCoderHarborAgent \
   -m Yuren/gpt-5.6-terra \
   -n 1 -k 1 --ak max_tool_rounds=120 --ak reasoning_effort=medium \
   --agent-setup-timeout-multiplier 3 \
@@ -98,18 +98,18 @@ zsh -lic 'export PYTHONPATH="$PWD"; .venv/bin/harbor run \
 ```
 
 `-m` records model metadata in Harbor. The `LANSCODER_*` variables configure
-the FirstCoder process inside the task. Do not add `--upload` unless publishing
+the LansCoder process inside the task. Do not add `--upload` unless publishing
 results is explicitly intended.
 
-`reasoning_effort` is optional and is passed to FirstCoder as a provider-specific
+`reasoning_effort` is optional and is passed to LansCoder as a provider-specific
 model request field. Whether values such as `low`, `medium`, or `high` are
 accepted depends on the selected provider/model.
 
 ## Reuse dependencies across trials
 
-By default Harbor gives every trial a fresh container, so FirstCoder's Python
+By default Harbor gives every trial a fresh container, so LansCoder's Python
 dependencies are downloaded again for each task. The adapter installs into a
-shared pip/uv cache at `/opt/firstcoder-cache`. Bind-mount a host directory
+shared pip/uv cache at `/opt/lanscoder-cache`. Bind-mount a host directory
 there with Harbor's `--mounts` so wheels download once and are reused across
 trials and concurrent containers:
 
@@ -117,7 +117,7 @@ trials and concurrent containers:
 mkdir -p "$HOME/.cache/lanscoder-harbor"
 .venv/bin/harbor run \
   ... \
-  --mounts '[{"type":"bind","source":"'"$HOME"'/.cache/lanscoder-harbor","target":"/opt/firstcoder-cache"}]' \
+  --mounts '[{"type":"bind","source":"'"$HOME"'/.cache/lanscoder-harbor","target":"/opt/lanscoder-cache"}]' \
   ...
 ```
 
@@ -144,6 +144,6 @@ the trial reward and verifier logs as the completion evidence.
 ## Windows
 
 Use Docker Desktop in Linux containers mode for normal Harbor task images. Run
-the commands from a shell whose working directory is the FirstCoder repository,
+the commands from a shell whose working directory is the LansCoder repository,
 keep `PYTHONPATH` pointed at that checkout, and start with one task and `-n 1`.
 Verify the agent log and verifier result before increasing concurrency.
