@@ -327,8 +327,9 @@ def test_isolated_coder_can_delete_inside_worktree_without_parent_delete(tmp_pat
     assert (repo / "seed.txt").exists()
 
 
-def test_isolated_coder_waiting_for_permission_is_failure_with_diff(tmp_path) -> None:
-    """If a child still needs user input, background delegate must not report success."""
+def test_isolated_coder_dangerous_shell_is_denied_not_waiting(tmp_path) -> None:
+    """A dangerous shell in a background coder is auto-DENIED (not paused), so the
+    child keeps running instead of surfacing waiting_for_user_input."""
 
     from lanscoder.agent.subagent import SubagentRequest, SubagentRunner
 
@@ -344,7 +345,8 @@ def test_isolated_coder_waiting_for_permission_is_failure_with_diff(tmp_path) ->
                 content="",
                 tool_calls=[shell_call],
                 finish_reason="tool_calls",
-            )
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="rm was denied; leaving the file."),
         ]
     )
     runner = SubagentRunner(
@@ -357,17 +359,39 @@ def test_isolated_coder_waiting_for_permission_is_failure_with_diff(tmp_path) ->
     result = runner.run(
         SubagentRequest(
             role="coder",
-            task="run dangerous shell",
+            task="try dangerous shell",
             parent_session_id="p1",
             isolate_worktree=True,
         )
     )
 
-    assert result.ok is False
-    assert result.error == "waiting_for_user_input"
+    assert result.ok is True
+    assert result.error is None
     assert result.worktree_path is not None
     assert (Path(result.worktree_path) / "seed.txt").exists()
     assert (repo / "seed.txt").exists()
+
+
+def test_background_child_permission_manager_is_autonomous(tmp_path) -> None:
+    """Background non-worktree subagents get an autonomous AGGRESSIVE manager so
+    they never pause for interactive confirmation."""
+
+    from lanscoder.permissions.types import PermissionMode
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runner = SubagentRunner(
+        store=JsonlSessionStore(repo / ".fc_sessions"),
+        provider=FakeProvider([]),
+        tools=[],
+        project_root=repo,
+    )
+
+    manager = runner._background_child_permission_manager()
+
+    assert manager is not None
+    assert manager.autonomous is True
+    assert manager.mode == PermissionMode.AGGRESSIVE
 
 
 def test_background_coder_uses_worktree_and_leaves_parent_untouched(tmp_path) -> None:
