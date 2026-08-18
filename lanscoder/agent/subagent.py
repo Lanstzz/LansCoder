@@ -356,7 +356,7 @@ class SubagentRunner:
             agents_md=self.agents_md,
             skill_catalog=self.skill_catalog,
             tools=self._supplied_tools_for_child(profile.role),
-            permission_manager=self.permission_manager,
+            permission_manager=self._child_permission_manager_for_inline(),
             sandbox_access=self.sandbox_access,
         )
         child.writer.append_session_metadata_updated(
@@ -420,6 +420,33 @@ class SubagentRunner:
         )
         return child
 
+    def _child_permission_manager_for_inline(self) -> PermissionManager | None:
+        """Clone the parent permission manager with a NETWORK_REQUEST grant added.
+
+        Inline subagents (researcher, tester, reviewer) inherit the parent's policy
+        and mode, but need web_search/fetch auto-allowed so they never pause for
+        interactive confirmation.
+        """
+        if self.permission_manager is None:
+            return None
+        grants = PermissionGrantStore(grants=self.permission_manager.grants.list())
+        grants.add(
+            PermissionGrant(
+                id="grant_subagent_network_request",
+                effect="allow",
+                action=PermissionAction.NETWORK_REQUEST,
+                scope_type=PermissionScopeType.HOST,
+                scope_value="*",
+                created_at="runtime",
+                reason="Subagent may make read-only network requests (web_search, fetch).",
+            )
+        )
+        return PermissionManager(
+            policy=self.permission_manager.policy,
+            grants=grants,
+            mode=self.permission_manager.mode,
+        )
+
     def _child_permission_manager(self, root) -> PermissionManager:
         """Build an autonomous permission manager scoped to the worktree root.
 
@@ -446,6 +473,17 @@ class SubagentRunner:
                     reason="Isolated background coder may mutate only its dedicated worktree.",
                 )
             )
+        grants.add(
+            PermissionGrant(
+                id="grant_subagent_network_request",
+                effect="allow",
+                action=PermissionAction.NETWORK_REQUEST,
+                scope_type=PermissionScopeType.HOST,
+                scope_value="*",
+                created_at="runtime",
+                reason="Subagent may make read-only network requests (web_search, fetch).",
+            )
+        )
         return PermissionManager(
             policy=DefaultPermissionPolicy(root),
             grants=grants,
