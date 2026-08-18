@@ -14,6 +14,24 @@ def sample_tool(path: str, max_chars: int = 100, dry_run: bool = False, ratio: f
     return make_text_result("sample_tool", f"{path}:{max_chars}:{dry_run}:{ratio}")
 
 
+def list_tool(paths: list[str]) -> ToolResult:
+    """读取多个文件。"""
+
+    return make_text_result("list_tool", str(paths))
+
+
+def optional_list_tool(paths: list[str] | None = None) -> ToolResult:
+    """可选多文件。"""
+
+    return make_text_result("optional_list_tool", str(paths))
+
+
+def optional_str_tool(name: str | None = None) -> ToolResult:
+    """可选字符串。"""
+
+    return make_text_result("optional_str_tool", str(name))
+
+
 def test_function_to_parameters_uses_signature_annotations_and_defaults():
     parameters = function_to_parameters(sample_tool)
 
@@ -43,6 +61,33 @@ def test_tool_from_function_allows_name_and_description_override():
 
     assert tool.name == "read_file"
     assert tool.definition.description == "读取项目文件。"
+
+
+def test_function_to_parameters_generic_list_becomes_array_with_items():
+    parameters = function_to_parameters(list_tool)
+
+    assert parameters["properties"]["paths"] == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+    assert parameters["required"] == ["paths"]
+
+
+def test_function_to_parameters_optional_list_unwraps_to_array():
+    parameters = function_to_parameters(optional_list_tool)
+
+    assert parameters["properties"]["paths"] == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+    assert "paths" not in parameters.get("required", [])
+
+
+def test_function_to_parameters_optional_scalar_unwraps():
+    parameters = function_to_parameters(optional_str_tool)
+
+    assert parameters["properties"]["name"] == {"type": "string"}
+    assert "name" not in parameters.get("required", [])
 
 
 def test_function_to_parameters_rejects_args_and_kwargs():

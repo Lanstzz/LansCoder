@@ -453,15 +453,24 @@ def run_repl(
             break
 
         if pending is not None:
-            if _pending_kind(pending) == "permission_confirmation":
+            kind = _pending_kind(pending)
+            if kind == "permission_confirmation":
                 choice = _permission_choice_for_text(line, pending)
                 if choice is None:
                     print(f"Unknown permission choice: {line}")
                     print(_permission_choice_help_text(pending))
                     print(_permission_options_text(pending))
                     continue
-                line = choice
-            response = chat_runner.resume_with_user_input(_pending_id(pending), line)
+                response = chat_runner.resume_with_user_input(_pending_id(pending), choice)
+            elif kind == "ask_user":
+                # ask_user 通过"下一条普通消息"继续（loop 协议如此，没有可 resume 的
+                # pending_permission_execution）；输入匹配某选项时规范化为其 label。
+                matched = _ask_user_choice_for_text(line, pending)
+                if matched is not None:
+                    line = matched
+                response = chat_runner.run_user_turn(line)
+            else:
+                response = chat_runner.resume_with_user_input(_pending_id(pending), line)
         else:
             response = chat_runner.run_user_turn(line)
 
@@ -474,8 +483,11 @@ def run_repl(
             pending = getattr(chat_runner, "last_pending_input", None)
 
         if pending is not None:
-            if _pending_kind(pending) == "permission_confirmation":
+            kind = _pending_kind(pending)
+            if kind == "permission_confirmation":
                 print(_permission_options_text(pending))
+            elif kind == "ask_user":
+                print(_ask_user_prompt_text(pending))
             else:
                 print(f"Permission> {_pending_question(pending)}")
 
@@ -596,6 +608,38 @@ def _option_label(option: object) -> str:
     if isinstance(option, dict):
         return str(option.get("label") or option.get("id") or "")
     return str(getattr(option, "label", getattr(option, "id", "")))
+
+
+def _ask_user_prompt_text(pending: object) -> str:
+    question = _pending_question(pending)
+    options = _permission_options(pending)
+    if not options:
+        return f"Permission> {question}"
+    option_lines = [
+        f"  {index}. {_option_label(option)}"
+        for index, option in enumerate(options, start=1)
+    ]
+    return "\n".join([f"Permission> {question}", *option_lines])
+
+
+def _ask_user_choice_for_text(text: str, pending: object) -> str | None:
+    """Match a typed answer to one ask_user option by index, id, or label.
+
+    Returns the option's canonical label so the answer keeps its meaning when
+    sent back as the next user message; None means free-text answer.
+    """
+    normalized = text.strip().lower().replace(" ", "_")
+    for index, option in enumerate(_permission_options(pending), start=1):
+        label = _option_label(option)
+        option_id = _option_id(option)
+        values = {
+            str(index).lower(),
+            option_id.lower(),
+            label.strip().lower().replace(" ", "_"),
+        }
+        if normalized in values:
+            return label
+    return None
 
 
 def _positive_int(value: str) -> int:

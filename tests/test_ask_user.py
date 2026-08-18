@@ -47,5 +47,46 @@ def test_ask_user_definition_has_correct_schema():
 
     assert tool.name == "ask_user"
     assert "question" in tool.definition.parameters["properties"]
-    assert "options" in tool.definition.parameters["properties"]
+    assert tool.definition.parameters["properties"]["options"] == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
     assert tool.definition.parameters["required"] == ["question"]
+
+
+def test_ask_user_normalizes_multiline_string_options():
+    tool = create_ask_user_tool()
+
+    result = tool.executor(
+        question="选择环境",
+        options="A. 开发\nB. 生产\nC. 预发布",
+    )
+
+    assert result.ok is True
+    assert "选择环境" in result.content
+    assert "1. 开发" in result.content
+    assert "2. 生产" in result.content
+    assert "3. 预发布" in result.content
+    assert result.data["options"] == ["开发", "生产", "预发布"]
+
+
+def test_ask_user_normalizes_prefixed_list_options():
+    tool = create_ask_user_tool()
+
+    result = tool.executor(question="选择", options=["1. 继续", "B) 跳过", "- 取消"])
+
+    assert result.ok is True
+    assert result.data["options"] == ["继续", "跳过", "取消"]
+    assert "1. 继续" in result.content
+    assert "2. 跳过" in result.content
+    assert "3. 取消" in result.content
+
+
+def test_ask_user_ignores_non_list_options():
+    tool = create_ask_user_tool()
+
+    result = tool.executor(question="选择", options=12345)
+
+    assert result.ok is True
+    assert "options" not in result.data
+    assert "1." not in result.content

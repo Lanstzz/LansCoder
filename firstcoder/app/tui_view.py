@@ -21,7 +21,7 @@ from firstcoder.app.activity_view import (
     truncate_activity_text,
     turn_metrics_text,
 )
-from firstcoder.app.permission_view import permission_prompt_text
+from firstcoder.app.permission_view import ask_user_prompt_text, permission_prompt_text
 from firstcoder.app.review_view import render_prewrite_review
 from firstcoder.app.topbar_view import (
     PERMISSION_MODE_COLORS,
@@ -504,6 +504,10 @@ class FirstCoderViewMixin:
         pending = getattr(self.chat_runner, "last_pending_input", None)
         if pending is None:
             return
+        # 进入"等待用户输入"暂停态：working/activity 动画必须停，否则下一帧
+        # 动画回调会把 activity 覆盖回 "thinking ..."（ask_user 假 busy 的根源）。
+        self._stop_working_animation()
+        self._stop_activity_animation()
         if getattr(pending, "kind", None) == "permission_confirmation":
             payload = getattr(pending, "payload", {}) or {}
             review_payload = payload.get("prewrite_review")
@@ -513,8 +517,7 @@ class FirstCoderViewMixin:
             self._write_line(permission_prompt_text(pending), kind=TuiEntryKind.PERMISSION)
             self._set_activity("waiting · permission")
             return
-        question = str(getattr(pending, "question", "") or "需要用户输入。")
-        self._write_line(f"需要用户输入：\n{question}", kind=TuiEntryKind.PERMISSION)
+        self._write_line(ask_user_prompt_text(pending), kind=TuiEntryKind.PERMISSION)
         self._set_activity("waiting · input")
 
     def _write_review_payload(self, payload: dict[str, object]) -> None:

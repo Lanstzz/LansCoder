@@ -36,7 +36,11 @@ from firstcoder.app.picker_adapters import (
     skill_picker_item,
 )
 from firstcoder.app.session_commands import SESSION_LIST_VISIBLE_LIMIT
-from firstcoder.app.permission_view import permission_choice_for_text, permission_options_text
+from firstcoder.app.permission_view import (
+    ask_user_choice_for_text,
+    permission_choice_for_text,
+    permission_options_text,
+)
 from firstcoder.app.review_view import review_command_from_text
 from firstcoder.app.transcript_view import (
     display_line_kind,
@@ -508,6 +512,12 @@ class FirstCoderApp(FirstCoderViewMixin, App[None]):
             token = self._resume_active_chat_turn()
             self._chat_worker = self.run_worker(self._resume_permission_turn(pending.id, choice, token))
             return
+        if getattr(pending, "kind", None) == "ask_user":
+            # ask_user 用"下一条普通消息"继续（loop 协议如此，不正式 resume）；
+            # 输入若匹配某个选项（序号/id/文本），规范化为该选项 label。
+            choice = ask_user_choice_for_text(text, pending)
+            if choice is not None:
+                text = choice
 
         self._chat_busy = True
         token = self._begin_active_chat_turn()

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, get_origin, get_type_hints
+from types import UnionType
+from typing import TYPE_CHECKING, Any, Union, get_args, get_origin, get_type_hints
 
 from firstcoder.utils.schema import object_schema, property_schema
 from firstcoder.providers.types import ToolDefinition
@@ -40,7 +41,11 @@ def function_to_parameters(func: Callable[..., "ToolResult"]) -> dict[str, Any]:
             continue
 
         annotation = type_hints.get(parameter.name, parameter.annotation)
-        properties[parameter.name] = property_schema(_annotation_to_json_type(annotation))
+        param_schema = _annotation_to_json_schema(annotation)
+        properties[parameter.name] = property_schema(
+            str(param_schema["type"]),
+            **{key: value for key, value in param_schema.items() if key != "type"},
+        )
         if parameter.default is inspect.Signature.empty:
             required.append(parameter.name)
 
@@ -70,17 +75,32 @@ def tool_from_function(
     )
 
 
-def _annotation_to_json_type(annotation: Any) -> str:
-    """把 Python 类型注解转换成 JSON Schema 类型。"""
+def _annotation_to_json_schema(annotation: Any) -> dict[str, Any]:
+    """把 Python 类型注解转换成 JSON Schema。
+
+    支持泛型与可选类型：`list[str]` 产成 `{"type": "array", "items": {"type": "string"}}`，
+    `X | None` 解包为非 None 成员。无法识别的注解兜底为 string。
+    """
 
     if annotation is inspect.Signature.empty:
-        return "string"
+        return {"type": "string"}
 
     if annotation in PYTHON_TYPE_TO_JSON_TYPE:
-        return PYTHON_TYPE_TO_JSON_TYPE[annotation]
+        return {"type": PYTHON_TYPE_TO_JSON_TYPE[annotation]}
 
     origin = get_origin(annotation)
+    if origin in (list, tuple):
+        args = get_args(annotation)
+        if args and args[0] is not Ellipsis and args[0] is not inspect.Signature.empty:
+            return {"type": "array", "items": _annotation_to_json_schema(args[0])}
+        return {"type": "array"}
+    if origin in (Union, UnionType):
+        # Optional[X]（X | None）取非 None 成员；多类型 union 无法表达，兜底 string。
+        non_none = [arg for arg in get_args(annotation) if arg is not type(None)]
+        if len(non_none) == 1:
+            return _annotation_to_json_schema(non_none[0])
+        return {"type": "string"}
     if origin in PYTHON_TYPE_TO_JSON_TYPE:
-        return PYTHON_TYPE_TO_JSON_TYPE[origin]
+        return {"type": PYTHON_TYPE_TO_JSON_TYPE[origin]}
 
-    return "string"
+    return {"type": "string"}

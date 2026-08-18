@@ -10,8 +10,37 @@
 
 from __future__ import annotations
 
+import re
+
 from firstcoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from firstcoder.utils.introspection import tool_from_function
+
+_OPTION_PREFIX = re.compile(r"^(?:[-*•]|\d+[.)、]|[A-Za-z][.)、])\s*")
+
+
+def _strip_option_prefix(option: str) -> str:
+    """去掉选项前导的序号/符号前缀，如 `1. `、`A) `、`- `、`• `。"""
+    return _OPTION_PREFIX.sub("", option.strip())
+
+
+def _normalize_options(options: object) -> list[str]:
+    """把模型传入的 options 规整为字符串列表。
+
+    有的模型会把 `options` 传成多行字符串（如 `"A. xxx\nB. yyy"`）而非列表，
+    这里做防御性归一：字符串按行拆分并去掉序号前缀，其他非法输入忽略。
+    """
+    if options is None:
+        return []
+    if isinstance(options, str):
+        return [_strip_option_prefix(line) for line in options.splitlines() if line.strip()]
+    if not isinstance(options, list):
+        return []
+    normalized: list[str] = []
+    for item in options:
+        text = _strip_option_prefix(str(item))
+        if text:
+            normalized.append(text)
+    return normalized
 
 
 def create_ask_user_tool() -> Tool:
@@ -23,18 +52,19 @@ def create_ask_user_tool() -> Tool:
         if not question.strip():
             return make_error_result("ask_user", "question 不能为空")
 
+        normalized = _normalize_options(options)
+
         lines: list[str] = [question]
-        if options:
-            for index, option in enumerate(options, start=1):
-                lines.append(f"{index}. {option}")
+        for index, option in enumerate(normalized, start=1):
+            lines.append(f"{index}. {option}")
 
         content = "\n".join(lines)
         data: dict[str, object] = {
             "requires_user_input": True,
             "question": question,
         }
-        if options:
-            data["options"] = options
+        if normalized:
+            data["options"] = normalized
 
         return make_text_result("ask_user", content, **data)
 
