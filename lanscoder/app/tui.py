@@ -31,6 +31,7 @@ from lanscoder.app.picker import TuiPickerState, render_picker
 from lanscoder.app.picker_adapters import (
     model_picker_item,
     picker_command,
+    recall_picker_item,
     render_picker_item,
     session_picker_item,
     skill_picker_item,
@@ -570,6 +571,15 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                 "No skills.",
                 "Use up/down and enter to reference, or type a number.",
                 "skills",
+            ),
+            "recall_picker": (
+                "recall",
+                "Select a turn to recall to:",
+                "turns",
+                recall_picker_item,
+                "No turns to recall.",
+                "Use up/down and enter to recall, or type a number.",
+                "turns",
             ),
         }
         picker_spec = picker_specs.get(action_type)

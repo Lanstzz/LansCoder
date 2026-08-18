@@ -28,6 +28,7 @@ from lanscoder.app.memory_commands import MemoryCommandHandler
 from lanscoder.app.model_commands import ModelCommandHandler, ModelState
 from lanscoder.app.model_state import ModelSelectionState, ModelStateStore
 from lanscoder.app.permission_commands import PermissionCommandHandler
+from lanscoder.app.recall_commands import RecallCommandHandler
 from lanscoder.app.router import CompositeCommandHandler
 from lanscoder.app.runtime import AgentChatRunner, CurrentSessionState
 from lanscoder.app.session_commands import SessionCommandHandler
@@ -332,12 +333,19 @@ def create_lanscoder_app(
         catalog=model_catalog,
         state_store=model_state_store,
     )
+    recall_handler = RecallCommandHandler(
+        session=current,
+        store=store,
+        bootstrap=bootstrap,
+        on_recall=current.set_session,
+    )
     command_handler = CompositeCommandHandler(  # 路由所有 slash commands → lanscoder/app/router.py
         [
             HelpCommandHandler(),
             McpCommandHandler(mcp_manager),
             ModelCommandHandler(model_switcher),
             session_handler,
+            recall_handler,
             context_handler,
             permission_handler,
             skill_handler,

@@ -36,6 +36,18 @@ def skill_picker_item(item: dict[str, object]) -> TuiPickerItem:
     )
 
 
+def recall_picker_item(item: dict[str, object]) -> TuiPickerItem:
+    message_id = str(item.get("message_id") or "")
+    turn_number = item.get("turn_number")
+    summary = str(item.get("summary") or "")
+    label = f"Turn {turn_number}"
+    return TuiPickerItem(
+        id=message_id,
+        label=label,
+        detail=summary,
+    )
+
+
 def picker_command(kind: str, item: TuiPickerItem) -> str | None:
     if kind == "resume":
         return f"/resume {item.id}" if item.id else None
@@ -43,6 +55,8 @@ def picker_command(kind: str, item: TuiPickerItem) -> str | None:
         return f"/model {item.id}" if item.id else None
     if kind == "skill":
         return f"/skill-use {item.id}" if item.id else None
+    if kind == "recall":
+        return f"/recall {item.id}" if item.id else None
     return None
 
 
