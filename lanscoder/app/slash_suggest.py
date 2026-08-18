@@ -23,8 +23,8 @@ class SlashSuggest(OptionList):
     }
     """
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
         self._all_commands: list[tuple[str, str]] = []
 
     def set_commands(self, commands: list[tuple[str, str]]) -> None:
