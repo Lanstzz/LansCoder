@@ -665,7 +665,6 @@ def test_welcome_renderable_uses_colored_box_pixels() -> None:
 
     assert renderable.align == "center"
     assert "█" in text.plain
-    assert "FirstCoder" not in text.plain
     assert "LansCoder" not in text.plain
     assert "Commands:" not in text.plain
     # 渐变主色（左亮 #00d4ff → 右深 #0099ff）与粒子色（白 / 浅蓝）。

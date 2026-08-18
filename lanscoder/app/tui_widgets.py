@@ -99,14 +99,13 @@ class ComposerTextArea(TextArea):
             if event.key == "up":
                 event.stop()
                 event.prevent_default()
-                if suggest.highlight is not None and suggest.highlight > 0:
+                if suggest.highlighted is not None and suggest.highlighted > 0:
                     suggest.action_cursor_up()
                 return
             if event.key == "down":
                 event.stop()
                 event.prevent_default()
-                options = suggest._options
-                if suggest.highlight is not None and suggest.highlight < len(options) - 1:
+                if suggest.highlighted is not None and suggest.highlighted < suggest.option_count - 1:
                     suggest.action_cursor_down()
                 return
         # ── existing key handling ───────────────────────────────────

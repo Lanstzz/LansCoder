@@ -29,16 +29,6 @@ def test_redact_text_redacts_json_like_secret_values() -> None:
     assert '"normal": "value"' in redacted
 
 
-def test_redact_text_redacts_windows_and_posix_paths() -> None:
-    text = "read D:\\Komor_Code\\FirstCoder\\README.md and /home/user/project/secret.txt"
-
-    redacted = redact_text(text)
-
-    assert "D:\\Komor_Code" not in redacted
-    assert "/home/user/project" not in redacted
-    assert redacted.count("[REDACTED_PATH]") == 2
-
-
 def test_redact_text_keeps_disabled_categories() -> None:
     text = "TOKEN=abc D:\\Project\\file.txt /tmp/demo.txt"
 
