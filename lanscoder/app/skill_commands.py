@@ -17,8 +17,9 @@ class SkillCommandHandler:
 
     def commands(self) -> list[tuple[str, str]]:
         return [
-            ("/skills", "Pick a skill to reference."),
             ("/skill <name>", "Show skill details."),
+            ("/skill-use <name>", "Reference a skill."),
+            ("/skills", "Pick a skill to reference."),
         ]
 
     def handle(self, text: str) -> CommandResult:

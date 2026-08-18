@@ -31,6 +31,7 @@ class ModelCommandHandler:
     def commands(self) -> list[tuple[str, str]]:
         return [
             ("/model", "Pick a model to use."),
+            ("/models", "Pick a model to use."),
             ("/model <model|provider/model>", "Switch the active model."),
         ]
 
