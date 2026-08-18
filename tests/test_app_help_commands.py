@@ -71,3 +71,12 @@ def test_help_command_ignores_non_help_input() -> None:
     result = HelpCommandHandler(command_handler=cmd_handler).handle("/sessions")
 
     assert result.handled is False
+
+
+def test_all_commands_sorted_alphabetically() -> None:
+    handler_a = _StubHandler([("/zebra", "Z command.")])
+    handler_b = _StubHandler([("/alpha", "A command.")])
+    cmd_handler = CompositeCommandHandler([handler_a, handler_b])
+    all_commands = cmd_handler.all_commands()
+    names = [cmd for cmd, _desc in all_commands]
+    assert names == sorted(names, key=lambda x: x.removeprefix("/").lstrip())
