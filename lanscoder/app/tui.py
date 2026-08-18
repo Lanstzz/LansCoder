@@ -177,6 +177,9 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._provider_glow_timer: Timer | None = None
         self._provider_glow_frame = 0
         self._subagent_progress_timer: Timer | None = None
+        self._pending_user_input: str | None = None
+        self._pending_user_attachments: list[UserAttachment] | None = None
+        self._pending_subagent_notification: bool = False
         self.transcript = TuiTranscript()
         self.task_plan_panel_state = TuiTaskPlanPanelState()
 
@@ -195,6 +198,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                     soft_wrap=True,
                     compact=True,
                 )
+            yield Vertical(id="subagent-panel")
 
     def on_mount(self) -> None:
         self.title = self.config.title
@@ -212,10 +216,15 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         # Keep focus on the input — clicking elsewhere should not steal it.
         self.query_one("#output").can_focus = False
         self.set_focus(self.query_one("#input"))
-        # Periodically update the activity line with subagent progress.
+        # Periodically update the subagent panel with progress.
         self._subagent_progress_timer = self.set_interval(
             0.5, self._refresh_subagent_progress
         )
+        # Register for proactive subagent completion delivery.
+        if self.chat_runner is not None:
+            mgr = getattr(self.chat_runner, "background_manager", None)
+            if mgr is not None and hasattr(mgr, "set_on_job_completed"):
+                mgr.set_on_job_completed(self._on_subagent_completed)
 
     def on_app_focus(self) -> None:
         """When the terminal window regains focus, put it back on the input."""
@@ -225,17 +234,20 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             pass
 
     def _refresh_subagent_progress(self) -> None:
-        """Periodic timer: read active background jobs and update the activity line."""
+        """Periodic timer: read active background jobs and update the panel."""
         manager = None
         if self.chat_runner is not None:
             manager = getattr(self.chat_runner, "background_manager", None)
         if manager is None:
             return
         jobs = manager.active_jobs()
+        try:
+            panel = self.query_one("#subagent-panel")
+        except Exception:
+            return
+        panel.remove_children()
         if not jobs:
             return
-        # Build a one-line summary for each running job.
-        parts: list[str] = []
         now = time.monotonic()
         for job in jobs:
             elapsed = now - job.created_at
@@ -247,10 +259,47 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                 token_str = f"{tokens / 1000:.1f}k"
             else:
                 token_str = str(tokens)
-            parts.append(
-                f"{label} · {elapsed:.0f}s · {calls} calls · {token_str} tokens"
+            panel.mount(
+                Static(
+                    f"🔄 {label} · {elapsed:.0f}s · {calls} calls · {token_str} tokens",
+                )
             )
-        self._set_activity(" | ".join(parts))
+
+    def _on_subagent_completed(self, job) -> None:
+        """Called from background thread when a job finishes."""
+        self.call_from_thread(self._handle_subagent_completed, job)
+
+    def _handle_subagent_completed(self, job) -> None:
+        """Deliver subagent completion notification to the main conversation."""
+        label = job.label or job.tool_name
+        if job.status == "completed":
+            ui_msg = f"✅ 子agent [{label}] 已完成"
+        elif job.status == "failed":
+            ui_msg = f"❌ 子agent [{label}] 失败: {job.error or '未知错误'}"
+        else:
+            ui_msg = f"⚠️ 子agent [{label}] {job.status}"
+
+        # Write notification to the main session so the model sees it.
+        if self.chat_runner is not None:
+            session = self.chat_runner.current_session.session
+            session.append_background_notification(
+                content=ui_msg,
+                job_id=job.id,
+                tool_name=job.tool_name,
+                status=job.status,
+            )
+
+        # Write to UI output.
+        self._write_line(ui_msg, kind=TuiEntryKind.SYSTEM)
+
+        # If idle, start a new turn so the model can report immediately.
+        if not self._chat_busy and self.chat_runner is not None:
+            self._submit_chat_text("子agent任务已完成，请查看结果并汇报。")
+        else:
+            # Turn is busy — notification is already in session and will be
+            # consumed by the next provider call.  Set flag so _finish_chat_turn
+            # can auto-start a turn if the user hasn't sent anything.
+            self._pending_subagent_notification = True
 
     def set_slash_commands(self, commands: list[tuple[str, str]]) -> None:
         """Set the full command list for the slash-command autocomplete dropdown."""
@@ -475,6 +524,21 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if getattr(self.chat_runner, "last_pending_input", None) is None:
             self._active_chat_turn = None
 
+        # 1. Process queued user input first.
+        pending_input = self._pending_user_input
+        if pending_input is not None:
+            self._pending_user_input = None
+            pending_attachments = self._pending_user_attachments
+            self._pending_user_attachments = None
+            self._submit_chat_text(pending_input, attachments=pending_attachments)
+            return
+
+        # 2. Then process pending subagent notification.
+        if self._pending_subagent_notification:
+            self._pending_subagent_notification = False
+            self._submit_chat_text("子agent任务已完成，请查看结果并汇报。")
+            return
+
     def _handle_escape_interrupt(self) -> bool:
         if not self._chat_busy:
             self._last_escape_at = 0.0
@@ -540,12 +604,14 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return
 
         if self._chat_busy:
-            # Interrupt the current turn so the user can start a new one
-            # immediately.  Background subagents are unaffected — they run in
-            # independent threads with their own cancellation tokens and will
-            # report completion via <task_notification> when they finish.
-            self._interrupt_chat_turn()
-            # Fall through to start a new turn below.
+            self._pending_user_input = text
+            self._pending_user_attachments = attachments
+            self._write_line(
+                "消息已排队。当前 turn 结束后自动发送。",
+                kind=TuiEntryKind.SYSTEM,
+            )
+            self._set_activity("running · message queued")
+            return
 
         pending = getattr(self.chat_runner, "last_pending_input", None)
         if getattr(pending, "kind", None) == "permission_confirmation":
