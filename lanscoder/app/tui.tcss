@@ -184,3 +184,23 @@ ScrollBarCorner {
 .streaming {
     border-left: solid #4f8cff;
 }
+
+#subagent-panel {
+    height: auto;
+    min-height: 0;
+    margin: 0 3 0 3;
+    padding: 0 1;
+    background: #0f1014;
+    color: #808185;
+    border-top: solid #303238;
+}
+#subagent-panel:empty {
+    border-top: none;
+    padding: 0;
+    margin: 0;
+}
+#subagent-panel Static {
+    width: 100%;
+    height: 1;
+    color: #808185;
+}
