@@ -220,6 +220,11 @@ class BackgroundJobManager:
         self._completed: deque[BackgroundJob] = deque()
         self._counter = 0
         self._clock = clock or time.monotonic
+        self._on_job_completed: Callable[[BackgroundJob], None] | None = None
+
+    def set_on_job_completed(self, cb: Callable[[BackgroundJob], None]) -> None:
+        """Register a callback invoked (in the job's thread) when a job finishes."""
+        self._on_job_completed = cb
 
     def start(
         self,
@@ -289,6 +294,10 @@ class BackgroundJobManager:
                 job.status = STATUS_COMPLETED
             self._futures.pop(job.id, None)
             self._completed.append(job)
+        # Fire the callback outside the lock to avoid deadlocks.
+        cb = self._on_job_completed
+        if cb is not None:
+            cb(job)
 
     def _notification_for(self, job: BackgroundJob) -> BackgroundNotification:
         summary = _summarize(job)
