@@ -399,6 +399,60 @@ def test_run_repl_reprompts_unknown_permission_choice(capsys):
     assert "Please choose 1, 2, 3." in output
 
 
+def test_run_repl_routes_ask_user_pending_to_next_message(capsys):
+    runner = FakeChatRunner(
+        replies=[FakeResponse("need input"), FakeResponse("done")],
+        pending_after_turn=FakePending(
+            id="ask_1",
+            kind="ask_user",
+            question="Which environment?",
+            options=[FakeOption(id="1", label="dev"), FakeOption(id="2", label="prod")],
+        ),
+    )
+
+    run_repl(runner, ["deploy", "dev"])
+
+    assert runner.turns == ["deploy", "dev"]
+    assert runner.resumes == []
+    output = capsys.readouterr().out
+    assert "Which environment?" in output
+    assert "2. prod" in output
+
+
+def test_run_repl_normalizes_ask_user_index_to_label(capsys):
+    runner = FakeChatRunner(
+        replies=[FakeResponse("need input"), FakeResponse("done")],
+        pending_after_turn=FakePending(
+            id="ask_1",
+            kind="ask_user",
+            question="Which environment?",
+            options=[FakeOption(id="1", label="dev"), FakeOption(id="2", label="prod")],
+        ),
+    )
+
+    run_repl(runner, ["deploy", "2"])
+
+    assert runner.turns == ["deploy", "prod"]
+    assert runner.resumes == []
+
+
+def test_run_repl_accepts_free_text_answer_to_ask_user(capsys):
+    runner = FakeChatRunner(
+        replies=[FakeResponse("need input"), FakeResponse("done")],
+        pending_after_turn=FakePending(
+            id="ask_1",
+            kind="ask_user",
+            question="Which environment?",
+            options=[FakeOption(id="1", label="dev"), FakeOption(id="2", label="prod")],
+        ),
+    )
+
+    run_repl(runner, ["deploy", "staging for tonight"])
+
+    assert runner.turns == ["deploy", "staging for tonight"]
+    assert runner.resumes == []
+
+
 def test_run_repl_auto_approves_repeated_permissions(capsys):
     runner = FakeChatRunner(
         replies=[
