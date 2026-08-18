@@ -1,6 +1,6 @@
-"""Harbor installed-agent adapter for FirstCoder.
+"""Harbor installed-agent adapter for LansCoder.
 
-The adapter stages only the local FirstCoder package into each task container,
+The adapter stages only the local LansCoder package into each task container,
 then runs one non-interactive ``--benchmark`` turn in Harbor's task workdir.
 It intentionally does not inspect verifier files or inject benchmark-specific
 hints into the task instruction.
@@ -18,19 +18,19 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 
-_AGENT_ROOT: Final = "/opt/firstcoder-agent"
-_REMOTE_SOURCE_DIR: Final = "/installed-agent/firstcoder-src"
-_SESSION_ROOT: Final = "/tmp/firstcoder-harbor-sessions"
-_CONFIG_ROOT: Final = "/tmp/firstcoder-harbor-config"
+_AGENT_ROOT: Final = "/opt/lanscoder-agent"
+_REMOTE_SOURCE_DIR: Final = "/installed-agent/lanscoder-src"
+_SESSION_ROOT: Final = "/tmp/lanscoder-harbor-sessions"
+_CONFIG_ROOT: Final = "/tmp/lanscoder-harbor-config"
 # Download cache for pip/uv. Bind-mount a host directory here (Harbor
-# ``--mounts``) so FirstCoder's dependencies download once and are reused
+# ``--mounts``) so LansCoder's dependencies download once and are reused
 # across trials and containers instead of being fetched for every task.
-_CACHE_DIR: Final = "/opt/firstcoder-cache"
-_DEFAULT_PACKAGE: Final = "https://github.com/KomorGiaoGiao/FirstCoder/archive/refs/heads/main.zip"
+_CACHE_DIR: Final = "/opt/lanscoder-cache"
+_DEFAULT_PACKAGE: Final = "https://github.com/KomorGiaoGiao/LansCoder/archive/refs/heads/main.zip"
 
 
-class FirstCoderHarborAgent(BaseInstalledAgent):
-    """Run the current FirstCoder checkout as a Harbor installed agent.
+class LansCoderHarborAgent(BaseInstalledAgent):
+    """Run the current LansCoder checkout as a Harbor installed agent.
 
     ``source_dir`` is deliberately the default installation source.  It lets a
     local benchmark exercise the exact checkout under development, including
@@ -65,7 +65,7 @@ class FirstCoderHarborAgent(BaseInstalledAgent):
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
-        """Install FirstCoder into an isolated venv inside the task container."""
+        """Install LansCoder into an isolated venv inside the task container."""
 
         install_spec = await self._prepare_install_spec(environment)
         agent_user = str(environment.default_user or "root")
@@ -99,9 +99,9 @@ class FirstCoderHarborAgent(BaseInstalledAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
-        """Run one FirstCoder benchmark turn in Harbor's configured workdir."""
+        """Run one LansCoder benchmark turn in Harbor's configured workdir."""
 
-        del context  # FirstCoder persists its own local benchmark transcript.
+        del context  # LansCoder persists its own local benchmark transcript.
         command = self._run_command(
             instruction,
             session_id=environment.session_id,
@@ -140,12 +140,12 @@ class FirstCoderHarborAgent(BaseInstalledAgent):
 
         source = self._source_dir
         if source is None:
-            raise ValueError("No local FirstCoder source directory is available. Pass " "source_dir=... or package=... to FirstCoderHarborAgent.")
+            raise ValueError("No local LansCoder source directory is available. Pass " "source_dir=... or package=... to LansCoderHarborAgent.")
         package_dir = source / "lanscoder"
         required = (source / "pyproject.toml", source / "README.md", package_dir)
         missing = [str(path) for path in required if not path.exists()]
         if missing:
-            raise ValueError("FirstCoder source directory is incomplete; missing " + ", ".join(missing))
+            raise ValueError("LansCoder source directory is incomplete; missing " + ", ".join(missing))
 
         staged = self.logs_dir / "lanscoder-source"
         if staged.exists():
@@ -187,7 +187,7 @@ class FirstCoderHarborAgent(BaseInstalledAgent):
             'LANSCODER_EXIT="${PIPESTATUS[0]}"; '
             f"if [ -f {shlex.quote(session_path)} ]; then "
             f"  if ! cp {shlex.quote(session_path)} /logs/agent/lanscoder-session.jsonl; then "
-            '    echo "warning: failed to export FirstCoder benchmark session" >&2; '
+            '    echo "warning: failed to export LansCoder benchmark session" >&2; '
             "  fi; "
             "fi; "
             'exit "$LANSCODER_EXIT"'
@@ -195,10 +195,10 @@ class FirstCoderHarborAgent(BaseInstalledAgent):
 
     @staticmethod
     def _python_setup_command() -> str:
-        """Ensure FirstCoder has an isolated Python 3.11+ runtime across task images."""
+        """Ensure LansCoder has an isolated Python 3.11+ runtime across task images."""
 
         return """set -euo pipefail
-AGENT_ROOT=/opt/firstcoder-agent
+AGENT_ROOT=/opt/lanscoder-agent
 find_python() {
   for candidate in python3.12 python3.11 python3; do
     if command -v "$candidate" >/dev/null 2>&1 && \\
@@ -223,10 +223,10 @@ retry() {
   attempt=1
   until "$@"; do
     if [ "$attempt" -ge 3 ]; then
-      echo "FirstCoder Harbor agent: command failed after $attempt attempts: $*" >&2
+      echo "LansCoder Harbor agent: command failed after $attempt attempts: $*" >&2
       return 1
     fi
-    echo "FirstCoder Harbor agent: attempt $attempt failed, retrying: $*" >&2
+    echo "LansCoder Harbor agent: attempt $attempt failed, retrying: $*" >&2
     sleep "$((attempt * 5))"
     attempt=$((attempt + 1))
   done
@@ -257,7 +257,7 @@ install_system_python() {
       retry yum install -y python3 python3-pip
       ;;
     *)
-      echo "FirstCoder Harbor agent cannot bootstrap Python 3.11 or newer: no supported package manager is available." >&2
+      echo "LansCoder Harbor agent cannot bootstrap Python 3.11 or newer: no supported package manager is available." >&2
       exit 64
       ;;
   esac
@@ -305,7 +305,7 @@ install_uv() {
   elif command -v wget >/dev/null 2>&1; then
     retry sh -c 'wget -qO- https://astral.sh/uv/install.sh | UV_UNMANAGED_INSTALL="'"$AGENT_ROOT"'/bin" sh'
   else
-    echo "FirstCoder Harbor agent needs curl or wget to install uv." >&2
+    echo "LansCoder Harbor agent needs curl or wget to install uv." >&2
     exit 64
   fi
 }
@@ -313,7 +313,7 @@ install_uv
 retry "$AGENT_ROOT/bin/uv" python install 3.11
 PYTHON_BIN="$("$AGENT_ROOT/bin/uv" python find 3.11)"
 if [ -z "$PYTHON_BIN" ] || ! has_venv "$PYTHON_BIN"; then
-  echo "FirstCoder Harbor agent requires Python 3.11+ with venv and pip after bootstrap." >&2
+  echo "LansCoder Harbor agent requires Python 3.11+ with venv and pip after bootstrap." >&2
   exit 64
 fi
 """
@@ -340,7 +340,7 @@ config = (
     + "parallel_tool_calls = true\n"
     + "[models." + quote(ref) + "]\n"
 )
-root = os.environ.get("XDG_CONFIG_HOME", "/tmp/firstcoder-harbor-config")
+root = os.environ.get("XDG_CONFIG_HOME", "/tmp/lanscoder-harbor-config")
 path = os.path.join(root, "lanscoder", "config.toml")
 os.makedirs(os.path.dirname(path), exist_ok=True)
 open(path, "w", encoding="utf-8").write(config)
@@ -376,7 +376,7 @@ def _install_command(install_spec: str) -> str:
         "  fi; "
         "done; "
         'if [ -z "$PYTHON_BIN" ]; then '
-        '  echo "FirstCoder Harbor agent requires Python 3.11 or newer in the task image." >&2; exit 64; '
+        '  echo "LansCoder Harbor agent requires Python 3.11 or newer in the task image." >&2; exit 64; '
         "fi; "
         # The download cache is shared across concurrent trials; retry the
         # install with backoff so a single flaky fetch does not error the trial.
@@ -395,10 +395,10 @@ def _install_command(install_spec: str) -> str:
         "attempt=1; "
         "until install_deps; do "
         '  if [ "$attempt" -ge 3 ]; then '
-        '    echo "FirstCoder Harbor agent failed to install dependencies after $attempt attempts." >&2; '
+        '    echo "LansCoder Harbor agent failed to install dependencies after $attempt attempts." >&2; '
         "    exit 1; "
         "  fi; "
-        '  echo "FirstCoder dependency install attempt $attempt failed; retrying." >&2; '
+        '  echo "LansCoder dependency install attempt $attempt failed; retrying." >&2; '
         '  sleep "$((attempt * 5))"; '
         "  attempt=$((attempt + 1)); "
         "done"
