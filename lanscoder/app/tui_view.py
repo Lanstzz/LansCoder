@@ -76,9 +76,7 @@ class LansCoderViewMixin:
             self.sub_title = f"Session: {session_id}"
         topbar = self._query_mounted("#topbar")
         if topbar is not None and hasattr(topbar, "update"):
-            topbar.update(
-                self._topbar_text(session_id=session_id, width=self._topbar_width())
-            )
+            topbar.update(self._topbar_text(session_id=session_id, width=self._topbar_width()))
 
     def _topbar_width(self) -> int | None:
         size = getattr(self, "size", None)
@@ -87,18 +85,14 @@ class LansCoderViewMixin:
             return max(1, width - 4)
         return None
 
-    def _topbar_text(
-        self, *, session_id: str | None = None, width: int | None = None
-    ) -> str:
+    def _topbar_text(self, *, session_id: str | None = None, width: int | None = None) -> str:
         if session_id is None and self.current_session is not None:
             session_id = self.current_session.session_id
         brand = f"[{theme.ACCENT}]LansCoder[/]"
         # 顶栏 status 独立于下栏：thinking 时只显示 "thinking ⠋" 动画头（_topbar_status），
         # reasoning 全文只进下栏 #activity。非 thinking 状态 _topbar_status 镜像
         # _activity_text；兜底 _activity_text（测试/直接赋值路径）。
-        status_text = (
-            self._topbar_status if self._topbar_status else self._activity_text
-        )
+        status_text = self._topbar_status if self._topbar_status else self._activity_text
         status = activity_markup(single_line_activity(status_text))
         metadata_values: list[tuple[str | None, str, int | None]] = []
         if self.config.provider_name or self.config.provider_model:
@@ -107,17 +101,11 @@ class LansCoderViewMixin:
             metadata_values.append(
                 (
                     None,
-                    _provider_model_markup(
-                        provider, model, glow_frame=self._provider_glow_frame
-                    ),
+                    _provider_model_markup(provider, model, glow_frame=self._provider_glow_frame),
                     18,
                 )
             )
-        mode = (
-            getattr(self.current_session, "mode", None)
-            if self.current_session is not None
-            else None
-        )
+        mode = getattr(self.current_session, "mode", None) if self.current_session is not None else None
         if mode:
             mode_text = str(mode)
             mode_color = PERMISSION_MODE_COLORS.get(mode_text, "#6e6d72")
@@ -133,56 +121,32 @@ class LansCoderViewMixin:
         status_width = _markup_width(status)
         metadata_width = _markup_width(metadata)
         top_separator_width = _markup_width(top_separator) * 2
-        content_width = (
-            brand_width + status_width + metadata_width + top_separator_width
-        )
-        if content_width > width or status_width > max(
-            1, width - brand_width - metadata_width - top_separator_width
-        ):
+        content_width = brand_width + status_width + metadata_width + top_separator_width
+        if content_width > width or status_width > max(1, width - brand_width - metadata_width - top_separator_width):
             fixed_width = brand_width + metadata_width + top_separator_width
             if fixed_width >= width:
                 metadata_width = max(0, width - brand_width - top_separator_width - 8)
                 metadata = _truncate_markup(metadata, metadata_width)
-                fixed_width = (
-                    brand_width + _markup_width(metadata) + top_separator_width
-                )
+                fixed_width = brand_width + _markup_width(metadata) + top_separator_width
             available_status_width = max(0, width - fixed_width)
-            status = activity_markup(
-                truncate_activity_text(status_text, available_status_width)
-            )
+            status = activity_markup(truncate_activity_text(status_text, available_status_width))
             compact = f"{brand}{top_separator}{status}{top_separator}{metadata}"
-            return (
-                _truncate_markup(compact, width)
-                if _markup_width(compact) > width
-                else compact
-            )
+            return _truncate_markup(compact, width) if _markup_width(compact) > width else compact
         if width - content_width < 8:
-            available_status_width = (
-                width - brand_width - metadata_width - top_separator_width
-            )
+            available_status_width = width - brand_width - metadata_width - top_separator_width
             if available_status_width < status_width:
-                status = activity_markup(
-                    truncate_activity_text(status_text, max(1, available_status_width))
-                )
+                status = activity_markup(truncate_activity_text(status_text, max(1, available_status_width)))
                 compact = f"{brand}{top_separator}{status}{top_separator}{metadata}"
             return compact
-        left_gap = max(
-            3, (width // 2) - _markup_width(brand) - (_markup_width(status) // 2)
-        )
-        right_gap = (
-            width - brand_width - left_gap - _markup_width(status) - metadata_width
-        )
+        left_gap = max(3, (width // 2) - _markup_width(brand) - (_markup_width(status) // 2))
+        right_gap = width - brand_width - left_gap - _markup_width(status) - metadata_width
         if right_gap < 3:
             right_gap = 3
-            left_gap = (
-                width - brand_width - _markup_width(status) - metadata_width - right_gap
-            )
+            left_gap = width - brand_width - _markup_width(status) - metadata_width - right_gap
         return f"{brand}{' ' * left_gap}{status}{' ' * right_gap}{metadata}"
 
     def _install_stream_event_handler(self, token: int | None = None):
-        if self.chat_runner is None or not hasattr(
-            self.chat_runner, "stream_event_handler"
-        ):
+        if self.chat_runner is None or not hasattr(self.chat_runner, "stream_event_handler"):
             return None
         previous_handler = getattr(self.chat_runner, "stream_event_handler", None)
         self._stream_reasoning_started = False
@@ -231,9 +195,7 @@ class LansCoderViewMixin:
         self._restore_runner_handler("stream_event_handler", previous_handler)
 
     def _install_tool_event_handler(self, token: int | None = None):
-        if self.chat_runner is None or not hasattr(
-            self.chat_runner, "tool_event_handler"
-        ):
+        if self.chat_runner is None or not hasattr(self.chat_runner, "tool_event_handler"):
             return None
         previous_handler = getattr(self.chat_runner, "tool_event_handler", None)
         self._live_tool_events_seen = False
@@ -263,10 +225,7 @@ class LansCoderViewMixin:
             self._live_tool_events_seen = True
             self._call_ui_thread(self._close_stream_segment_for_tool)
             self._call_ui_thread(self._record_tool_activity, event)
-            if (
-                tool_name in {"task_create", "task_update", "task_revise"}
-                and str(getattr(event, "kind", "") or "") == "finished"
-            ):
+            if tool_name in {"task_create", "task_update", "task_revise"} and str(getattr(event, "kind", "") or "") == "finished":
                 self._call_ui_thread(self._refresh_task_plan_panel_from_current_session)
             self._call_ui_thread(
                 self._write_line,
@@ -303,11 +262,7 @@ class LansCoderViewMixin:
         with self._stream_event_lock:
             if generation != self._stream_event_generation:
                 return
-            pending = (
-                self._pending_reasoning_text
-                if kind == "reasoning_delta"
-                else self._pending_stream_text
-            )
+            pending = self._pending_reasoning_text if kind == "reasoning_delta" else self._pending_stream_text
             pending.append(text)
             if self._stream_event_dispatch_scheduled:
                 return
@@ -337,14 +292,10 @@ class LansCoderViewMixin:
         with self._stream_event_lock:
             if generation != self._stream_event_generation:
                 return
-            has_pending = bool(
-                self._pending_reasoning_text or self._pending_stream_text
-            )
+            has_pending = bool(self._pending_reasoning_text or self._pending_stream_text)
             if not has_pending:
                 self._stream_event_dispatch_scheduled = False
-        if has_pending and not self._schedule_ui_callback(
-            self._drain_stream_deltas, generation
-        ):
+        if has_pending and not self._schedule_ui_callback(self._drain_stream_deltas, generation):
             with self._stream_event_lock:
                 if generation == self._stream_event_generation:
                     self._stream_event_dispatch_scheduled = False
@@ -425,9 +376,7 @@ class LansCoderViewMixin:
         if remove is not None:
             remove()
 
-    def _start_interval_timer(
-        self, attr: str, interval: float, callback, *, name: str
-    ) -> None:
+    def _start_interval_timer(self, attr: str, interval: float, callback, *, name: str) -> None:
         if getattr(self, attr) is not None or getattr(self, "_loop", None) is None:
             return
         setattr(self, attr, self.set_interval(interval, callback, name=name))
@@ -458,33 +407,20 @@ class LansCoderViewMixin:
             self._stop_welcome_particles()
             return
         self._welcome_particle_frame += 1
-        self._welcome_widget.update(
-            welcome_renderable(particle_frame=self._welcome_particle_frame)
-        )
+        self._welcome_widget.update(welcome_renderable(particle_frame=self._welcome_particle_frame))
 
     def _uses_compact_welcome(self) -> bool:
         size = getattr(self, "size", None)
         width = getattr(size, "width", None)
         height = getattr(size, "height", None)
-        return bool(
-            isinstance(width, int)
-            and isinstance(height, int)
-            and (
-                width <= self.COMPACT_WELCOME_MAX_WIDTH
-                or height <= self.COMPACT_WELCOME_MAX_HEIGHT
-            )
-        )
+        return bool(isinstance(width, int) and isinstance(height, int) and (width <= self.COMPACT_WELCOME_MAX_WIDTH or height <= self.COMPACT_WELCOME_MAX_HEIGHT))
 
     def _refresh_welcome_layout(self) -> None:
         widget = self._welcome_widget
         if widget is None:
             return
         compact = self._uses_compact_welcome()
-        widget.update(
-            welcome_renderable(
-                compact=compact, particle_frame=self._welcome_particle_frame
-            )
-        )
+        widget.update(welcome_renderable(compact=compact, particle_frame=self._welcome_particle_frame))
         if compact:
             self._stop_welcome_particles()
         else:
@@ -533,9 +469,7 @@ class LansCoderViewMixin:
             return
         self._stop_working_animation()
         if status == "running":
-            self._show_activity_animation(
-                "running", self._running_tools_activity_detail(name)
-            )
+            self._show_activity_animation("running", self._running_tools_activity_detail(name))
             return
         self._show_static_activity(tool_activity_line_text(name, status))
 
@@ -572,9 +506,7 @@ class LansCoderViewMixin:
         panel.update(task_plan_panel_text(project_plan(task_plan)))
         self.task_plan_panel_state.last_rendered_revision = task_plan.revision
 
-    def _write_markdown_message(
-        self, content: str, *, classes: str = "message assistant-message"
-    ) -> None:
+    def _write_markdown_message(self, content: str, *, classes: str = "message assistant-message") -> None:
         entry = self.transcript.add(TuiEntryKind.ASSISTANT, content)
         text = entry_markdown_text(entry)
         output = self.query_one("#output")
@@ -603,26 +535,18 @@ class LansCoderViewMixin:
             if isinstance(review_payload, dict):
                 self._review_expanded_paths.clear()
                 self._write_review_payload(review_payload)
-            self._write_line(
-                permission_prompt_text(pending), kind=TuiEntryKind.PERMISSION
-            )
+            self._write_line(permission_prompt_text(pending), kind=TuiEntryKind.PERMISSION)
             self._set_activity("waiting · permission")
             return
         self._write_line(ask_user_prompt_text(pending), kind=TuiEntryKind.PERMISSION)
         self._set_activity("waiting · input")
 
     def _write_review_payload(self, payload: dict[str, object]) -> None:
-        rendered = render_prewrite_review(
-            payload, expanded_paths=self._review_expanded_paths
-        )
+        rendered = render_prewrite_review(payload, expanded_paths=self._review_expanded_paths)
         output = self.query_one("#output")
         if hasattr(output, "mount"):
             was_pinned = self._is_output_pinned_to_bottom(output)
-            output.mount(
-                _plain_static(
-                    rendered, classes="message permission-message review-message"
-                )
-            )
+            output.mount(_plain_static(rendered, classes="message permission-message review-message"))
             if was_pinned:
                 self._scroll_output_end(output)
             return
@@ -635,16 +559,11 @@ class LansCoderViewMixin:
         self._reasoning_is_fallback = True
         self._working_text = text
         self._working_frame_index = 0
-        self._set_activity(
-            self._working_indicator_body(), topbar_status=self._working_head()
-        )
+        self._set_activity(self._working_indicator_body(), topbar_status=self._working_head())
         self._start_working_animation()
 
     def _complete_working_indicator(self) -> None:
-        if (
-            self._activity_animation_kind == "streaming"
-            and self._activity_animation_detail == "response"
-        ):
+        if self._activity_animation_kind == "streaming" and self._activity_animation_detail == "response":
             return
         self._stop_working_animation()
         self._show_activity_animation("streaming", "response")
@@ -663,15 +582,11 @@ class LansCoderViewMixin:
 
     def _working_head(self) -> str:
         """顶栏 thinking 状态只显示动画头（不含 reasoning 文本）。"""
-        frame = self.WORKING_FRAMES[
-            self._working_frame_index % len(self.WORKING_FRAMES)
-        ]
+        frame = self.WORKING_FRAMES[self._working_frame_index % len(self.WORKING_FRAMES)]
         return f"thinking {frame}"
 
     def _working_indicator_body(self, text: str | None = None) -> str:
-        return (
-            f"{self._working_head()} {text if text is not None else self._working_text}"
-        )
+        return f"{self._working_head()} {text if text is not None else self._working_text}"
 
     def _start_working_animation(self) -> None:
         self._start_interval_timer(
@@ -687,9 +602,7 @@ class LansCoderViewMixin:
     def _advance_working_animation(self) -> None:
         self._working_frame_index += 1
         text = self._working_text or self._reasoning_buffer
-        self._set_activity(
-            self._working_indicator_body(text), topbar_status=self._working_head()
-        )
+        self._set_activity(self._working_indicator_body(text), topbar_status=self._working_head())
 
     def _show_static_activity(self, text: str) -> None:
         self._show_activity_animation("static", text)
@@ -778,9 +691,7 @@ class LansCoderViewMixin:
             self._start_new_stream_segment()
         self._stream_text_buffer += text
         if self._stream_text_entry is None:
-            self._stream_text_entry = self.transcript.add(
-                TuiEntryKind.ASSISTANT, self._stream_text_buffer
-            )
+            self._stream_text_entry = self.transcript.add(TuiEntryKind.ASSISTANT, self._stream_text_buffer)
         else:
             self._stream_text_entry.body = self._stream_text_buffer
         output = self.query_one("#output")
@@ -813,10 +724,7 @@ class LansCoderViewMixin:
         widget = self._stream_text_widget
         if widget is None:
             return
-        if (
-            widget in self._stream_finalizations
-            or widget in self._finalized_stream_widgets
-        ):
+        if widget in self._stream_finalizations or widget in self._finalized_stream_widgets:
             return
         timer = self._stream_flush_timer
         if timer is not None:
@@ -905,9 +813,7 @@ class LansCoderViewMixin:
         self._stream_rendered_text = self._stream_text_buffer
         output = self.query_one("#output")
         was_pinned = self._is_output_pinned_to_bottom(output)
-        update_result = self._stream_text_widget.update(
-            f"LansCoder:\n\n{self._stream_rendered_text}"
-        )
+        update_result = self._stream_text_widget.update(f"LansCoder:\n\n{self._stream_rendered_text}")
         self._track_stream_markdown_update(update_result)
         _observe_markdown_update(update_result)
         if was_pinned:
@@ -921,9 +827,7 @@ class LansCoderViewMixin:
         self._stream_markdown_update = update_result
 
         def finish_latest_update(_future) -> None:
-            self._schedule_ui_callback(
-                self._finish_stream_markdown_update, update_result
-            )
+            self._schedule_ui_callback(self._finish_stream_markdown_update, update_result)
 
         future.add_done_callback(finish_latest_update)
 

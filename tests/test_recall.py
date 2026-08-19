@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from lanscoder.app.recall_commands import RecallCommandHandler
 from lanscoder.context.store import JsonlSessionStore
+from lanscoder.providers.types import ChatResponse
+from lanscoder.session.bootstrap import SessionBootstrap
 
 
 def _write_session_jsonl(path: Path, events: list[dict]) -> None:
@@ -124,7 +127,7 @@ class TestTruncateBeforeMessage:
         ]
         _write_session_jsonl(store._session_path(sid), events)
 
-        retained = store.truncate_before_message(sid, "msg_05")
+        store.truncate_before_message(sid, "msg_05")
 
         remaining = store.list_events(sid)
         assert remaining[0].type == "session_created"
@@ -206,10 +209,6 @@ class TestSessionIndexRebuildSession:
 # ---------------------------------------------------------------------------
 
 
-from lanscoder.app.recall_commands import RecallCommandHandler
-from lanscoder.session.bootstrap import SessionBootstrap
-
-
 class _FakeSessionLike:
     """Minimal SessionLike for RecallCommandHandler tests."""
 
@@ -219,11 +218,13 @@ class _FakeSessionLike:
 
     def rebuild_view(self):
         from lanscoder.context.models import SessionView
+
         return SessionView(session_id=self.session_id, messages=list(self._messages))
 
     @property
     def runtime_state(self):
         from lanscoder.context.runtime_state import SessionRuntimeState
+
         return SessionRuntimeState()
 
     @property
@@ -236,39 +237,45 @@ class _FakeSessionLike:
 
 def _make_msg(msg_id: str, role: str, content: str, turn: int = 1):
     from lanscoder.context.models import AgentMessage, MessagePart
+
     return AgentMessage(
         id=msg_id,
         session_id="sess_test",
         role=role,
-        parts=[MessagePart(
-            id=f"part_{msg_id}",
-            message_id=msg_id,
-            kind="text",
-            content=content,
-            metadata={"created_turn": turn, "turn_id": turn},
-        )],
+        parts=[
+            MessagePart(
+                id=f"part_{msg_id}",
+                message_id=msg_id,
+                kind="text",
+                content=content,
+                metadata={"created_turn": turn, "turn_id": turn},
+            )
+        ],
     )
 
 
 def _make_background_notification(msg_id: str, content: str, turn: int = 1):
     from lanscoder.context.models import AgentMessage, MessagePart
+
     return AgentMessage(
         id=msg_id,
         session_id="sess_test",
         role="notification",
-        parts=[MessagePart(
-            id=f"part_{msg_id}",
-            message_id=msg_id,
-            kind="text",
-            content=content,
-            metadata={
-                "created_turn": turn,
-                "turn_id": turn,
-                "background_job_id": "bg_0001",
-                "background_tool_name": "delegate",
-                "background_status": "completed",
-            },
-        )],
+        parts=[
+            MessagePart(
+                id=f"part_{msg_id}",
+                message_id=msg_id,
+                kind="text",
+                content=content,
+                metadata={
+                    "created_turn": turn,
+                    "turn_id": turn,
+                    "background_job_id": "bg_0001",
+                    "background_tool_name": "delegate",
+                    "background_status": "completed",
+                },
+            )
+        ],
     )
 
 
@@ -707,9 +714,6 @@ def test_recall_to_uses_resume_service(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-from lanscoder.providers.types import ChatResponse
-
-
 class TestRecallIntegration:
     def test_recall_roundtrip(self, tmp_path):
         store = JsonlSessionStore(tmp_path)
@@ -820,6 +824,7 @@ class TestRecallIntegration:
         _write_session_jsonl(store._session_path(sid), events)
 
         from lanscoder.session.index import SessionIndex
+
         index = SessionIndex(tmp_path)
         index.rebuild()
 

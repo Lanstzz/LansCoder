@@ -36,7 +36,7 @@ def test_harbor_agent_builds_quoted_lanscoder_benchmark_command(tmp_path: Path) 
     assert "--max-tool-rounds 77" in command
     assert '--model "${LANSCODER_PROVIDER_NAME}/${LANSCODER_MODEL}"' in command
     assert '"[providers." + quote(provider)' in command
-    assert 'api_key ' in command
+    assert "api_key " in command
     assert "LANSCODER_BASE_URL" in command
     assert "'Fix the task." in command
     assert "/logs/agent/lanscoder.txt" in command

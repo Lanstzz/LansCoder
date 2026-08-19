@@ -327,9 +327,7 @@ def test_autonomous_manager_coerces_ask_to_deny(tmp_path) -> None:
     )
 
     # Dangerous shell would ASK in AGGRESSIVE mode; autonomous downgrades to DENY.
-    decision = manager.preflight(
-        PermissionRequest(id="req_rm", action=PermissionAction.EXECUTE_SHELL, target="rm -rf build")
-    )
+    decision = manager.preflight(PermissionRequest(id="req_rm", action=PermissionAction.EXECUTE_SHELL, target="rm -rf build"))
     assert decision.kind == PermissionDecisionKind.DENY
 
     # A matching grant still wins over the autonomous coercion.
@@ -343,9 +341,7 @@ def test_autonomous_manager_coerces_ask_to_deny(tmp_path) -> None:
             created_at="runtime",
         )
     )
-    allowed = manager.preflight(
-        PermissionRequest(id="req_rm2", action=PermissionAction.EXECUTE_SHELL, target="rm -rf build")
-    )
+    allowed = manager.preflight(PermissionRequest(id="req_rm2", action=PermissionAction.EXECUTE_SHELL, target="rm -rf build"))
     assert allowed.kind == PermissionDecisionKind.ALLOW
 
 
@@ -356,7 +352,5 @@ def test_non_autonomous_manager_keeps_ask(tmp_path) -> None:
         autonomous=False,
     )
 
-    decision = manager.preflight(
-        PermissionRequest(id="req_rm", action=PermissionAction.EXECUTE_SHELL, target="rm -rf build")
-    )
+    decision = manager.preflight(PermissionRequest(id="req_rm", action=PermissionAction.EXECUTE_SHELL, target="rm -rf build"))
     assert decision.kind == PermissionDecisionKind.ASK

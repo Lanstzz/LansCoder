@@ -84,9 +84,7 @@ class FakeOutput:
     def mount(self, widget: object) -> None:
         self.mounted.append(widget)
         if type(widget).__name__ == "Static":
-            self.lines.append(
-                str(getattr(widget, "content", getattr(widget, "renderable", "")))
-            )
+            self.lines.append(str(getattr(widget, "content", getattr(widget, "renderable", ""))))
         if isinstance(widget, Markdown):
             widget.updates = []  # type: ignore[attr-defined]
 
@@ -101,17 +99,8 @@ class FakeOutput:
 
 
 def _static_output_text(app: LansCoderApp) -> str:
-    static_text = "\n".join(
-        str(getattr(widget, "content", getattr(widget, "renderable", "")))
-        for widget in app.query_one("#output").query("Static")
-    )
-    markdown_text = "\n".join(
-        str(
-            getattr(widget, "source", "")
-            or "\n".join(getattr(widget, "updates", []) or [])
-        )
-        for widget in app.query_one("#output").query("LansCoderMarkdown")
-    )
+    static_text = "\n".join(str(getattr(widget, "content", getattr(widget, "renderable", ""))) for widget in app.query_one("#output").query("Static"))
+    markdown_text = "\n".join(str(getattr(widget, "source", "") or "\n".join(getattr(widget, "updates", []) or [])) for widget in app.query_one("#output").query("LansCoderMarkdown"))
     return "\n".join(part for part in [static_text, markdown_text] if part)
 
 
@@ -162,9 +151,7 @@ class FakeTaskPlanPanel(FakeActivity):
         self.classes.discard(name)
 
 
-def test_stage_paste_attachments_adds_clipboard_attachment(
-    monkeypatch, tmp_path
-) -> None:
+def test_stage_paste_attachments_adds_clipboard_attachment(monkeypatch, tmp_path) -> None:
     image = tmp_path / "clipboard.png"
     image.write_bytes(b"image")
     attachment = UserAttachment(
@@ -177,12 +164,8 @@ def test_stage_paste_attachments_adds_clipboard_attachment(
     )
     app = LansCoderApp()
     messages: list[str] = []
-    monkeypatch.setattr(
-        "lanscoder.app.tui.resolve_paste_attachments", lambda text: [attachment]
-    )
-    monkeypatch.setattr(
-        app, "_write_line", lambda text, **kwargs: messages.append(text)
-    )
+    monkeypatch.setattr("lanscoder.app.tui.resolve_paste_attachments", lambda text: [attachment])
+    monkeypatch.setattr(app, "_write_line", lambda text, **kwargs: messages.append(text))
 
     assert app._stage_paste_attachments(None) is True
     assert app._staged_attachments == [attachment]
@@ -192,14 +175,10 @@ def test_stage_paste_attachments_adds_clipboard_attachment(
 def test_stage_paste_attachments_does_not_add_duplicates(monkeypatch, tmp_path) -> None:
     image = tmp_path / "clipboard.png"
     image.write_bytes(b"image")
-    attachment = UserAttachment(
-        "image", image, "clipboard.png", "image/png", 5, "clipboard"
-    )
+    attachment = UserAttachment("image", image, "clipboard.png", "image/png", 5, "clipboard")
     app = LansCoderApp()
     app._staged_attachments.append(attachment)
-    monkeypatch.setattr(
-        "lanscoder.app.tui.resolve_paste_attachments", lambda text: [attachment]
-    )
+    monkeypatch.setattr("lanscoder.app.tui.resolve_paste_attachments", lambda text: [attachment])
 
     assert app._stage_paste_attachments(None) is True
     assert app._staged_attachments == [attachment]
@@ -210,9 +189,7 @@ def test_stage_paste_attachments_reports_attachment_errors(monkeypatch) -> None:
     messages: list[tuple[str, TuiEntryKind]] = []
     monkeypatch.setattr(
         "lanscoder.app.tui.resolve_paste_attachments",
-        lambda text: (_ for _ in ()).throw(
-            ValueError("Image exceeds 20MB limit: clipboard.png")
-        ),
+        lambda text: (_ for _ in ()).throw(ValueError("Image exceeds 20MB limit: clipboard.png")),
     )
     monkeypatch.setattr(
         app,
@@ -288,10 +265,7 @@ def test_command_picker_renderable_colors_selected_cursor() -> None:
 
     assert isinstance(rendered, Text)
     assert rendered.plain == "Select:\n> 1. first\n  2. second"
-    assert any(
-        span.start == len("Select:\n") and span.end == len("Select:\n>")
-        for span in rendered.spans
-    )
+    assert any(span.start == len("Select:\n") and span.end == len("Select:\n>") for span in rendered.spans)
     assert any(span.style == "#4f8cff bold" for span in rendered.spans)
 
 
@@ -332,10 +306,7 @@ def test_picker_rerender_updates_existing_command_widget_without_full_rerender(
 
     assert rerendered is False
     assert len(widget.updates) == 1
-    assert (
-        getattr(widget.updates[0], "plain", "")
-        == "Select a model:\n  1. old\n> 2. new\nUse up/down and enter to select."
-    )
+    assert getattr(widget.updates[0], "plain", "") == "Select a model:\n  1. old\n> 2. new\nUse up/down and enter to select."
     assert app.transcript.entries[-1].body.startswith("Select a model:")
     assert "> 2. new" in app.transcript.entries[-1].body
 
@@ -424,9 +395,7 @@ class BlockingCompactCommandHandler:
         (3661, "1h 1m 1s · 0 tools"),
     ],
 )
-def test_turn_metrics_time_units_appear_only_after_thresholds(
-    elapsed_seconds, expected
-) -> None:
+def test_turn_metrics_time_units_appear_only_after_thresholds(elapsed_seconds, expected) -> None:
     assert turn_metrics_text(elapsed_seconds, 0) == expected
 
 
@@ -440,19 +409,13 @@ class FakeSession:
 
 
 def _context_budget(view):
-    return build_context_budget(
-        messages=[], tools=[], context_window=32_768, max_output_tokens=4_096
-    )
+    return build_context_budget(messages=[], tools=[], context_window=32_768, max_output_tokens=4_096)
 
 
 def test_lanscoder_app_can_be_created_with_command_handler() -> None:
-    handler = ContextCommandHandler(
-        session=FakeSession(), budget_provider=_context_budget
-    )
+    handler = ContextCommandHandler(session=FakeSession(), budget_provider=_context_budget)
 
-    app = LansCoderApp(
-        command_handler=handler, config=LansCoderTuiConfig(title="TestCoder")
-    )
+    app = LansCoderApp(command_handler=handler, config=LansCoderTuiConfig(title="TestCoder"))
 
     assert app.command_handler is handler
     assert app.config.title == "TestCoder"
@@ -466,9 +429,7 @@ def test_lanscoder_app_copies_to_macos_clipboard(monkeypatch) -> None:
 
     app.copy_to_clipboard("copied text")
 
-    pbcopy.assert_called_once_with(
-        ["pbcopy"], input="copied text", text=True, check=False
-    )
+    pbcopy.assert_called_once_with(["pbcopy"], input="copied text", text=True, check=False)
 
 
 @pytest.mark.anyio
@@ -492,9 +453,7 @@ async def test_lanscoder_app_runs_manual_compact_command_without_blocking_ui() -
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_lanscoder_app_uses_custom_chrome_instead_of_textual_header_footer() -> (
-    None
-):
+async def test_lanscoder_app_uses_custom_chrome_instead_of_textual_header_footer() -> None:
     app = LansCoderApp(current_session=FakeSession())
 
     async with app.run_test():
@@ -523,10 +482,7 @@ def test_lanscoder_app_topbar_colors_each_permission_mode(mode, color) -> None:
     session.mode = mode
     app = LansCoderApp(current_session=session)
 
-    assert app._topbar_text() == (
-        "[#4f8cff]LansCoder[/]   [#303238]·[/]   [#4f8cff]idle · ready[/]   "
-        f"[#303238]·[/]   [{color}]{mode}[/]"
-    )
+    assert app._topbar_text() == ("[#4f8cff]LansCoder[/]   [#303238]·[/]   [#4f8cff]idle · ready[/]   " f"[#303238]·[/]   [{color}]{mode}[/]")
     assert "sess_test" not in app._topbar_text()
 
 
@@ -542,10 +498,7 @@ def test_lanscoder_app_topbar_shows_model_glow_and_hides_session_id() -> None:
 
     text = app._topbar_text()
 
-    assert (
-        Text.from_markup(text).plain
-        == "LansCoder   ·   idle · ready   ·   yurenapi/gpt-5.5   ·   standard   ·   cwd LansCoder"
-    )
+    assert Text.from_markup(text).plain == "LansCoder   ·   idle · ready   ·   yurenapi/gpt-5.5   ·   standard   ·   cwd LansCoder"
     assert "[#7eb6ff]r[/]" in text
     assert "sess_test" not in text
 
@@ -569,9 +522,7 @@ def test_lanscoder_app_topbar_shows_model_glow_and_hides_session_id() -> None:
         ("deepseek-v4-flash", "#94c9ff"),
     ],
 )
-def test_supported_models_use_distinct_moving_colour_bands_for_any_provider(
-    model: str, colour: str
-) -> None:
+def test_supported_models_use_distinct_moving_colour_bands_for_any_provider(model: str, colour: str) -> None:
     first = _provider_model_markup("OpenAI", model, glow_frame=0)
     next_frame = _provider_model_markup("OpenAI", model, glow_frame=1)
 
@@ -583,13 +534,8 @@ def test_supported_models_use_distinct_moving_colour_bands_for_any_provider(
 
 def test_unknown_models_keep_the_standard_accent_for_any_provider() -> None:
     assert _provider_name_markup("OpenAI", glow_frame=4) == "[#4f8cff]OpenAI[/]"
-    assert (
-        _provider_model_markup("OpenAI", "gpt-5.6", glow_frame=4)
-        == "[#4f8cff]OpenAI[/][#6e6d72]/gpt-5.6[/]"
-    )
-    assert _provider_model_markup("deepseek", "deepseek-chat", glow_frame=4) == (
-        "[#4f8cff]deepseek[/][#6e6d72]/deepseek-chat[/]"
-    )
+    assert _provider_model_markup("OpenAI", "gpt-5.6", glow_frame=4) == "[#4f8cff]OpenAI[/][#6e6d72]/gpt-5.6[/]"
+    assert _provider_model_markup("deepseek", "deepseek-chat", glow_frame=4) == ("[#4f8cff]deepseek[/][#6e6d72]/deepseek-chat[/]")
     known_model_glow = _provider_model_markup("yurenapi", "gpt-5.5", glow_frame=0)
     assert Text.from_markup(known_model_glow).plain == "yurenapi/gpt-5.5"
     assert known_model_glow != "[#4f8cff]yurenapi[/][#6e6d72]/gpt-5.5[/]"
@@ -601,11 +547,7 @@ def test_unknown_models_keep_the_standard_accent_for_any_provider() -> None:
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_model_glow_animates_and_stops_when_the_app_unmounts() -> None:
-    app = LansCoderApp(
-        config=LansCoderTuiConfig(
-            provider_name="OpenAI", provider_model="gpt-5.6-terra"
-        )
-    )
+    app = LansCoderApp(config=LansCoderTuiConfig(provider_name="OpenAI", provider_model="gpt-5.6-terra"))
 
     async with app.run_test():
         timer = app._provider_glow_timer
@@ -622,9 +564,7 @@ async def test_model_glow_animates_and_stops_when_the_app_unmounts() -> None:
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_unsupported_model_does_not_start_provider_glow() -> None:
-    app = LansCoderApp(
-        config=LansCoderTuiConfig(provider_name="OpenAI", provider_model="other-model")
-    )
+    app = LansCoderApp(config=LansCoderTuiConfig(provider_name="OpenAI", provider_model="other-model"))
 
     async with app.run_test():
         assert app._provider_glow_timer is None
@@ -652,9 +592,7 @@ def test_stable_lanscoder_markdown_and_blocks_allow_selection() -> None:
 
     assert markdown.allow_select is True
     assert LansCoderMarkdown.BLOCKS
-    assert all(
-        block.ALLOW_SELECT is True for block in LansCoderMarkdown.BLOCKS.values()
-    )
+    assert all(block.ALLOW_SELECT is True for block in LansCoderMarkdown.BLOCKS.values())
 
 
 @pytest.mark.anyio
@@ -664,9 +602,7 @@ async def test_static_and_completed_markdown_output_allow_selection() -> None:
 
     async with app.run_test() as pilot:
         app._write_line("plain output", kind=TuiEntryKind.SYSTEM)
-        app._write_markdown_message(
-            "paragraph\n\n- list\n\n```python\nprint('ok')\n```"
-        )
+        app._write_markdown_message("paragraph\n\n- list\n\n```python\nprint('ok')\n```")
         await pilot.pause()
 
         assert app.ALLOW_SELECT is True
@@ -843,9 +779,7 @@ async def test_lanscoder_app_uses_compact_welcome_in_an_80_by_24_terminal() -> N
         assert app._welcome_particle_timer is not None
 
 
-def test_lanscoder_app_topbar_uses_spacious_two_sided_layout_when_width_is_known() -> (
-    None
-):
+def test_lanscoder_app_topbar_uses_spacious_two_sided_layout_when_width_is_known() -> None:
     app = LansCoderApp(
         current_session=FakeSession(),
         config=LansCoderTuiConfig(
@@ -866,19 +800,14 @@ def test_lanscoder_app_topbar_uses_spacious_two_sided_layout_when_width_is_known
     assert " " * 20 in text
 
 
-def test_lanscoder_app_topbar_highlights_bypass_mode_and_truncates_long_session() -> (
-    None
-):
+def test_lanscoder_app_topbar_highlights_bypass_mode_and_truncates_long_session() -> None:
     class BypassSession(FakeSession):
         session_id = "sess_c8d401e2124f"
         mode = "bypass"
 
     app = LansCoderApp(current_session=BypassSession())
 
-    assert app._topbar_text() == (
-        "[#4f8cff]LansCoder[/]   [#303238]·[/]   [#4f8cff]idle · ready[/]   "
-        "[#303238]·[/]   [#ff6b5f]bypass[/]"
-    )
+    assert app._topbar_text() == ("[#4f8cff]LansCoder[/]   [#303238]·[/]   [#4f8cff]idle · ready[/]   " "[#303238]·[/]   [#ff6b5f]bypass[/]")
 
 
 def test_lanscoder_app_topbar_includes_live_activity_status() -> None:
@@ -886,9 +815,7 @@ def test_lanscoder_app_topbar_includes_live_activity_status() -> None:
 
     app._activity_text = "thinking [.. ] planning next step..."
 
-    assert "[#4f8cff]thinking [.. ] planning next step...[/]" in app._topbar_text(
-        width=120
-    )
+    assert "[#4f8cff]thinking [.. ] planning next step...[/]" in app._topbar_text(width=120)
 
 
 def test_lanscoder_app_topbar_truncates_long_activity_before_metadata() -> None:
@@ -910,9 +837,7 @@ def test_lanscoder_app_topbar_truncates_long_activity_before_metadata() -> None:
     assert "thinking" in Text.from_markup(text).plain
 
 
-def test_lanscoder_app_topbar_fits_narrow_width_with_long_activity_and_metadata() -> (
-    None
-):
+def test_lanscoder_app_topbar_fits_narrow_width_with_long_activity_and_metadata() -> None:
     app = LansCoderApp(
         current_session=FakeSession(),
         config=LansCoderTuiConfig(
@@ -1006,9 +931,7 @@ def test_tui_transcript_records_structured_entries_with_stable_labels() -> None:
 def test_tui_transcript_tracks_active_tool_until_terminal_status() -> None:
     transcript = TuiTranscript()
 
-    transcript.record_tool_activity(
-        "exec_command", "running", "rg -n Permission lanscoder"
-    )
+    transcript.record_tool_activity("exec_command", "running", "rg -n Permission lanscoder")
 
     assert transcript.active_tool is not None
     assert transcript.active_tool.name == "exec_command"
@@ -1066,9 +989,7 @@ def test_task_plan_panel_text_renders_linear_tasks_in_ordered_single_column() ->
     ) == ("Task Plan · linear\n[✓] 读代码\n[~] 实现改动\n[!] 跑测试")
 
 
-def test_task_plan_panel_text_renders_dag_levels_dependencies_and_derived_statuses() -> (
-    None
-):
+def test_task_plan_panel_text_renders_dag_levels_dependencies_and_derived_statuses() -> None:
     assert task_plan_panel_text(
         {
             "mode": "dag",
@@ -1100,14 +1021,7 @@ def test_task_plan_panel_text_renders_dag_levels_dependencies_and_derived_status
                 },
             ],
         }
-    ) == (
-        "Task Plan · dag\n"
-        "Level 0 · parallel\n"
-        "  [→] 调研 A (research_a)\n"
-        "  [~] 调研 B (research_b)\n"
-        "Level 1\n"
-        "  [!] 汇总 (summary) · depends on: research_a, research_b"
-    )
+    ) == ("Task Plan · dag\n" "Level 0 · parallel\n" "  [→] 调研 A (research_a)\n" "  [~] 调研 B (research_b)\n" "Level 1\n" "  [!] 汇总 (summary) · depends on: research_a, research_b")
 
 
 def test_lanscoder_app_records_rendered_messages_in_transcript(monkeypatch) -> None:
@@ -1118,9 +1032,7 @@ def test_lanscoder_app_records_rendered_messages_in_transcript(monkeypatch) -> N
     app._write_line("> hello", kind=TuiEntryKind.USER)
     app._write_markdown_message("**hi**")
 
-    assert [
-        (entry.kind, entry.label, entry.body) for entry in app.transcript.entries
-    ] == [
+    assert [(entry.kind, entry.label, entry.body) for entry in app.transcript.entries] == [
         (TuiEntryKind.USER, "you", "> hello"),
         (TuiEntryKind.ASSISTANT, "LansCoder", "**hi**"),
     ]
@@ -1187,9 +1099,7 @@ class FakeStreamingAsyncChatRunner(FakeChatRunner):
 
     async def arun_user_turn(self, content: str) -> ChatResponse:
         self.inputs.append(content)
-        self.stream_event_handler(
-            ChatStreamEvent(kind="reasoning_delta", text="thinking")
-        )
+        self.stream_event_handler(ChatStreamEvent(kind="reasoning_delta", text="thinking"))
         self.last_display_lines = ["done"]
         return ChatResponse(provider="fake", model="fake", content="done")
 
@@ -1245,9 +1155,7 @@ class FakePermissionResumeRunner(FakeChatRunner):
         )
         self.resumes: list[tuple[str, str]] = []
 
-    async def aresume_with_user_input(
-        self, request_id: str, answer: str
-    ) -> ChatResponse:
+    async def aresume_with_user_input(self, request_id: str, answer: str) -> ChatResponse:
         self.resumes.append((request_id, answer))
         self.last_pending_input = None
         self.last_display_lines = ["Tool result: write success: ok", "done"]
@@ -1268,9 +1176,7 @@ class FakeAskUserResumeRunner(FakeChatRunner):
         )
         self.resumes: list[tuple[str, str]] = []
 
-    async def aresume_with_user_input(
-        self, request_id: str, answer: str
-    ) -> ChatResponse:
+    async def aresume_with_user_input(self, request_id: str, answer: str) -> ChatResponse:
         self.resumes.append((request_id, answer))
         self.last_pending_input = None
         self.last_display_lines = ["部署到 prod", "done"]
@@ -1296,9 +1202,7 @@ class FakePermissionMidTurnRunner(FakeChatRunner):
         )
         return ChatResponse(provider="fake", model="fake", content="等待权限确认。")
 
-    async def aresume_with_user_input(
-        self, request_id: str, answer: str
-    ) -> ChatResponse:
+    async def aresume_with_user_input(self, request_id: str, answer: str) -> ChatResponse:
         self.resumes.append((request_id, answer))
         self.last_pending_input = None
         self.last_display_lines = ["done"]
@@ -1399,9 +1303,7 @@ class FakeBackgroundManager:
     def __init__(self, pending: list[BackgroundJob] | None = None) -> None:
         self._pending = list(pending or [])
 
-    def pending_completions(
-        self, *, session_id: str | None = None
-    ) -> list[BackgroundJob]:
+    def pending_completions(self, *, session_id: str | None = None) -> list[BackgroundJob]:
         return list(self._pending)
 
     def drain(self) -> None:
@@ -1452,14 +1354,10 @@ class SubmitChatCommandHandler:
 
 
 def test_lanscoder_app_can_be_created_with_composite_handler_and_chat_runner() -> None:
-    context_handler = ContextCommandHandler(
-        session=FakeSession(), budget_provider=_context_budget
-    )
+    context_handler = ContextCommandHandler(session=FakeSession(), budget_provider=_context_budget)
     composite = CompositeCommandHandler(
         [
-            SessionCommandHandler(
-                catalog=object()
-            ),  # constructor storage only; not used by this test
+            SessionCommandHandler(catalog=object()),  # constructor storage only; not used by this test
             context_handler,
         ]
     )
@@ -1473,9 +1371,7 @@ def test_lanscoder_app_can_be_created_with_composite_handler_and_chat_runner() -
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_lanscoder_app_runs_plain_chat_when_only_chat_runner_is_configured() -> (
-    None
-):
+async def test_lanscoder_app_runs_plain_chat_when_only_chat_runner_is_configured() -> None:
     runner = FakeChatRunner()
     app = LansCoderApp(chat_runner=runner)
 
@@ -1489,9 +1385,7 @@ async def test_lanscoder_app_runs_plain_chat_when_only_chat_runner_is_configured
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_lanscoder_app_sends_staged_paste_attachment_and_clears_it(
-    tmp_path, monkeypatch
-) -> None:
+async def test_lanscoder_app_sends_staged_paste_attachment_and_clears_it(tmp_path, monkeypatch) -> None:
     image = tmp_path / "image.png"
     image.write_bytes(b"image")
     attachment = UserAttachment(
@@ -1502,9 +1396,7 @@ async def test_lanscoder_app_sends_staged_paste_attachment_and_clears_it(
         size_bytes=image.stat().st_size,
         source="paste",
     )
-    monkeypatch.setattr(
-        "lanscoder.app.tui.resolve_paste_attachments", lambda text: [attachment]
-    )
+    monkeypatch.setattr("lanscoder.app.tui.resolve_paste_attachments", lambda text: [attachment])
     runner = FakeChatRunner()
     app = LansCoderApp(chat_runner=runner)
 
@@ -1566,18 +1458,13 @@ async def test_composer_advertises_ctrl_or_cmd_v_for_image_paste() -> None:
 
     async with app.run_test():
         composer = app.query_one("#input", ComposerTextArea)
-        assert (
-            composer.placeholder
-            == "输入消息，Enter 发送，Shift+Enter 换行，Ctrl/Cmd+V 粘贴图片"
-        )
+        assert composer.placeholder == "输入消息，Enter 发送，Shift+Enter 换行，Ctrl/Cmd+V 粘贴图片"
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 @pytest.mark.parametrize("paste_key", ["ctrl+v", "super+v"])
-async def test_composer_paste_shortcut_leaves_plain_text_for_terminal_paste_event(
-    monkeypatch, paste_key
-) -> None:
+async def test_composer_paste_shortcut_leaves_plain_text_for_terminal_paste_event(monkeypatch, paste_key) -> None:
     monkeypatch.setattr("lanscoder.app.tui.resolve_paste_attachments", lambda text: [])
     app = LansCoderApp()
 
@@ -1595,17 +1482,11 @@ async def test_composer_paste_shortcut_leaves_plain_text_for_terminal_paste_even
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 @pytest.mark.parametrize("paste_key", ["ctrl+v", "super+v", "f8"])
-async def test_lanscoder_app_paste_shortcut_stages_clipboard_image_while_composer_is_focused(
-    tmp_path, monkeypatch, paste_key
-) -> None:
+async def test_lanscoder_app_paste_shortcut_stages_clipboard_image_while_composer_is_focused(tmp_path, monkeypatch, paste_key) -> None:
     image = tmp_path / "clipboard.png"
     image.write_bytes(b"image")
-    attachment = UserAttachment(
-        "image", image, "clipboard.png", "image/png", 5, "clipboard"
-    )
-    monkeypatch.setattr(
-        "lanscoder.app.tui.resolve_paste_attachments", lambda text: [attachment]
-    )
+    attachment = UserAttachment("image", image, "clipboard.png", "image/png", 5, "clipboard")
+    monkeypatch.setattr("lanscoder.app.tui.resolve_paste_attachments", lambda text: [attachment])
     app = LansCoderApp()
 
     async with app.run_test() as pilot:
@@ -1620,9 +1501,7 @@ async def test_lanscoder_app_paste_shortcut_stages_clipboard_image_while_compose
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 @pytest.mark.parametrize("paste_key", ["ctrl+v", "super+v"])
-async def test_composer_paste_shortcut_does_not_report_missing_clipboard_image(
-    monkeypatch, paste_key
-) -> None:
+async def test_composer_paste_shortcut_does_not_report_missing_clipboard_image(monkeypatch, paste_key) -> None:
     monkeypatch.setattr("lanscoder.app.tui.resolve_paste_attachments", lambda text: [])
     app = LansCoderApp()
 
@@ -1684,9 +1563,7 @@ async def test_lanscoder_app_shift_enter_inserts_newline_without_submitting() ->
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_lanscoder_app_does_not_send_unhandled_slash_command_to_chat_runner() -> (
-    None
-):
+async def test_lanscoder_app_does_not_send_unhandled_slash_command_to_chat_runner() -> None:
     runner = FakeChatRunner()
     app = LansCoderApp(command_handler=UnhandledCommandHandler(), chat_runner=runner)
 
@@ -1773,13 +1650,9 @@ async def test_lanscoder_app_resume_picker_replays_selected_session_history(
     writer_one = SessionEventWriter(store=store, session_id="sess_one")
     writer_one.append_session_created(title="第一个")
     writer_one.append_user_message("旧问题")
-    writer_one.append_assistant_response(
-        ChatResponse(provider="fake", model="fake", content="旧回答")
-    )
+    writer_one.append_assistant_response(ChatResponse(provider="fake", model="fake", content="旧回答"))
     tool_call = ToolCall(id="call_resume", name="grep", arguments={"pattern": "needle"})
-    writer_one.append_assistant_response(
-        ChatResponse(provider="fake", model="fake", content="", tool_calls=[tool_call])
-    )
+    writer_one.append_assistant_response(ChatResponse(provider="fake", model="fake", content="", tool_calls=[tool_call]))
     writer_one.append_tool_result(
         tool_call=tool_call,
         result=ToolResult(name="grep", ok=True, content="result " + "x" * 300),
@@ -1936,10 +1809,7 @@ async def test_lanscoder_app_skill_picker_references_selected_skill_in_input() -
         input_widget = app.query_one("#input")
 
     assert handler.commands == ["/skills", "/skill-use review"]
-    assert (
-        input_widget.text
-        == "请先调用 load_skill(name=review, args=<你的任务>)，再按照返回的指令继续。"
-    )
+    assert input_widget.text == "请先调用 load_skill(name=review, args=<你的任务>)，再按照返回的指令继续。"
 
 
 @pytest.mark.anyio
@@ -1991,10 +1861,7 @@ async def test_lanscoder_app_double_escape_interrupts_running_chat() -> None:
         assert app._chat_busy is True
         await pilot.press("escape")
         await pilot.pause()
-        output_text = "\n".join(
-            str(getattr(widget, "content", getattr(widget, "renderable", "")))
-            for widget in app.query_one("#output").query("Static")
-        )
+        output_text = "\n".join(str(getattr(widget, "content", getattr(widget, "renderable", ""))) for widget in app.query_one("#output").query("Static"))
 
     assert runner.inputs == ["start"]
     assert app._chat_busy is False
@@ -2004,9 +1871,7 @@ async def test_lanscoder_app_double_escape_interrupts_running_chat() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_lanscoder_app_streaming_tui_does_not_render_duplicate_final_markdown() -> (
-    None
-):
+async def test_lanscoder_app_streaming_tui_does_not_render_duplicate_final_markdown() -> None:
     runner = FakeStreamingTextAsyncChatRunner()
     app = LansCoderApp(chat_runner=runner)
 
@@ -2023,9 +1888,7 @@ async def test_lanscoder_app_streaming_tui_does_not_render_duplicate_final_markd
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_lanscoder_app_right_clicking_markdown_output_does_not_crash_selection_path() -> (
-    None
-):
+async def test_lanscoder_app_right_clicking_markdown_output_does_not_crash_selection_path() -> None:
     runner = FakeChatRunner()
     app = LansCoderApp(chat_runner=runner)
 
@@ -2046,9 +1909,7 @@ async def test_lanscoder_app_right_clicking_markdown_output_does_not_crash_selec
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_lanscoder_app_right_clicking_markdown_code_block_does_not_crash_selection_path() -> (
-    None
-):
+async def test_lanscoder_app_right_clicking_markdown_code_block_does_not_crash_selection_path() -> None:
     app = LansCoderApp()
 
     async with app.run_test() as pilot:
@@ -2071,49 +1932,27 @@ async def test_streaming_markdown_selection_state_applies_to_mounted_blocks() ->
         output = app.query_one("#output")
         markdown = LansCoderMarkdown(selectable=False)
         await output.mount(markdown)
-        await markdown.update(
-            "paragraph\n\n- list\n\n| one | two |\n| --- | --- |\n| 1 | 2 |\n\n```python\nprint('ok')\n```"
-        )
+        await markdown.update("paragraph\n\n- list\n\n| one | two |\n| --- | --- |\n| 1 | 2 |\n\n```python\nprint('ok')\n```")
         await pilot.pause()
 
         blocks = list(markdown.query("MarkdownBlock"))
-        selection_leaves = [
-            widget
-            for widget in markdown.query("*")
-            if type(widget).__name__.removeprefix("LansCoder")
-            in {"MarkdownBullet", "MarkdownTableCellContents"}
-        ]
+        selection_leaves = [widget for widget in markdown.query("*") if type(widget).__name__.removeprefix("LansCoder") in {"MarkdownBullet", "MarkdownTableCellContents"}]
         assert blocks
-        assert {
-            type(widget).__name__.removeprefix("LansCoder")
-            for widget in selection_leaves
-        } == {
+        assert {type(widget).__name__.removeprefix("LansCoder") for widget in selection_leaves} == {
             "MarkdownBullet",
             "MarkdownTableCellContents",
         }
         assert markdown.allow_select is False
         screen = app.screen
         assert isinstance(screen, LansCoderScreen)
-        assert all(
-            screen._selection_is_blocked_by_streaming_markdown(block)
-            for block in blocks
-        )
-        assert all(
-            screen._selection_is_blocked_by_streaming_markdown(widget)
-            for widget in selection_leaves
-        )
+        assert all(screen._selection_is_blocked_by_streaming_markdown(block) for block in blocks)
+        assert all(screen._selection_is_blocked_by_streaming_markdown(widget) for widget in selection_leaves)
 
         markdown.set_selectable(True)
 
         assert markdown.allow_select is True
-        assert all(
-            not screen._selection_is_blocked_by_streaming_markdown(block)
-            for block in blocks
-        )
-        assert all(
-            not screen._selection_is_blocked_by_streaming_markdown(widget)
-            for widget in selection_leaves
-        )
+        assert all(not screen._selection_is_blocked_by_streaming_markdown(block) for block in blocks)
+        assert all(not screen._selection_is_blocked_by_streaming_markdown(widget) for widget in selection_leaves)
 
 
 @pytest.mark.anyio
@@ -2128,26 +1967,15 @@ async def test_screen_rejects_all_leaves_inside_unstable_streaming_markdown() ->
         await markdown.update("- list\n\n| one | two |\n| --- | --- |\n| 1 | 2 |")
         await pilot.pause()
 
-        selection_leaves = [
-            widget
-            for widget in markdown.query("*")
-            if type(widget).__name__.removeprefix("LansCoder")
-            in {"MarkdownBullet", "MarkdownTableCellContents"}
-        ]
+        selection_leaves = [widget for widget in markdown.query("*") if type(widget).__name__.removeprefix("LansCoder") in {"MarkdownBullet", "MarkdownTableCellContents"}]
         assert selection_leaves
         screen = app.screen
         assert isinstance(screen, LansCoderScreen)
-        assert all(
-            screen._selection_is_blocked_by_streaming_markdown(leaf)
-            for leaf in selection_leaves
-        )
+        assert all(screen._selection_is_blocked_by_streaming_markdown(leaf) for leaf in selection_leaves)
 
         markdown.set_selectable(True)
 
-        assert all(
-            not screen._selection_is_blocked_by_streaming_markdown(leaf)
-            for leaf in selection_leaves
-        )
+        assert all(not screen._selection_is_blocked_by_streaming_markdown(leaf) for leaf in selection_leaves)
 
 
 @pytest.mark.anyio
@@ -2162,24 +1990,16 @@ async def test_streaming_markdown_becomes_selectable_only_after_final_update() -
         assert markdown.allow_select is False
         screen = app.screen
         assert isinstance(screen, LansCoderScreen)
-        assert all(
-            screen._selection_is_blocked_by_streaming_markdown(block)
-            for block in markdown.query("MarkdownBlock")
-        )
+        assert all(screen._selection_is_blocked_by_streaming_markdown(block) for block in markdown.query("MarkdownBlock"))
 
         app._stream_text_buffer = "final answer"
-        app._write_chat_response(
-            ChatResponse(provider="fake", model="fake", content="final answer")
-        )
+        app._write_chat_response(ChatResponse(provider="fake", model="fake", content="final answer"))
         assert markdown.allow_select is False
 
         await app.wait_for_stream_finalization(markdown)
         assert markdown.allow_select is True
         assert markdown._markdown == "LansCoder:\n\nfinal answer"
-        assert all(
-            not screen._selection_is_blocked_by_streaming_markdown(block)
-            for block in markdown.query("MarkdownBlock")
-        )
+        assert all(not screen._selection_is_blocked_by_streaming_markdown(block) for block in markdown.query("MarkdownBlock"))
 
 
 @pytest.mark.anyio
@@ -2270,9 +2090,7 @@ async def test_starting_a_new_stream_keeps_an_old_stream_finalization_waitable(
         await update_started.wait()
 
         app._install_stream_event_handler()
-        finalization_wait = asyncio.create_task(
-            app.wait_for_stream_finalization(markdown)
-        )
+        finalization_wait = asyncio.create_task(app.wait_for_stream_finalization(markdown))
         await pilot.pause()
         assert finalization_wait.done() is False
 
@@ -2300,9 +2118,7 @@ async def test_stream_segments_on_both_sides_of_tool_become_selectable() -> None
         assert second is not first
         assert second.allow_select is False
 
-        app._write_chat_response(
-            ChatResponse(provider="fake", model="fake", content="after tool")
-        )
+        app._write_chat_response(ChatResponse(provider="fake", model="fake", content="after tool"))
         await app.wait_for_stream_finalization(second)
         assert second.allow_select is True
         assert second._markdown == "LansCoder:\n\nafter tool"
@@ -2333,9 +2149,7 @@ def test_lanscoder_app_streams_text_delta_without_repeating_final_text(
     previous_handler = app._install_stream_event_handler()
     runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="he"))
     runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="llo"))
-    app._write_chat_response(
-        ChatResponse(provider="fake", model="fake", content="hello")
-    )
+    app._write_chat_response(ChatResponse(provider="fake", model="fake", content="hello"))
     app._restore_stream_event_handler(previous_handler)
 
     assert [type(widget).__name__ for widget in output.mounted] == ["LansCoderMarkdown"]
@@ -2389,9 +2203,7 @@ def test_lanscoder_app_streaming_skips_normalized_duplicate_assistant_line(
     previous_handler = app._install_stream_event_handler()
     app._start_turn_metrics()
     runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="hello"))
-    app._write_chat_response(
-        ChatResponse(provider="fake", model="fake", content="hello")
-    )
+    app._write_chat_response(ChatResponse(provider="fake", model="fake", content="hello"))
     app._restore_stream_event_handler(previous_handler)
 
     assert [type(widget).__name__ for widget in output.mounted] == ["LansCoderMarkdown"]
@@ -2418,18 +2230,12 @@ def test_lanscoder_app_streaming_skips_replaying_intermediate_assistant_lines(
     runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="最终"))
     runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="结论"))
     app._live_tool_events_seen = True
-    app._write_chat_response(
-        ChatResponse(provider="fake", model="fake", content="最终结论")
-    )
+    app._write_chat_response(ChatResponse(provider="fake", model="fake", content="最终结论"))
     app._restore_stream_event_handler(previous_handler)
 
     assert [type(widget).__name__ for widget in output.mounted] == ["LansCoderMarkdown"]
     assert output.mounted[0].updates[-1] == "LansCoder:\n\n最终结论"
-    assert [
-        entry.body
-        for entry in app.transcript.entries
-        if entry.kind == TuiEntryKind.ASSISTANT
-    ] == ["最终结论"]
+    assert [entry.body for entry in app.transcript.entries if entry.kind == TuiEntryKind.ASSISTANT] == ["最终结论"]
 
 
 def test_lanscoder_app_paces_stream_markdown_updates(monkeypatch) -> None:
@@ -2743,11 +2549,7 @@ def test_lanscoder_app_records_streaming_assistant_text_in_transcript(
     app._append_stream_text("你")
     app._append_stream_text("好")
 
-    assistant_entries = [
-        entry
-        for entry in app.transcript.entries
-        if entry.kind == TuiEntryKind.ASSISTANT
-    ]
+    assistant_entries = [entry for entry in app.transcript.entries if entry.kind == TuiEntryKind.ASSISTANT]
     assert len(assistant_entries) == 1
     assert assistant_entries[0].body == "你好"
 
@@ -2768,11 +2570,7 @@ def test_lanscoder_app_shows_reasoning_delta_in_activity_line(monkeypatch) -> No
     app._append_reasoning_text("planning ")
     app._append_reasoning_text("tools")
 
-    reasoning_entries = [
-        entry
-        for entry in app.transcript.entries
-        if entry.kind == TuiEntryKind.REASONING
-    ]
+    reasoning_entries = [entry for entry in app.transcript.entries if entry.kind == TuiEntryKind.REASONING]
     assert reasoning_entries == []
     assert output.mounted == []
     assert activity.updates[0].startswith("thinking [.  ] planning ")
@@ -2798,11 +2596,7 @@ def test_lanscoder_app_shows_working_indicator_without_reasoning_delta(
     app._show_working_indicator("planning next step...")
     app._complete_working_indicator()
 
-    reasoning_entries = [
-        entry
-        for entry in app.transcript.entries
-        if entry.kind == TuiEntryKind.REASONING
-    ]
+    reasoning_entries = [entry for entry in app.transcript.entries if entry.kind == TuiEntryKind.REASONING]
     assert reasoning_entries == []
     assert output.mounted == []
     assert activity.updates[0].startswith("thinking [.  ] planning next step...")
@@ -2833,11 +2627,7 @@ def test_lanscoder_app_animates_working_indicator(monkeypatch) -> None:
     app._show_working_indicator("planning next step...")
     app._advance_working_animation()
 
-    reasoning_entries = [
-        entry
-        for entry in app.transcript.entries
-        if entry.kind == TuiEntryKind.REASONING
-    ]
+    reasoning_entries = [entry for entry in app.transcript.entries if entry.kind == TuiEntryKind.REASONING]
     assert reasoning_entries == []
     assert activity.updates[-1].startswith("thinking [.. ] planning next step...")
     assert activity.updates[-1].rstrip().endswith("0.0s · 0 tools")
@@ -2893,9 +2683,7 @@ def test_lanscoder_app_streaming_final_response_skips_assistant_display_line(
 
     previous_handler = app._install_stream_event_handler()
     runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="h"))
-    app._write_chat_response(
-        ChatResponse(provider="fake", model="fake", content="hello")
-    )
+    app._write_chat_response(ChatResponse(provider="fake", model="fake", content="hello"))
     app._restore_stream_event_handler(previous_handler)
 
     assert sum(isinstance(widget, Markdown) for widget in output.mounted) == 1
@@ -2917,9 +2705,7 @@ def test_lanscoder_app_replaces_partial_stream_when_final_response_differs(
 
     previous_handler = app._install_stream_event_handler()
     runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="partial"))
-    app._write_chat_response(
-        ChatResponse(provider="fake", model="fake", content="complete ok")
-    )
+    app._write_chat_response(ChatResponse(provider="fake", model="fake", content="complete ok"))
     app._restore_stream_event_handler(previous_handler)
 
     assert [type(widget).__name__ for widget in output.mounted] == ["LansCoderMarkdown"]
@@ -2974,9 +2760,7 @@ def test_lanscoder_app_stream_event_handler_schedules_ui_updates_on_app_thread(
     calls: list[tuple[str, str]] = []
     scheduled: list[object] = []
 
-    monkeypatch.setattr(
-        app, "_append_stream_text", lambda text: calls.append(("text", text))
-    )
+    monkeypatch.setattr(app, "_append_stream_text", lambda text: calls.append(("text", text)))
     monkeypatch.setattr(app, "_complete_working_indicator", lambda: None)
     monkeypatch.setattr(
         app,
@@ -3101,11 +2885,7 @@ def test_lanscoder_app_stops_post_tool_animation_when_next_tool_starts(
             result=ToolResult(name="echo", ok=True, content="hello"),
         )
     )
-    runner.tool_event_handler(
-        ToolExecutionEvent(
-            kind="started", tool_call=ToolCall(id="call_ls", name="ls", arguments={})
-        )
-    )
+    runner.tool_event_handler(ToolExecutionEvent(kind="started", tool_call=ToolCall(id="call_ls", name="ls", arguments={})))
     app._restore_tool_event_handler(previous_handler)
 
     assert timer.stopped is True
@@ -3423,14 +3203,7 @@ def test_lanscoder_app_replays_dag_task_plan_from_current_session_view(
     monkeypatch.setattr(app, "query_one", query_one)
     app._replay_current_session()
 
-    assert panel.updates[-1] == (
-        "Task Plan · dag\n"
-        "Level 0 · parallel\n"
-        "  [✓] 调研 A (a)\n"
-        "  [~] 调研 B (b)\n"
-        "Level 1\n"
-        "  [!] 汇总 (c) · depends on: a, b"
-    )
+    assert panel.updates[-1] == ("Task Plan · dag\n" "Level 0 · parallel\n" "  [✓] 调研 A (a)\n" "  [~] 调研 B (b)\n" "Level 1\n" "  [!] 汇总 (c) · depends on: a, b")
 
 
 def test_lanscoder_app_refreshes_task_plan_immediately_after_successful_plan_tool(
@@ -3588,9 +3361,7 @@ def test_lanscoder_app_live_tool_events_filter_final_tool_summary(monkeypatch) -
         "Tool result: echo success: hello",
         "done",
     ]
-    app._write_chat_response(
-        ChatResponse(provider="fake", model="fake", content="done")
-    )
+    app._write_chat_response(ChatResponse(provider="fake", model="fake", content="done"))
     app._restore_tool_event_handler(previous_handler)
 
     rendered = "\n".join(output.lines)
@@ -3722,10 +3493,7 @@ def test_tool_skipped_has_stable_gray_tool_class() -> None:
 
 
 def test_plain_static_renders_tool_arguments_with_markup_characters_as_text() -> None:
-    content = (
-        "tool shell running\n"
-        '  正在调用工具：shell {"cmd": "python -m pytest tests/test_app_tui.py -q", "args": ["-q"]}'
-    )
+    content = "tool shell running\n" '  正在调用工具：shell {"cmd": "python -m pytest tests/test_app_tui.py -q", "args": ["-q"]}'
     widget = _plain_static(content, classes="message tool-message tool-running")
 
     rendered = widget.render()
@@ -3746,10 +3514,7 @@ async def test_lanscoder_app_displays_live_tool_status_during_turn() -> None:
         await pilot.press("enter")
         await pilot.pause()
         output = app.query_one("#output")
-        text = "\n".join(
-            str(getattr(widget, "content", getattr(widget, "renderable", "")))
-            for widget in output.query("Static")
-        )
+        text = "\n".join(str(getattr(widget, "content", getattr(widget, "renderable", ""))) for widget in output.query("Static"))
 
     assert "正在调用工具：echo" in text
     assert "工具完成：echo：hello" in text
@@ -3795,9 +3560,7 @@ def test_lanscoder_app_displays_pending_permission_prompt_immediately(
     app = LansCoderApp(chat_runner=runner)
     monkeypatch.setattr(app, "query_one", lambda *args, **kwargs: output)
 
-    app._write_chat_response(
-        ChatResponse(provider="fake", model="fake", content="等待权限确认。")
-    )
+    app._write_chat_response(ChatResponse(provider="fake", model="fake", content="等待权限确认。"))
 
     rendered = "\n".join(
         [
@@ -3860,9 +3623,7 @@ async def test_subagent_completed_idle_auto_turns_without_session_write() -> Non
     short-summary session write (the loop delivers the full result itself)."""
     runner = FakeSubagentRunner()
     app = LansCoderApp(chat_runner=runner)
-    job = BackgroundJob(
-        id="bg_0001", tool_name="delegate", label="researcher", status="completed"
-    )
+    job = BackgroundJob(id="bg_0001", tool_name="delegate", label="researcher", status="completed")
 
     async with app.run_test() as pilot:
         app._handle_subagent_completed(job)
@@ -3880,9 +3641,7 @@ async def test_subagent_completed_busy_does_not_write_or_auto_turn() -> None:
     session nor starts an extra reporting turn — the running turn drains it."""
     runner = FakeSubagentRunner()
     app = LansCoderApp(chat_runner=runner)
-    job = BackgroundJob(
-        id="bg_0001", tool_name="delegate", label="researcher", status="completed"
-    )
+    job = BackgroundJob(id="bg_0001", tool_name="delegate", label="researcher", status="completed")
 
     async with app.run_test() as pilot:
         app._chat_busy = True
@@ -3899,9 +3658,7 @@ async def test_subagent_completed_busy_does_not_write_or_auto_turn() -> None:
 async def test_finish_chat_turn_wakes_main_agent_for_pending_completions() -> None:
     """A turn that ends with undelivered background completions auto-starts a
     reporting turn so the result is not stranded until the next user message."""
-    job = BackgroundJob(
-        id="bg_0001", tool_name="delegate", label="researcher", status="completed"
-    )
+    job = BackgroundJob(id="bg_0001", tool_name="delegate", label="researcher", status="completed")
     runner = FakeSubagentRunner(pending=[job])
     app = LansCoderApp(chat_runner=runner)
 

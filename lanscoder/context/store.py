@@ -90,11 +90,7 @@ class JsonlSessionStore:
             message_id = str(event.payload.get("message_id") or "")
             if not message_id:
                 continue
-            texts[message_id] = "\n".join(
-                str(part.get("content") or "")
-                for part in event.payload.get("parts") or []
-                if isinstance(part, dict) and part.get("kind") == "text" and part.get("content")
-            )
+            texts[message_id] = "\n".join(str(part.get("content") or "") for part in event.payload.get("parts") or [] if isinstance(part, dict) and part.get("kind") == "text" and part.get("content"))
         return texts
 
     def _session_path(self, session_id: str) -> Path:
@@ -134,10 +130,7 @@ class JsonlSessionStore:
                 # Check if the message_id exists at all (but with wrong type)
                 for index, event in enumerate(events):
                     if str(event.payload.get("message_id") or "") == message_id:
-                        raise ValueError(
-                            f"message_id {message_id} is not a user_message event (type={event.type}); "
-                            f"can only recall to user message boundaries"
-                        )
+                        raise ValueError(f"message_id {message_id} is not a user_message event (type={event.type}); " f"can only recall to user message boundaries")
                 raise ValueError(f"message_id not found: {message_id} in session {session_id}")
 
             # Read all lines from the file
