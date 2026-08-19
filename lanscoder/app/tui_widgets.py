@@ -89,12 +89,6 @@ class ComposerTextArea(TextArea):
             if event.key == "enter":
                 event.stop()
                 event.prevent_default()
-                cmd = suggest.selected_command()
-                if cmd:
-                    self._suppress_suggest = True
-                    self.load_text(cmd)
-                    self.call_after_refresh(self._clear_suppress)
-                    self.cursor_location = self.document.end
                 suggest.remove_class("--visible")
                 self.post_message(self.Submitted())
                 return
