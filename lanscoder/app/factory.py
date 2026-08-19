@@ -338,6 +338,8 @@ def create_lanscoder_app(
         store=store,
         bootstrap=bootstrap,
         on_recall=current.set_session,
+        resume_service=resume_service,
+        background_manager=background_manager,
     )
     command_handler = CompositeCommandHandler(  # 路由所有 slash commands → lanscoder/app/router.py
         [

@@ -755,6 +755,9 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if action_type == "replay_session":
             self._picker = None
             self._replay_current_session()
+            recalled_text = str(action.get("recalled_text") or "").strip()
+            if recalled_text:
+                self._insert_input_text(recalled_text)
             return False
         if action_type == "model_changed":
             self._picker = None

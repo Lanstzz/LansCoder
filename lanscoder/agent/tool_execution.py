@@ -320,6 +320,7 @@ class ToolExecutor:
                 label=label,
                 task_id=task_id,
                 observed_revision=observed_revision,
+                dispatch_turn=self.session.current_turn,
                 on_completed=complete_task_plan if task_id is not None else None,
             )
         except BackgroundCapacityError as exc:
