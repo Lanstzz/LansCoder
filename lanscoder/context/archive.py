@@ -145,7 +145,7 @@ class ToolResultArchive:
                 "original_content_sha256": record.content_sha256,
                 "original_tokens": record.original_tokens,
                 "compaction_state": "archived",
-                "compacted_by": "l3_archive",
+                "compacted_by": "l2_archive",
             }
         )
         return MessagePart(

@@ -257,8 +257,8 @@ def test_l1_routes_derived_search_and_stores_raw_backing(tmp_path: Path) -> None
     )
 
     part = result.view.messages[1].parts[0]
-    assert part.metadata["compaction_state"] == "l2_route_compacted"
-    assert part.metadata["compacted_by"] == "l2_search_results"
+    assert part.metadata["compaction_state"] == "l1_route_compacted"
+    assert part.metadata["compacted_by"] == "l1_search_results"
     assert part.metadata["lifecycle"] == "derived"
     assert part.metadata["tool_call_id"] == "search_l1"
     assert part.metadata["replacement_tokens"] < part.metadata["original_tokens"]
@@ -369,9 +369,9 @@ def test_l1_routes_build_and_diff_derived_results_with_raw_backing(tmp_path: Pat
 
     build_part = result.view.messages[1].parts[0]
     diff_part = result.view.messages[3].parts[0]
-    assert build_part.metadata["compacted_by"] == "l2_build_output"
+    assert build_part.metadata["compacted_by"] == "l1_build_output"
     assert build_part.metadata["build_omitted_lines"] > 0
-    assert diff_part.metadata["compacted_by"] == "l2_git_diff"
+    assert diff_part.metadata["compacted_by"] == "l1_git_diff"
     assert diff_part.metadata["diff_context_lines_omitted"] > 0
     assert ToolResultArchive(tmp_path).read("sess_test", build_part.metadata["archive_id"])[1] == build_raw
     assert ToolResultArchive(tmp_path).read("sess_test", diff_part.metadata["archive_id"])[1] == diff_raw
@@ -409,7 +409,7 @@ def test_l1_then_l2_uses_existing_raw_backing_and_is_idempotent(tmp_path: Path) 
     )
 
     assert archived.metadata["compaction_state"] == "archived"
-    assert archived.metadata["compacted_by"] == "l3_archive"
+    assert archived.metadata["compacted_by"] == "l2_archive"
     assert ToolResultArchive(tmp_path).read("sess_test", archived.metadata["archive_id"])[1] == raw_content
     assert second.event.changed_parts == 0
     assert len(list((tmp_path / "archives" / "sess_test").glob("*.txt"))) == 1
@@ -440,7 +440,7 @@ def test_per_result_pressure_runs_l1_then_l2_below_total_budget(tmp_path: Path) 
     part = result.view.messages[1].parts[0]
     assert result.event.levels_attempted == ["l1", "l2"]
     assert result.event.changed_parts == 2
-    assert result.event.replacements[0]["replacement_part"]["metadata"]["compacted_by"] == "l2_search_results"
+    assert result.event.replacements[0]["replacement_part"]["metadata"]["compacted_by"] == "l1_search_results"
     assert part.metadata["compaction_state"] == "archived"
     assert ToolResultArchive(tmp_path).read("sess_test", part.metadata["archive_id"])[1] == raw_content
 

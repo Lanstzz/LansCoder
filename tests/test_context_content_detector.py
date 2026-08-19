@@ -14,5 +14,5 @@ def _part(*, content: str = "content", compaction_state: str = "raw") -> Message
 
 def test_is_already_compacted_smoke() -> None:
     assert is_already_compacted(_part(compaction_state="archived")) is True
-    assert is_already_compacted(_part(compaction_state="l2_route_compacted")) is True
+    assert is_already_compacted(_part(compaction_state="l1_route_compacted")) is True
     assert is_already_compacted(_part()) is False

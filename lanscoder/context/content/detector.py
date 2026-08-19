@@ -9,7 +9,7 @@ COMPACTED_STATES = {
     "trimmed",
     "micro_compacted",
     "route_compacted",
-    "l2_route_compacted",
+    "l1_route_compacted",
     "checkpointed",
     "pinned",
 }

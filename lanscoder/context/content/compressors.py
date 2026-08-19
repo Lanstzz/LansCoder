@@ -42,7 +42,7 @@ class PlainTextRouteCompressor:
         return RouteCompactResult(
             content=content,
             content_type=RouteContentType.PLAIN_TEXT,
-            compacted_by="l2_current_task_cold",
+            compacted_by="l1_current_task_cold",
             metadata={
                 "preview": preview,
                 "preview_tokens": preview_tokens,
