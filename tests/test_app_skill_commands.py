@@ -144,3 +144,31 @@ def test_exact_skill_slash_command_does_not_use_substring_match(tmp_path: Path, 
     result = handler.handle("/bri 写日报")
 
     assert result.handled is False
+
+
+def test_reload_skills_command_refreshes_catalog(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    skills_dir = tmp_path / ".lanscoder" / "skills"
+    skills_dir.mkdir(parents=True)
+    catalog_holder = [discover_all_skills(tmp_path)]
+
+    def refresh():
+        catalog_holder[0] = discover_all_skills(tmp_path)
+        return catalog_holder[0]
+
+    handler = SkillCommandHandler(
+        catalog_provider=lambda: catalog_holder[0],
+        skill_refresher=refresh,
+    )
+
+    result_before = handler.handle("/reload-skills")
+    assert result_before.handled is True
+    assert "0 skills" in result_before.output
+
+    brief_dir = skills_dir / "brief"
+    brief_dir.mkdir()
+    (brief_dir / "SKILL.md").write_text("# Brief\n", encoding="utf-8")
+
+    result_after = handler.handle("/reload-skills")
+    assert result_after.handled is True
+    assert "1 skills" in result_after.output

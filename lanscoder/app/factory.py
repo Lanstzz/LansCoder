@@ -293,9 +293,15 @@ def create_lanscoder_app(
     permission_handler = PermissionCommandHandler(session=current)
 
     def skill_catalog_provider():
-        return discover_all_skills(project_path)
+        return current.session.skill_catalog
 
-    skill_handler = SkillCommandHandler(catalog_provider=skill_catalog_provider)
+    def skill_refresher():
+        return current.session.refresh_skills(project_path)
+
+    skill_handler = SkillCommandHandler(
+        catalog_provider=skill_catalog_provider,
+        skill_refresher=skill_refresher,
+    )
     memory_handler = MemoryCommandHandler(
         memory_provider=lambda: current.session.memory_manager,
         writer_provider=lambda: current.session.writer,

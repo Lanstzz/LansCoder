@@ -11,15 +11,17 @@ from lanscoder.skills.models import SkillCatalog, SkillDefinition
 
 @dataclass(slots=True)
 class SkillCommandHandler:
-    """Handle `/skills`, `/skill <name>`, and exact `/<skill-name> <instruction>`."""
+    """Handle `/skills`, `/skill <name>`, `/reload-skills`, and exact `/<skill-name> <instruction>`."""
 
     catalog_provider: Callable[[], SkillCatalog]
+    skill_refresher: Callable[[], SkillCatalog] | None = None
 
     def commands(self) -> list[tuple[str, str]]:
         return [
             ("/skill <name>", "Show skill details."),
             ("/skill-use <name>", "Reference a skill."),
             ("/skills", "Pick a skill to reference."),
+            ("/reload-skills", "Reload skills from disk."),
         ]
 
     def handle(self, text: str) -> CommandResult:
@@ -36,6 +38,8 @@ class SkillCommandHandler:
             return CommandResult(handled=True, output=self._show_skill(args))
         if name == "/skill-use":
             return self._reference_skill(args)
+        if name == "/reload-skills":
+            return self._reload_skills()
         launched = self._launch_exact_skill(name, command)
         if launched is not None:
             return launched
@@ -96,6 +100,16 @@ class SkillCommandHandler:
                 "path": skill.path,
                 "reference": f"请先调用 load_skill(name={skill.name}, args=<你的任务>)，再按照返回的指令继续。",
             },
+        )
+
+    def _reload_skills(self) -> CommandResult:
+        if self.skill_refresher is None:
+            return CommandResult(handled=True, output="Skill reload unavailable in this context.")
+        new_catalog = self.skill_refresher()
+        count = len(new_catalog.skills)
+        return CommandResult(
+            handled=True,
+            output=f"Reloaded skills: {count} skills available.",
         )
 
     def _launch_exact_skill(self, slash_name: str, command: str) -> CommandResult | None:

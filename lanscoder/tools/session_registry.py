@@ -55,6 +55,7 @@ def create_session_tool_registry(
     store: JsonlSessionStore | None = None,
     writer: SessionEventWriter | None = None,
     skill_catalog: SkillCatalog | None = None,
+    get_skill_catalog: Callable[[], SkillCatalog] | None = None,
     memory_manager: MemoryManager | None = None,
 ) -> ToolRegistryLike:
     """创建单个会话专用的工具注册表。
@@ -93,12 +94,13 @@ def create_session_tool_registry(
             store=store,
             writer=writer,
         )
+        get_catalog = get_skill_catalog or (lambda: skill_catalog or SkillCatalog())
         for tool in (
             create_task_create_tool(service),
             create_task_update_tool(service),
             create_task_revise_tool(service),
             create_task_list_tool(service),
-            create_load_skill_tool(skill_catalog or SkillCatalog(), writer),
+            create_load_skill_tool(get_catalog, writer),
         ):
             registry.register(tool)
     if memory_manager is not None:
