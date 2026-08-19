@@ -555,6 +555,105 @@ class TestRecallCommandHandler:
         assert len(user_messages) == 0
 
 
+class TestRecallWithCompaction:
+    """Compaction blanks old-task text in the effective view; recall must fall
+    back to the original user_message events so the picker shows real text."""
+
+    @staticmethod
+    def _compact_event(sid: str, replacements: list[dict]) -> dict:
+        return _make_event(
+            sid,
+            "evt_compact",
+            "compaction_completed",
+            {"event": {"replacements": replacements}},
+        )
+
+    @staticmethod
+    def _blank_part(message_id: str, part_id: str, turn: int) -> dict:
+        return {
+            "message_id": message_id,
+            "source_part_id": part_id,
+            "replacement_part": {
+                "id": part_id,
+                "message_id": message_id,
+                "kind": "text",
+                "content": "",
+                "metadata": {"created_turn": turn, "turn_id": turn},
+            },
+        }
+
+    def test_picker_shows_original_text_for_compacted_turns(self, tmp_path):
+        store = JsonlSessionStore(tmp_path)
+        sid = "sess_compacted"
+        events = [
+            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_user_message_event(sid, "msg_01", "hello", 1),
+            _make_assistant_message_event(sid, "msg_02", "hi there"),
+            _make_user_message_event(sid, "msg_03", "what are you", 2),
+            _make_assistant_message_event(sid, "msg_04", "a coding agent"),
+            self._compact_event(
+                sid,
+                [
+                    self._blank_part("msg_01", "part_msg_01", 1),
+                    self._blank_part("msg_02", "part_msg_02", 1),
+                ],
+            ),
+        ]
+        _write_session_jsonl(store._session_path(sid), events)
+
+        bootstrap = SessionBootstrap(store=store, project_root=tmp_path, data_root=tmp_path)
+        session = bootstrap.resume(sid)
+
+        handler = RecallCommandHandler(
+            session=session,
+            store=store,
+            bootstrap=bootstrap,
+            on_recall=None,
+        )
+
+        result = handler.handle("/recall")
+
+        assert result.action is not None
+        turns = result.action["turns"]
+        assert turns[0]["message_id"] == "msg_01"
+        assert turns[0]["summary"] == "hello"
+        assert turns[1]["message_id"] == "msg_03"
+        assert turns[1]["summary"] == "what are you"
+
+    def test_recall_to_compacted_message_backfills_original_text(self, tmp_path):
+        store = JsonlSessionStore(tmp_path)
+        sid = "sess_compacted_id"
+        events = [
+            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_user_message_event(sid, "msg_01", "hello", 1),
+            _make_assistant_message_event(sid, "msg_02", "hi there"),
+            self._compact_event(sid, [self._blank_part("msg_01", "part_msg_01", 1)]),
+        ]
+        _write_session_jsonl(store._session_path(sid), events)
+
+        bootstrap = SessionBootstrap(store=store, project_root=tmp_path, data_root=tmp_path)
+        session = bootstrap.resume(sid)
+
+        swapped = None
+
+        def on_recall(new_session):
+            nonlocal swapped
+            swapped = new_session
+
+        handler = RecallCommandHandler(
+            session=session,
+            store=store,
+            bootstrap=bootstrap,
+            on_recall=on_recall,
+        )
+
+        result = handler.handle("/recall msg_01")
+
+        assert result.action is not None
+        assert result.action["recalled_text"] == "hello"
+        assert swapped is not None
+
+
 def test_recall_to_uses_resume_service(tmp_path):
     from lanscoder.session.catalog import SessionCatalog
     from lanscoder.session.resume import ResumeService

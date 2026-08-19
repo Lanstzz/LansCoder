@@ -62,6 +62,13 @@ class RecallCommandHandler:
         if not user_messages:
             return CommandResult(handled=True, output="No messages to recall")
 
+        # 压缩会把旧任务的文本 part 在有效视图里清空，但原始 user_message
+        # 事件从未被改写；回退到原文，picker 才不会显示 (empty message)。
+        original_texts = (
+            self.store.original_user_message_texts(self.session.session_id)
+            if self.store is not None
+            else {}
+        )
         turns = []
         for msg in user_messages:
             text_content = ""
@@ -69,6 +76,8 @@ class RecallCommandHandler:
                 if part.kind == "text" and part.content:
                     text_content = part.content
                     break
+            if not text_content:
+                text_content = original_texts.get(msg.id, "")
             turn_number = 1
             for part in msg.parts:
                 tn = part.metadata.get("created_turn") or part.metadata.get("turn_id")
@@ -155,12 +164,21 @@ class RecallCommandHandler:
         return None
 
     def _text_for_message(self, message_id: str) -> str:
-        """Return the text content of a user message, or "" if not found."""
+        """Return the text content of a user message, or "" if not found.
+
+        Falls back to the store's original event text so recalling a turn whose
+        text was compacted away still backfills what was actually said.
+        """
 
         for msg in self.session.rebuild_view().messages:
             if msg.id != message_id or msg.role != "user":
                 continue
-            return "\n".join(
+            text = "\n".join(
                 part.content for part in msg.parts if part.kind == "text" and part.content
+            )
+            if text or self.store is None:
+                return text
+            return self.store.original_user_message_texts(self.session.session_id).get(
+                message_id, ""
             )
         return ""
