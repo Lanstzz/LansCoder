@@ -360,6 +360,13 @@ def _source_fingerprint(session_id: str, source: L3Source) -> str:
     )
 
 
+def source_fingerprint_for_view(view: SessionView) -> str:
+    """L3-domain source fingerprint for a view (the value generate_candidate compares against)."""
+
+    source = _build_l3_source(view)
+    return _source_fingerprint(view.session_id, source)
+
+
 def _candidate_checkpoint(
     view: SessionView,
     *,

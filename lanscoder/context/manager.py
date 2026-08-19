@@ -12,7 +12,12 @@ from lanscoder.context.compaction import CompactionEvent, CompactionPipeline, Co
 from lanscoder.context.context_builder import InvalidCheckpointBoundaryError
 from lanscoder.context.fallback import CompactFallbackPolicy, FallbackStep
 from lanscoder.context.identity import session_view_fingerprint
-from lanscoder.context.llm_compact import LlmCompactCandidate, LlmCompactEvent, LlmCompactRequest
+from lanscoder.context.llm_compact import (
+    LlmCompactCandidate,
+    LlmCompactEvent,
+    LlmCompactRequest,
+    source_fingerprint_for_view,
+)
 from lanscoder.context.models import AgentMessage, SessionView
 from lanscoder.context.provider_summarizer import select_compaction_boundary
 from lanscoder.context.runtime_state import SessionRuntimeState, auto_compact_circuit_is_open
@@ -83,6 +88,12 @@ class _CandidateOutcome:
     event: LlmCompactEvent
     view: SessionView
     input_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
+class _HardTruncateOutcome:
+    status: Literal["success", "over_budget", "nothing_to_drop"]
+    result: ContextCompactResult | None = None
 
 
 @dataclass(slots=True)
@@ -314,11 +325,12 @@ class ContextWindowManager:
         before_failure_count: int,
         trigger: ContextWindowTrigger,
         mode: ContextCompactMode,
-    ) -> ContextCompactResult | None:
+    ) -> _HardTruncateOutcome:
         """L3 与 fallback 全失败后的确定性兜底：近 N 轮保留，其余替换为占位摘要。
 
-        Returns None when there is nothing outside the recent window (nothing to drop),
-        so the caller falls through to the existing failure path.
+        Three-way outcome: success commits the placeholder checkpoint; over_budget
+        means a boundary existed but the recent-N tail alone still exceeds the
+        target; nothing_to_drop means the whole conversation is inside the window.
         """
 
         messages = [message for message in view.messages if message.role != "system_meta"]
@@ -328,7 +340,7 @@ class ContextWindowManager:
             recent_turn_window=self.config.recent_turn_window,
         )
         if boundary is None:
-            return None
+            return _HardTruncateOutcome(status="nothing_to_drop")
         covered_until_message_id, tail_start_message_id = boundary
 
         checkpoint = Checkpoint(
@@ -337,7 +349,7 @@ class ContextWindowManager:
             summary="[Earlier dialogue truncated — recent N turns kept]",
             tail_start_message_id=tail_start_message_id,
             covered_until_message_id=covered_until_message_id,
-            source_fingerprint=session_view_fingerprint(view),
+            source_fingerprint=source_fingerprint_for_view(view),
             sequence=max((existing.sequence for existing in view.checkpoints), default=0) + 1,
             metadata={
                 "created_by": "hard_truncate",
@@ -353,11 +365,15 @@ class ContextWindowManager:
             ),
         )
         truncated_view = _view_with_checkpoint(view, checkpoint)
-        after_tokens = request.estimate_budget(truncated_view).input_tokens
+        try:
+            after_tokens = request.estimate_budget(truncated_view).input_tokens
+        except (InvalidCheckpointBoundaryError, InvalidToolCallSequenceError):
+            return _HardTruncateOutcome(status="nothing_to_drop")
         if after_tokens >= target_tokens:
-            return None
+            return _HardTruncateOutcome(status="over_budget")
         self.l3_service.commit_candidate(candidate, runtime_state=request.runtime_state)
         rebuilt_view = self.store.rebuild_session_view(request.view.session_id)
+        after_tokens = request.estimate_budget(rebuilt_view).input_tokens
         hard_truncate_event = replace(
             candidate.event,
             fallback_steps=[
@@ -378,14 +394,17 @@ class ContextWindowManager:
             event=hard_truncate_event,
         )
         self._record_auto_success_if_needed(request=request, mode=mode)
-        return ContextCompactResult(
+        return _HardTruncateOutcome(
             status="success",
-            reason="hard_truncate",
-            view=rebuilt_view,
-            before_tokens=before_tokens,
-            after_tokens=after_tokens,
-            programmatic_event=None,
-            l3_event=hard_truncate_event,
+            result=ContextCompactResult(
+                status="success",
+                reason="hard_truncate",
+                view=rebuilt_view,
+                before_tokens=before_tokens,
+                after_tokens=after_tokens,
+                programmatic_event=None,
+                l3_event=hard_truncate_event,
+            ),
         )
 
     def _run_fallback(
@@ -567,7 +586,7 @@ class ContextWindowManager:
     ) -> ContextCompactResult:
         """Try the deterministic hard truncate; if nothing is droppable, fail."""
 
-        truncated = self._hard_truncate(
+        outcome = self._hard_truncate(
             request=request,
             view=view,
             target_tokens=target_tokens,
@@ -576,8 +595,11 @@ class ContextWindowManager:
             trigger=trigger,
             mode=mode,
         )
-        if truncated is not None:
-            return truncated
+        if outcome.status == "success":
+            assert outcome.result is not None
+            return outcome.result
+        if outcome.status == "over_budget":
+            reason = "still_over_budget_after_hard_truncate"
         return self._final_l3_failure(
             request=request,
             trigger=trigger,
