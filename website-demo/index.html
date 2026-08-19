@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LansCoder — A local coding agent you can read end to end</title>
+<meta name="description" content="LansCoder is a locally-runnable Python coding agent. ~30k lines of Python, clean module boundaries, solid test coverage. Real enough to use daily, small enough to read from end to end.">
+<style>
+  /* ── Reset & Base ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; font-size: 16px; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1a1a2e; background: #fafafa; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; text-decoration: none; }
+
+  /* ── Nav ── */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(10,10,30,0.92); backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    padding: 0 2rem; height: 56px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .nav-logo {
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Cascadia Code", monospace;
+    font-size: 1.1rem; font-weight: 700; color: #e0e0e0;
+    letter-spacing: -0.02em;
+  }
+  .nav-logo span { color: #6c8cff; }
+  .nav-links { display: flex; gap: 2rem; list-style: none; }
+  .nav-links a {
+    font-size: 0.875rem; color: #a0a0b8; font-weight: 500;
+    transition: color 0.2s;
+  }
+  .nav-links a:hover { color: #e0e0e0; }
+  .nav-gh {
+    display: flex; align-items: center; gap: 0.4rem;
+    font-size: 0.85rem; color: #a0a0b8; font-weight: 500;
+    transition: color 0.2s;
+  }
+  .nav-gh:hover { color: #e0e0e0; }
+  .nav-gh svg { width: 18px; height: 18px; fill: currentColor; }
+
+  /* ── Sections ── */
+  section { padding: 5rem 2rem; max-width: 960px; margin: 0 auto; }
+
+  /* ── Hero ── */
+  .hero {
+    padding-top: calc(56px + 5rem); padding-bottom: 5rem;
+    text-align: center; max-width: 800px;
+  }
+  .hero-badge {
+    display: inline-block; margin-bottom: 1.5rem;
+    padding: 0.3rem 0.9rem; border-radius: 20px;
+    font-size: 0.8rem; font-weight: 600; letter-spacing: 0.04em;
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Cascadia Code", monospace;
+    background: rgba(108,140,255,0.12); color: #6c8cff;
+    border: 1px solid rgba(108,140,255,0.25);
+  }
+  .hero h1 {
+    font-size: 3.2rem; font-weight: 800; line-height: 1.15;
+    letter-spacing: -0.03em; margin-bottom: 1.25rem;
+  }
+  .hero h1 em {
+    font-style: normal;
+    background: linear-gradient(135deg, #6c8cff 0%, #c084fc 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero p.sub {
+    font-size: 1.2rem; color: #555; max-width: 560px; margin: 0 auto 2rem;
+    line-height: 1.6;
+  }
+  .hero-actions { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    padding: 0.7rem 1.5rem; border-radius: 8px;
+    font-size: 0.92rem; font-weight: 600; cursor: pointer;
+    transition: all 0.2s; border: none;
+  }
+  .btn-primary {
+    background: #6c8cff; color: #fff;
+  }
+  .btn-primary:hover { background: #5a78e8; transform: translateY(-1px); box-shadow: 0 4px 16px rgba(108,140,255,0.35); }
+  .btn-outline {
+    background: transparent; color: #333; border: 1.5px solid #d0d0d8;
+  }
+  .btn-outline:hover { border-color: #6c8cff; color: #6c8cff; }
+
+  .hero-screenshot {
+    margin-top: 3.5rem; border-radius: 12px; overflow: hidden;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.06), 0 20px 60px rgba(0,0,0,0.12);
+  }
+  .hero-screenshot img { width: 100%; display: block; }
+
+  /* ── Intro ── */
+  .intro { text-align: center; }
+  .intro h2 { font-size: 2rem; font-weight: 700; margin-bottom: 1rem; letter-spacing: -0.02em; }
+  .intro p { font-size: 1.1rem; color: #555; max-width: 640px; margin: 0 auto 2.5rem; }
+  .stat-row { display: flex; gap: 2rem; justify-content: center; flex-wrap: wrap; }
+  .stat {
+    text-align: center; padding: 1.5rem 2rem;
+    background: #fff; border-radius: 12px;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.04), 0 2px 12px rgba(0,0,0,0.04);
+  }
+  .stat-num {
+    font-size: 2.4rem; font-weight: 800; letter-spacing: -0.02em;
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Cascadia Code", monospace;
+    background: linear-gradient(135deg, #6c8cff 0%, #c084fc 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .stat-label { font-size: 0.85rem; color: #777; margin-top: 0.25rem; }
+
+  /* ── Features ── */
+  .features { background: #fff; max-width: none; padding-left: 0; padding-right: 0; }
+  .features-inner { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+  .section-label {
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Cascadia Code", monospace;
+    font-size: 0.8rem; font-weight: 600; letter-spacing: 0.06em;
+    color: #6c8cff; text-transform: uppercase; margin-bottom: 0.5rem;
+  }
+  .features h2 { font-size: 2rem; font-weight: 700; margin-bottom: 2.5rem; letter-spacing: -0.02em; }
+  .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; }
+  .feature-card {
+    background: #fafafa; border-radius: 12px; padding: 1.75rem;
+    border: 1px solid rgba(0,0,0,0.06); transition: all 0.25s;
+  }
+  .feature-card:hover { border-color: rgba(108,140,255,0.25); box-shadow: 0 4px 16px rgba(0,0,0,0.05); }
+  .feature-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.2rem; margin-bottom: 1rem;
+    background: rgba(108,140,255,0.1); color: #6c8cff;
+  }
+  .feature-card h3 { font-size: 1.05rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .feature-card p { font-size: 0.9rem; color: #666; line-height: 1.55; }
+
+  /* ── Architecture ── */
+  .arch h2 { font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; letter-spacing: -0.02em; }
+  .arch > p { color: #666; margin-bottom: 2rem; }
+  .arch-tree {
+    background: #0d0d1a; border-radius: 12px; padding: 2rem;
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Cascadia Code", monospace;
+    font-size: 0.85rem; line-height: 1.8; color: #c0c8e0;
+    overflow-x: auto; white-space: pre;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.06), 0 8px 32px rgba(0,0,0,0.1);
+  }
+  .arch-tree .dir { color: #6c8cff; }
+  .arch-tree .comment { color: #5a6a80; }
+  .arch-tree .hl { color: #c084fc; }
+
+  /* ── Quick Start ── */
+  .quickstart { background: #fff; max-width: none; padding-left: 0; padding-right: 0; }
+  .quickstart-inner { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+  .quickstart h2 { font-size: 2rem; font-weight: 700; margin-bottom: 2rem; letter-spacing: -0.02em; }
+  .qs-steps { display: flex; flex-direction: column; gap: 1.5rem; }
+  .qs-step {
+    display: flex; gap: 1.25rem; align-items: flex-start;
+  }
+  .qs-num {
+    flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%;
+    background: #6c8cff; color: #fff; font-weight: 700; font-size: 0.9rem;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .qs-body h3 { font-size: 1rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .qs-body p { font-size: 0.9rem; color: #666; margin-bottom: 0.5rem; }
+  .code-block {
+    background: #0d0d1a; border-radius: 8px; padding: 1rem 1.25rem;
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Cascadia Code", monospace;
+    font-size: 0.82rem; line-height: 1.7; color: #c0c8e0;
+    overflow-x: auto; white-space: pre;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.06);
+  }
+  .code-block .prompt { color: #6c8cff; user-select: none; }
+  .code-block .cmd { color: #c0c8e0; }
+  .code-block .str { color: #7ec98c; }
+  .code-block .cmt { color: #5a6a80; }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center; padding: 3rem 2rem;
+    border-top: 1px solid rgba(0,0,0,0.06);
+    color: #999; font-size: 0.85rem;
+  }
+  footer a { color: #6c8cff; }
+  footer a:hover { text-decoration: underline; }
+  footer .sep { margin: 0 0.5rem; color: #ccc; }
+
+  /* ── Responsive ── */
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 2.2rem; }
+    .hero p.sub { font-size: 1rem; }
+    section { padding: 3rem 1.25rem; }
+    .hero { padding-top: calc(56px + 3rem); }
+    .nav-links { display: none; }
+    .stat-row { flex-direction: column; align-items: center; }
+    .feature-grid { grid-template-columns: 1fr; }
+    .qs-step { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Nav ── -->
+<nav>
+  <a href="#" class="nav-logo">&gt; <span>lanscoder</span></a>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#quickstart">Quick Start</a></li>
+  </ul>
+  <a href="https://github.com/lansterzhang/LansCoder" class="nav-gh" target="_blank" rel="noopener">
+    <svg viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.387.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.083-.73.083-.73 1.205.085 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.418-1.305.762-1.604-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 21.795 24 17.295 24 12 24 5.37 18.63 0 12 0z"/></svg>
+    GitHub
+  </a>
+</nav>
+
+<!-- ── Hero ── -->
+<section class="hero">
+  <div class="hero-badge">v1.0.0 &middot; MIT</div>
+  <h1>A coding agent <em>you can read</em> end to end</h1>
+  <p class="sub">
+    LansCoder is a locally-runnable Python coding agent with ~30k lines of clean,
+    well-structured Python. Real enough to use daily, small enough to understand
+    completely.
+  </p>
+  <div class="hero-actions">
+    <a href="#quickstart" class="btn btn-primary">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><polyline points="8 12 12 8 16 12"/><line x1="12" y1="16" x2="12" y2="8"/></svg>
+      Quick Start
+    </a>
+    <a href="https://github.com/lansterzhang/LansCoder" class="btn btn-outline" target="_blank" rel="noopener">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.387.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.083-.73.083-.73 1.205.085 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.418-1.305.762-1.604-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 21.795 24 17.295 24 12 24 5.37 18.63 0 12 0z"/></svg>
+      View on GitHub
+    </a>
+  </div>
+  <div class="hero-screenshot">
+    <img src="tui-screenshot.png" alt="LansCoder TUI screenshot" width="1800" height="500" loading="lazy">
+  </div>
+</section>
+
+<!-- ── Intro / Stats ── -->
+<section class="intro">
+  <h2>Small enough to read. Real enough to use.</h2>
+  <p>
+    Most coding agents are massive codebases. LansCoder takes the opposite approach:
+    strict layering, clear module boundaries, and solid test coverage. Every module's
+    job is obvious. It's built to be studied, hacked on, and extended.
+  </p>
+  <div class="stat-row">
+    <div class="stat">
+      <div class="stat-num">~30k</div>
+      <div class="stat-label">lines of Python</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">40+</div>
+      <div class="stat-label">built-in tools</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">96.38%</div>
+      <div class="stat-label">Harbor benchmark pass@1</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">MIT</div>
+      <div class="stat-label">open source license</div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Features ── -->
+<section class="features" id="features">
+  <div class="features-inner">
+    <div class="section-label">// What it does</div>
+    <h2>Features at a glance</h2>
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-icon">&#x2699;</div>
+        <h3>Coding Agent</h3>
+        <p>Understands your codebase, edits files, and runs shell commands. 40+ built-in tools cover file ops, search, git, and more.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x25F0;</div>
+        <h3>Multi-Model</h3>
+        <p>OpenAI-compatible and Anthropic providers supported. Hot-switch models mid-session without restarting.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x1F512;</div>
+        <h3>Permissions</h3>
+        <p>Standard, aggressive, or bypass modes. Syntax-highlighted diffs previewed before every file mutation — even in high-permission mode.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x2398;</div>
+        <h3>Terminal UI</h3>
+        <p>Built on Textual. Streams reasoning, tool calls, and results in real time. Autocomplete, session picker, diff review — all in the terminal.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x1F4BE;</div>
+        <h3>Sessions</h3>
+        <p>Create, resume, fork, and share sessions. Persisted as JSONL. Full context recovery on restart.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#x1F517;</div>
+        <h3>MCP Integration</h3>
+        <p>Connect external tool servers via Model Context Protocol. Extend the agent's capabilities with custom tools.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Architecture ── -->
+<section class="arch" id="architecture">
+  <div class="section-label">// How it's built</div>
+  <h2>Architecture</h2>
+  <p>Strict layering, clear dependency rules. Each module has one job.</p>
+  <div class="arch-tree">
+<span class="dir">lanscoder/</span>
+<span class="dir">├──</span> <span class="hl">app/</span>           <span class="comment"># Textual TUI — terminal interface, pickers, views</span>
+<span class="dir">├──</span> <span class="hl">agent/</span>         <span class="comment"># Agent loop — orchestration, subagents, prompts</span>
+<span class="dir">├──</span> <span class="hl">providers/</span>     <span class="comment"># Model adapters — OpenAI-compatible, Anthropic</span>
+<span class="dir">├──</span> <span class="hl">tools/</span>         <span class="comment"># Tool registry — 40+ tools, execution sandbox</span>
+<span class="dir">├──</span> <span class="hl">permissions/</span>   <span class="comment"># Policy engine — rules, grants, confirmations</span>
+<span class="dir">├──</span> <span class="hl">context/</span>       <span class="comment"># Context management — 4-level compaction (L1–L4)</span>
+<span class="dir">├──</span> <span class="hl">session/</span>       <span class="comment"># Session lifecycle — create, resume, fork, persist</span>
+<span class="dir">├──</span> <span class="hl">mcp/</span>           <span class="comment"># MCP integration — external tool servers</span>
+<span class="dir">├──</span> <span class="hl">memory/</span>        <span class="comment"># Cross-session persistent memory</span>
+<span class="dir">├──</span> <span class="hl">skills/</span>        <span class="comment"># Local skill discovery and loading</span>
+<span class="dir">├──</span> <span class="hl">config/</span>        <span class="comment"># TOML configuration — providers, models, settings</span>
+<span class="dir">└──</span> <span class="hl">utils/</span>         <span class="comment"># Shared utilities</span>
+  </div>
+</section>
+
+<!-- ── Quick Start ── -->
+<section class="quickstart" id="quickstart">
+  <div class="quickstart-inner">
+    <div class="section-label">// Get started</div>
+    <h2>Quick Start</h2>
+    <div class="qs-steps">
+      <div class="qs-step">
+        <div class="qs-num">1</div>
+        <div class="qs-body">
+          <h3>Install</h3>
+          <p>Install LansCoder with pipx (recommended) or pip:</p>
+          <div class="code-block"><span class="prompt">$</span> <span class="cmd">pipx install lanscoder</span></div>
+        </div>
+      </div>
+      <div class="qs-step">
+        <div class="qs-num">2</div>
+        <div class="qs-body">
+          <h3>Configure</h3>
+          <p>Generate a config file, then edit it with your API key:</p>
+          <div class="code-block"><span class="prompt">$</span> <span class="cmd">lanscoder config init</span>
+<span class="prompt">$</span> <span class="cmd">vim ~/.config/lanscoder/config.toml</span></div>
+        </div>
+      </div>
+      <div class="qs-step">
+        <div class="qs-num">3</div>
+        <div class="qs-body">
+          <h3>Example config</h3>
+          <p>Set your default model and provider credentials:</p>
+          <div class="code-block"><span class="cmt"># ~/.config/lanscoder/config.toml</span>
+<span class="cmd">default_model</span> = <span class="str">"deepseek/deepseek-v4-flash"</span>
+
+<span class="cmd">[providers.deepseek]</span>
+<span class="cmd">type</span> = <span class="str">"openai-compatible"</span>
+<span class="cmd">base_url</span> = <span class="str">"https://api.deepseek.com"</span>
+<span class="cmd">api_key</span> = <span class="str">"sk-xxx"</span>
+
+<span class="cmd">[models."deepseek/deepseek-v4-flash"]</span>
+<span class="cmd">label</span> = <span class="str">"DeepSeek V4 Flash"</span>
+<span class="cmd">context_window</span> = <span class="str">1000000</span>
+
+<span class="cmd">[permissions]</span>
+<span class="cmd">mode</span> = <span class="str">"ask"</span>
+
+<span class="cmd">[ui]</span>
+<span class="cmd">theme</span> = <span class="str">"default"</span></div>
+        </div>
+      </div>
+      <div class="qs-step">
+        <div class="qs-num">4</div>
+        <div class="qs-body">
+          <h3>Launch</h3>
+          <p>Run from your project directory:</p>
+          <div class="code-block"><span class="prompt">$</span> <span class="cmd">lanscoder</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Footer ── -->
+<footer>
+  <p>
+    LansCoder
+    <span class="sep">·</span> <a href="https://github.com/lansterzhang/LansCoder" target="_blank" rel="noopener">GitHub</a>
+    <span class="sep">·</span> MIT License
+    <span class="sep">·</span> Built with Python &amp; Textual
+  </p>
+</footer>
+
+</body>
+</html>
