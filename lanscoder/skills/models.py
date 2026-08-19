@@ -9,10 +9,8 @@ from lanscoder.context.identity import content_fingerprint, stable_json_hash
 
 
 class SkillSource(StrEnum):
-    PROJECT_MARKDOWN = "project_markdown"
-    PROJECT_AGENT_SKILL = "project_agent_skill"
-    GLOBAL_MARKDOWN = "global_markdown"
-    GLOBAL_AGENT_SKILL = "global_agent_skill"
+    PROJECT = "project"
+    GLOBAL = "global"
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +24,7 @@ class SkillDefinition:
 
     @property
     def scope(self) -> str:
-        if self.source in {SkillSource.PROJECT_MARKDOWN, SkillSource.PROJECT_AGENT_SKILL}:
+        if self.source == SkillSource.PROJECT:
             return "project"
         return "global"
 

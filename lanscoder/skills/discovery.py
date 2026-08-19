@@ -16,27 +16,16 @@ def discover_project_skills(project_root: str | Path) -> SkillCatalog:
     skills: list[SkillDefinition] = []
     index_content = ""
 
-    project_skills = root / "skills"
+    project_skills = root / ".lanscoder" / "skills"
     index_path = project_skills / "INDEX.md"
     if index_path.exists():
         index_content = _read_text(index_path)
     if project_skills.exists():
         skills.extend(
-            _discover_markdown_skills(
+            _discover_directory_skills(
                 project_skills,
                 root=root,
-                source=SkillSource.PROJECT_MARKDOWN,
-                skip_names={"INDEX.md"},
-            )
-        )
-
-    project_agent_skills = root / ".agents" / "skills"
-    if project_agent_skills.exists():
-        skills.extend(
-            _discover_agent_skills(
-                project_agent_skills,
-                root=root,
-                source=SkillSource.PROJECT_AGENT_SKILL,
+                source=SkillSource.PROJECT,
             )
         )
 
@@ -49,11 +38,12 @@ def discover_all_skills(project_root: str | Path, *, env: Mapping[str, str] | No
     if _global_skills_disabled(env):
         return project_catalog
 
+    global_root = _global_skill_root(env)
     global_skills: list[SkillDefinition] = []
-    for root in _global_skill_roots(env):
-        if not root.exists():
-            continue
-        global_skills.extend(_discover_global_root(root))
+    if global_root.exists():
+        global_skills.extend(
+            _discover_directory_skills(global_root, root=global_root, source=SkillSource.GLOBAL)
+        )
 
     return SkillCatalog(
         skills=_sort_and_dedupe([*project_catalog.skills, *global_skills]),
@@ -61,53 +51,17 @@ def discover_all_skills(project_root: str | Path, *, env: Mapping[str, str] | No
     )
 
 
-def _discover_global_root(root: Path) -> list[SkillDefinition]:
-    skills: list[SkillDefinition] = []
-    skills.extend(
-        _discover_agent_skills(
-            root,
-            root=root,
-            source=SkillSource.GLOBAL_AGENT_SKILL,
-        )
-    )
-    skills.extend(
-        _discover_markdown_skills(
-            root,
-            root=root,
-            source=SkillSource.GLOBAL_MARKDOWN,
-            skip_names={"INDEX.md", "SKILL.md"},
-        )
-    )
-    return skills
+def _global_skill_root(env: Mapping[str, str]) -> Path:
+    home = Path(env.get("HOME", str(Path.home())))
+    return home / ".lanscoder" / "skills"
 
 
-def _discover_markdown_skills(
+def _discover_directory_skills(
     directory: Path,
     *,
     root: Path,
     source: SkillSource,
-    skip_names: set[str],
 ) -> list[SkillDefinition]:
-    skills: list[SkillDefinition] = []
-    for path in sorted(directory.glob("*.md")):
-        if path.name in skip_names:
-            continue
-        content = _read_text(path)
-        metadata = _frontmatter_metadata(content)
-        skills.append(
-            SkillDefinition(
-                name=_metadata_text(metadata, "name") or path.stem,
-                path=_relative_path(path, root),
-                source=source,
-                root=str(root),
-                description=_metadata_text(metadata, "description") or _first_heading(content) or _first_nonempty_line(content),
-                triggers=_parse_triggers(metadata.get("triggers", "")),
-            )
-        )
-    return skills
-
-
-def _discover_agent_skills(directory: Path, *, root: Path, source: SkillSource) -> list[SkillDefinition]:
     skills: list[SkillDefinition] = []
     for path in sorted(directory.glob("*/SKILL.md")):
         content = _read_text(path)
@@ -123,21 +77,6 @@ def _discover_agent_skills(directory: Path, *, root: Path, source: SkillSource) 
             )
         )
     return skills
-
-
-def _global_skill_roots(env: Mapping[str, str]) -> list[Path]:
-    home = Path(env.get("HOME", str(Path.home())))
-    roots = [
-        home / ".agents" / "skills",
-        home / ".codex" / "skills",
-        home / ".lanscoder" / "skills",
-    ]
-    extra = env.get("LANSCODER_SKILL_ROOTS", "")
-    for raw in extra.split(","):
-        value = raw.strip()
-        if value:
-            roots.append(Path(value).expanduser())
-    return roots
 
 
 def _global_skills_disabled(env: Mapping[str, str]) -> bool:

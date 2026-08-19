@@ -1,56 +1,71 @@
-# Repository Guidelines
+# LansCoder Agent Development Rules
 
-## Project Structure & Module Organization
+## Conversational Style
 
-LansCoder is a Python local coding-agent project. Source code lives in `lanscoder/`, with clear domain modules: `agent/` for orchestration, `app/` for the Textual TUI, `context/` for session context and compaction, `providers/` for model adapters, `tools/` for tool execution, `permissions/` for policy and grants, and `session/` for persistence and resume flows. Tests live in `tests/` and generally mirror the source domains. Design notes and implementation plans are in `docs/`; benchmarks and learning sandboxes are under `benchmark/`.
+- Keep answers short and concise.
+- No emojis in commits, issues, PR comments, or code.
+- No fluff or cheerful filler text. Use direct technical prose.
+- When the user asks a question, answer it first before making edits or running implementation commands.
+- When responding to user feedback or an analysis, explicitly state whether you agree or disagree before describing what you changed.
+- Define unavoidable jargon before using it. Prefer concrete examples over abstract summaries.
 
-## Build, Test, and Development Commands
+## Code Quality
 
-Create and populate the local environment:
+- Read files in full before wide-ranging changes, before editing files you have not fully inspected, and when asked to investigate or audit. Do not rely on search snippets for broad changes.
+- Use standard Python style with 4-space indentation, explicit names, and small functions that stay close to their module's responsibility.
+- Prefer dataclasses for structured data already represented that way.
+- Keep provider-specific fields inside provider adapters, and keep UI concerns inside `lanscoder/app`.
+- Keep dependency direction one-way: upper layers may depend on lower layers, but lower layers must not depend on upper layers; same-layer modules interact through abstractions. Before adding a dependency, confirm it will not create a circular import.
+- Inline single-use helpers that have only one call site.
+- Write comments explaining why, not what; skip comments when the code is self-explanatory; do not keep commented-out dead code.
+- Always ask before removing functionality or code that appears intentional.
+- Do not preserve backward compatibility unless the user explicitly asks for it.
 
-```sh
-python -m venv .venv
-.venv/bin/python -m pip install -e ".[dev]"
-```
+## Commands and Verification
 
-Run the full test suite:
+- After code changes, run the linter and formatter (e.g., `ruff`) on the modified files. Fix all issues before proceeding.
+- Create or modify test files for new features and bug fixes. After writing or editing a test file, run it and iterate until it passes.
+- Run the narrowest relevant tests first, then the full suite for broad or cross-module changes.
+- Use fakes and fixtures instead of real API keys or network access in tests.
+- For ad-hoc scripts, write them to a temp file (e.g., `/tmp`), run, edit if needed, remove when done. Do not embed multi-line scripts in bash commands.
+- Never commit unless the user asks.
 
-```sh
-.venv/bin/python -m pytest
-```
+## Dependency Management
 
-Run a focused test file while iterating:
+- Adding a new dependency requires explicit user approval. Before asking, provide a brief justification explaining why the existing dependencies cannot satisfy the requirement.
+- When approved, use `pip install <package>` and update `pyproject.toml` accordingly. Regenerate lock files if the project uses them.
+- Do not modify `requirements.txt` or `pyproject.toml` without user confirmation.
 
-```sh
-.venv/bin/python -m pytest tests/test_context_store.py -q
-```
+## Git Operations
 
-Start the app locally:
+Since this is a single-developer project, Git rules are relaxed but still require discipline:
 
-```sh
-.venv/bin/python -m lanscoder
-```
-
-## Coding Style & Naming Conventions
-
-Use standard Python style with 4-space indentation, explicit names, and small functions that stay close to their module’s responsibility. Prefer dataclasses for structured data already represented that way. Keep provider-specific fields inside provider adapters, and keep UI concerns inside `lanscoder/app`. Test files use `test_*.py`; test functions should describe behavior, for example `test_resume_without_id_requests_picker`.
+- Commit only files you changed in this session. Stage explicit paths (`git add <path1> <path2>`); never `git add -A` or `git add ..`.
+- Before committing, run `git status` and verify you are only staging your files.
+- Message format: `{feat,fix,docs}: <concise imperative message describing the behavior change>`. Example: `feat: add permission confirmation protocol`.
+- Never run `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, or `git commit --no-verify`.
 
 ## Testing Guidelines
 
-This repository uses pytest. Add or update tests for behavior changes, especially around agent loops, context recovery, permissions, providers, and tool execution. Run the narrowest relevant tests first, then the full suite for broad or cross-module changes. Avoid tests that depend on real API keys or network access; use fakes and fixtures instead.
+- This repository uses `pytest`. Add or update tests for behavior changes, especially around agent loops, context recovery, permissions, providers, and tool execution.
+- Test files use `test_*.py`; test functions should describe behavior, for example `test_resume_without_id_requests_picker`.
+- If you create or modify a test file, run it and iterate on test or implementation until it passes.
 
-## Commit & Pull Request Guidelines
+## Versioning and Release
 
-Commit history uses concise imperative messages such as `Add permission confirmation protocol` and `Wire permissions into project tool execution`. Keep commits focused and describe the behavior changed. Pull requests should include a short summary, tests run, linked issues when applicable, and screenshots only for visible TUI changes.
+This project uses versioned releases. When preparing a release:
 
-## Security & Configuration Tips
+1. Update the version number in `pyproject.toml`.
+2. Run the full test suite and linter to ensure everything is clean.
+3. Create a git tag for the version.
+4. Ask the user before executing the release steps.
 
-Provider and model selection is configured through TOML, not environment variables: a `default_model` plus `[providers]` and `[models]` sections in `~/.config/lanscoder/config.toml` (global) and/or `./lanscoder.toml` (project, overrides global). Only API keys come from the environment, resolved via each provider's `api_key_env` (e.g. `DEEPSEEK_API_KEY`) with a fallback to `LANSCODER_API_KEY`; `.env` files are loaded automatically. Do not commit secrets, local session data, virtual environments, or machine-specific configuration.
+## Security and Configuration
 
-## Benchmark Evidence and Recovery
+- Provider and model selection is configured through TOML, not environment variables: a `default_model` plus `[providers]` and `[models]` sections in `~/.config/lanscoder/config.toml` (global) and/or `./lanscoder.toml` (project, overrides global).
+- Only API keys come from the environment, resolved via each provider's `api_key_env` (e.g., `DEEPSEEK_API_KEY`) with a fallback to `LANSCODER_API_KEY`; `.env` files are loaded automatically.
+- Do not commit secrets, local session data, virtual environments, or machine-specific configuration.
 
-Harbor is the repository's maintained external benchmark path. The canonical completed Aider Polyglot result package is `benchmark/runs/harbor/aider-polyglot-feedback-retry-20260726/2026-07-26__12-07-27/`: 225 tasks, 213 passes from 221 explicit rewards (96.38% reward-only pass@1), and 94.67% end-to-end Harbor mean. Read its `README.md` before making claims about the result or rerunning it.
+## User Override
 
-Keep benchmark credentials only in Git-ignored `.env.harbor`; never commit actual API keys, agent session JSONL, task workspaces, or raw provider logs. Treat `reward=0`, `RewardFileNotFoundError`, network/provider errors, and verifier timeouts as separate categories. Aider Polyglot may use `benchmark.harbor.aider_feedback_plugin:AiderFeedbackPlugin` for its permitted verifier-feedback repair turn; do not apply that plugin to benchmarks whose protocol does not permit test-feedback interaction.
-
-When resuming an interrupted Harbor job, first confirm no other `harbor run` or `harbor job resume` process exists. Preserve completed trials, target only the relevant exception types, and inspect `result.json`, verifier output, and the job lock after recovery. A verifier/task-cache change updates the resolved lock; do not silently mix artifacts produced under incompatible task definitions.
+- If the user's instructions conflict with any rule in this document, ask for explicit confirmation before overriding. Only then execute their instructions.

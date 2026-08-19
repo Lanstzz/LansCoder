@@ -7,9 +7,11 @@ from lanscoder.skills.models import SkillCatalog
 
 def test_skills_command_lists_discovered_skills(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
-    (skills_dir / "brief.md").write_text(
+    skills_dir = tmp_path / ".lanscoder" / "skills"
+    skills_dir.mkdir(parents=True)
+    brief_dir = skills_dir / "brief"
+    brief_dir.mkdir()
+    (brief_dir / "SKILL.md").write_text(
         "---\nname: brief\ndescription: Write a brief.\ntriggers: news, summary\n---\n\n# Brief\n",
         encoding="utf-8",
     )
@@ -19,14 +21,14 @@ def test_skills_command_lists_discovered_skills(tmp_path: Path, monkeypatch) -> 
 
     assert result.handled is True
     assert "Skills:" in result.output
-    assert "- brief project skills/brief.md" in result.output
+    assert "- brief project .lanscoder/skills/brief/SKILL.md" in result.output
     assert "Write a brief." in result.output
     assert result.action == {
         "type": "skill_picker",
         "skills": [
             {
                 "name": "brief",
-                "path": "skills/brief.md",
+                "path": ".lanscoder/skills/brief/SKILL.md",
                 "scope": "project",
                 "description": "Write a brief.",
             }
@@ -37,7 +39,7 @@ def test_skills_command_lists_discovered_skills(tmp_path: Path, monkeypatch) -> 
 
 def test_skill_command_shows_single_skill_details(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    skill_dir = tmp_path / ".agents" / "skills" / "fetch-tweet"
+    skill_dir = tmp_path / ".lanscoder" / "skills" / "fetch-tweet"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
         "---\nname: fetch-tweet\ndescription: Fetch tweet content.\ntriggers: x.com, twitter\n---\n\n# Fetch Tweet\n",
@@ -50,8 +52,8 @@ def test_skill_command_shows_single_skill_details(tmp_path: Path, monkeypatch) -
     assert result.handled is True
     assert "Skill: fetch-tweet" in result.output
     assert "Scope: project" in result.output
-    assert "Source: project_agent_skill" in result.output
-    assert "Path: .agents/skills/fetch-tweet/SKILL.md" in result.output
+    assert "Source: project" in result.output
+    assert "Path: .lanscoder/skills/fetch-tweet/SKILL.md" in result.output
     assert "Triggers: x.com, twitter" in result.output
 
 
@@ -67,9 +69,11 @@ def test_skill_command_reports_missing_skill(tmp_path: Path, monkeypatch) -> Non
 
 def test_skill_use_command_references_skill_for_input(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
-    (skills_dir / "brief.md").write_text("# Brief\n", encoding="utf-8")
+    skills_dir = tmp_path / ".lanscoder" / "skills"
+    skills_dir.mkdir(parents=True)
+    brief_dir = skills_dir / "brief"
+    brief_dir.mkdir()
+    (brief_dir / "SKILL.md").write_text("# Brief\n", encoding="utf-8")
     handler = SkillCommandHandler(catalog_provider=lambda: discover_all_skills(tmp_path))
 
     result = handler.handle("/skill-use brief")
@@ -79,7 +83,7 @@ def test_skill_use_command_references_skill_for_input(tmp_path: Path, monkeypatc
     assert result.action == {
         "type": "skill_referenced",
         "name": "brief",
-        "path": "skills/brief.md",
+        "path": ".lanscoder/skills/brief/SKILL.md",
         "reference": "请先调用 load_skill(name=brief, args=<你的任务>)，再按照返回的指令继续。",
     }
 
@@ -95,7 +99,7 @@ def test_skill_use_command_requires_one_skill_name() -> None:
 
 def test_exact_skill_slash_command_submits_instruction_to_chat(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    skill_dir = tmp_path / ".agents" / "skills" / "fetch-tweet"
+    skill_dir = tmp_path / ".lanscoder" / "skills" / "fetch-tweet"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
         "---\nname: fetch-tweet\ndescription: Fetch tweet content.\n---\n\n# Fetch Tweet\n",
@@ -115,9 +119,11 @@ def test_exact_skill_slash_command_submits_instruction_to_chat(tmp_path: Path, m
 
 def test_exact_skill_slash_command_requires_instruction(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
-    (skills_dir / "brief.md").write_text("# Brief\n", encoding="utf-8")
+    skills_dir = tmp_path / ".lanscoder" / "skills"
+    skills_dir.mkdir(parents=True)
+    brief_dir = skills_dir / "brief"
+    brief_dir.mkdir()
+    (brief_dir / "SKILL.md").write_text("# Brief\n", encoding="utf-8")
     handler = SkillCommandHandler(catalog_provider=lambda: discover_all_skills(tmp_path))
 
     result = handler.handle("/brief")
@@ -128,9 +134,11 @@ def test_exact_skill_slash_command_requires_instruction(tmp_path: Path, monkeypa
 
 def test_exact_skill_slash_command_does_not_use_substring_match(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
-    (skills_dir / "brief.md").write_text("# Brief\n", encoding="utf-8")
+    skills_dir = tmp_path / ".lanscoder" / "skills"
+    skills_dir.mkdir(parents=True)
+    brief_dir = skills_dir / "brief"
+    brief_dir.mkdir()
+    (brief_dir / "SKILL.md").write_text("# Brief\n", encoding="utf-8")
     handler = SkillCommandHandler(catalog_provider=lambda: discover_all_skills(tmp_path))
 
     result = handler.handle("/bri 写日报")

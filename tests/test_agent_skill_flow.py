@@ -41,7 +41,7 @@ def test_user_language_does_not_auto_load_skill_before_provider_call(tmp_path: P
     assert [event for event in store.list_events("sess_skill") if event.type.startswith("skill_")] == []
     system_prompt = provider.requests[0].messages[0].content
     assert "- global-family-office-news-brief: 全球家办资讯简报" in system_prompt
-    assert "skills/global-family-office-news-brief.md" not in system_prompt
+    assert ".lanscoder/skills/global-family-office-news-brief/SKILL.md" not in system_prompt
     assert "# 全球家族办公室资讯简报" not in system_prompt
 
 
@@ -93,7 +93,7 @@ def test_resume_replays_loaded_skill_tool_result_without_reading_disk(tmp_path: 
         ]
     )
     AgentLoop(session=original, provider=provider)._run_user_turn_sync("生成简报")
-    (tmp_path / "skills" / "global-family-office-news-brief.md").unlink()
+    (tmp_path / ".lanscoder" / "skills" / "global-family-office-news-brief" / "SKILL.md").unlink()
 
     resumed = AgentSession.resume(
         store=store,
@@ -112,9 +112,11 @@ def test_resume_replays_loaded_skill_tool_result_without_reading_disk(tmp_path: 
 
 def _write_skill_project(root: Path) -> None:
     (root / "AGENTS.md").write_text("项目规则。\n", encoding="utf-8")
-    skills_dir = root / "skills"
-    skills_dir.mkdir()
-    (skills_dir / "global-family-office-news-brief.md").write_text(
+    skills_dir = root / ".lanscoder" / "skills"
+    skills_dir.mkdir(parents=True)
+    skill_dir = skills_dir / "global-family-office-news-brief"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
         "---\nname: global-family-office-news-brief\ndescription: 全球家办资讯简报\n---\n\n# 全球家族办公室资讯简报\n\n开始前必须读取 `docs/evidence-policy.md`。\n",
         encoding="utf-8",
     )
