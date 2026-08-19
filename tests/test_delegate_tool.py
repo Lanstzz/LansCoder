@@ -89,7 +89,6 @@ def test_child_session_is_metadata_tagged(tmp_path) -> None:
             role="researcher",
             task="inspect context",
             parent_session_id="parent_1",
-            parent_task_hash="task_abc",
             path_hints=["lanscoder/agent"],
         ),
         profile=runner.profile("researcher"),
@@ -97,7 +96,6 @@ def test_child_session_is_metadata_tagged(tmp_path) -> None:
 
     view = store.rebuild_session_view(child.session_id)
     assert view.metadata["parent_session_id"] == "parent_1"
-    assert view.metadata["parent_task_hash"] == "task_abc"
     assert view.metadata["delegate_role"] == "researcher"
     assert view.metadata["delegate_task"] == "inspect context"
 
@@ -112,7 +110,6 @@ def test_subagent_run_restricts_child_tools_and_deletes_session(tmp_path) -> Non
             role="researcher",
             task="inspect context",
             parent_session_id="parent_1",
-            parent_task_hash="task_abc",
             path_hints=["lanscoder/agent"],
         )
     )

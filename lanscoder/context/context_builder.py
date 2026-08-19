@@ -119,8 +119,7 @@ class ContextBuilder:
 
         if message.role == "user":
             visible_content = _join_visible_text(message.parts, preserve_trimmed_text=preserve_trimmed_text)
-            # basis_message_id 是给 task_boundary 工具用的锚点。模型只能引用真实存在的
-            # message id，程序侧再据此生成稳定 task hash。
+            # basis_message_id 是上下文锚点，让模型只能引用真实存在的 message id。
             content = _with_basis_message_id(message.id, visible_content)
             content_parts = _project_user_content_parts(message.parts, content=content, store_root=store_root)
             # The internal context anchor alone must not turn a fully trimmed
@@ -132,7 +131,7 @@ class ContextBuilder:
 
         if message.role == "notification":
             # 后台完成通知需要以 user 角色发给 provider，但它不是真正的用户轮次，因此不
-            # 带 basis_message_id 锚点，也不参与 task_boundary 的任务哈希。
+            # 带 basis_message_id 锚点。
             content = _join_visible_text(message.parts, preserve_trimmed_text=preserve_trimmed_text)
             if not content:
                 return []

@@ -13,7 +13,7 @@ def replay_runtime_state(store: JsonlSessionStore, session_id: str) -> SessionRu
     """重放不属于自然语言历史的 session runtime state。
 
     `JsonlSessionStore.rebuild_session_view()` 负责消息和 checkpoint 投影；这里只恢复
-    active task hash、compact failure、latest checkpoint 等运行期事实。
+    compact failure、latest checkpoint 等运行期事实。
     """
 
     state = SessionRuntimeState(session_id=session_id)
@@ -27,10 +27,6 @@ def _apply_event(state: SessionRuntimeState, event: SessionEvent) -> None:
         part_ids = event.payload.get("part_ids")
         if isinstance(part_ids, list):
             state.consumed_tool_result_part_ids.update(part_id for part_id in part_ids if isinstance(part_id, str) and part_id)
-        return
-
-    if event.type == "task_boundary_observed":
-        _apply_task_boundary(state, event)
         return
 
     if event.type == "checkpoint_created":
@@ -55,26 +51,6 @@ def _apply_event(state: SessionRuntimeState, event: SessionEvent) -> None:
 
     if event.type == "llm_compaction_completed":
         _apply_l4_compaction(state, event)
-
-
-def _apply_task_boundary(state: SessionRuntimeState, event: SessionEvent) -> None:
-    payload = event.payload
-    candidate_hash = payload.get("candidate_hash")
-    if payload.get("confirmed_change") and candidate_hash:
-        state.active_task_hash = str(candidate_hash)
-        state.candidate_task_hash = None
-        state.task_hash_stable_count = 0
-        return
-
-    decision = str(payload.get("decision") or "")
-    if decision in {"same", "uncertain"}:
-        state.candidate_task_hash = None
-        state.task_hash_stable_count = 0
-        return
-
-    if decision == "new" and candidate_hash:
-        state.candidate_task_hash = str(candidate_hash)
-        state.task_hash_stable_count = int(payload.get("stable_count") or 1)
 
 
 def _apply_l4_compaction(state: SessionRuntimeState, event: SessionEvent) -> None:

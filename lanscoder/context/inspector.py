@@ -21,8 +21,6 @@ AutoCompactStatus = Literal["ready", "failed", "disabled"]
 @dataclass(slots=True)
 class ContextInspectionReport:
     session_id: str
-    active_task_hash: str | None
-    candidate_task_hash: str | None
     system_prompt_fingerprint: str | None
     latest_checkpoint_id: str | None
     tail_message_count: int
@@ -69,8 +67,6 @@ class ContextInspector:
 
         return ContextInspectionReport(
             session_id=view.session_id,
-            active_task_hash=runtime.active_task_hash,
-            candidate_task_hash=runtime.candidate_task_hash,
             system_prompt_fingerprint=runtime.system_prompt_fingerprint,
             latest_checkpoint_id=checkpoint.id if checkpoint else runtime.latest_checkpoint_id,
             tail_message_count=len(tail.messages),

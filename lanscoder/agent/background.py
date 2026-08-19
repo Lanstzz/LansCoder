@@ -39,7 +39,7 @@ BACKGROUND_TASK_ID_ARG = "task_id"
 BACKGROUND_CONTROL_ARGS = frozenset({RUN_IN_BACKGROUND_ARG, BACKGROUND_LABEL_ARG, BACKGROUND_TASK_ID_ARG})
 
 # Phase 1 默认允许后台化的工具：只读探查 + 已做权限预检的执行/网络工具。
-# 刻意排除 TaskPlan 写入、task_boundary / ask_user（控制面）以及全部写入类工具（要等
+# 刻意排除 TaskPlan 写入、ask_user（控制面）以及全部写入类工具（要等
 # worktree 隔离），避免后台任务在没有安全边界时改动主工作区或伪造用户交互。
 DEFAULT_BACKGROUND_TOOL_NAMES = frozenset(
     {
@@ -402,10 +402,7 @@ class BackgroundJobManager:
         """
 
         with self._lock:
-            return [
-                job for job in self._completed
-                if session_id is None or job.session_id == session_id
-            ]
+            return [job for job in self._completed if session_id is None or job.session_id == session_id]
 
     def cancel(self, job_id: str, *, session_id: str | None = None) -> BackgroundJob | None:
         """尽力取消一个后台任务。

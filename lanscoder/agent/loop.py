@@ -34,7 +34,6 @@ from lanscoder.runtime.user_input import UserInputRequest
 from lanscoder.agent.ports import ContextManagerLike
 from lanscoder.agent.loop_limits import AgentLoopLimits, AgentLoopStopReason
 from lanscoder.agent.session import AgentSession, PendingPermissionExecution
-from lanscoder.agent.task_boundary_classifier import TaskBoundaryClassifier
 from lanscoder.agent.task_plan_policy import TaskPlanPolicy, render_current_task_plan_snapshot
 from lanscoder.agent.tool_execution import ToolExecutionEvent, ToolExecutor
 from lanscoder.agent.tool_settlement import ToolCallSettlement
@@ -52,7 +51,6 @@ from lanscoder.context.context_builder import ContextBuilder
 from lanscoder.context.identity import new_request_id, stable_json_hash
 from lanscoder.context.manager import ContextCompactRequest, ContextWindowTrigger
 from lanscoder.context.token_budget import ContextBudget, build_context_budget
-from lanscoder.context.task_boundary import TaskBoundaryService
 from lanscoder.input.attachments import UserAttachment
 from lanscoder.permissions.types import PermissionDecision, PermissionDecisionKind, PermissionRequest
 from lanscoder.providers.base import ChatProvider
@@ -170,20 +168,7 @@ class AgentLoop:
         self._task_plan_reconciliation_attempted = False
         self._tool_rounds_completed = 0
 
-        # -------- 阶段 6：任务边界分类器 --------
-        # TaskBoundaryClassifier 判断新消息是否开启新任务，记录任务边界状态
-        # → 见 lanscoder/agent/task_boundary_classifier.py::TaskBoundaryClassifier
-        self.task_boundary_classifier = TaskBoundaryClassifier(
-            session=session,
-            provider=provider,
-            context_builder=self.context_builder,
-            check_cancelled=self._check_cancelled,
-            reserve_provider_call=self._reserve_provider_call,
-            check_turn_timeout=self._check_turn_timeout,
-            tag_task_boundary_messages=self._tag_task_boundary_messages_with_active_hash,
-        )
-
-        # -------- 阶段 7：工具注册（去重）--------
+        # -------- 阶段 6：工具注册（去重）--------
         # session 创建时通常已经注册了 session-scoped 工具。这里允许调用方再传入一批
         # 测试或临时工具，但避免重复注册同名工具导致模型 schema 不稳定。
         if tools:
@@ -193,7 +178,7 @@ class AgentLoop:
         self._mcp_tool_names = {name for name in self.session.tool_registry.names() if name.startswith("mcp__")}
         self._active_mcp_tool_names: set[str] = set()
 
-        # -------- 阶段 8：ToolExecutor 创建 --------
+        # -------- 阶段 7：ToolExecutor 创建 --------
         # ToolExecutor 负责真正把 tool_call 变成 tool_result：权限检查、沙盒执行、事件回报
         # → 见 lanscoder/agent/tool_execution.py::ToolExecutor
         self.tool_executor = ToolExecutor(
@@ -202,7 +187,6 @@ class AgentLoop:
             emit_event=self._emit_tool_event,
             check_cancelled=self._check_cancelled,
             cancellation_token=self.cancellation_token,
-            tag_task_boundary_messages=self._tag_task_boundary_messages_with_active_hash,
             emit_settlements=self._emit_settlements,
             validate_tool_call=self._validate_mcp_tool_call,
             observe_tool_result=self._observe_mcp_search_result,
@@ -210,7 +194,7 @@ class AgentLoop:
             background_tool_names=self.background_tool_names,
         )
 
-        # -------- 阶段 9：背景控制工具 + delegate 工具注册 --------
+        # -------- 阶段 8：背景控制工具 + delegate 工具注册 --------
         # _ensure_background_control_tools(): 注册 background_status / background_cancel
         # _ensure_delegate_tool(): 注册 delegate 工具（让模型能启动子 agent）
         # → 见 lanscoder/tools/delegate.py::create_delegate_tool
@@ -266,8 +250,7 @@ class AgentLoop:
     # 3. _repair_interrupted_tool_calls_before_provider_request()：修复上一轮意外中断
     #    留下的"有 tool_call 但缺 tool_result"的非法序列（补一条 canceled tool_result）。
     # 4. append_user_message()：把用户输入写入 JSONL。
-    # 5. 任务边界分类 (TaskBoundaryClassifier.classify)：判断是否开启新任务。
-    # 6. 进入 _run_tool_loop_interactive 核心循环（见下方）。
+    # 5. 进入 _run_tool_loop_interactive 核心循环（见下方）。
     def _run_user_turn_sync(
         self,
         content: str,
@@ -288,14 +271,7 @@ class AgentLoop:
         self._begin_turn()  # provider_call_count = 0, _tool_rounds_completed=0
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
-        message_id = self.session.append_user_message(content, attachments=attachments)  # 把用户消息写进jsonl
-        try:
-            if self._initialize_active_task_if_missing(message_id) is None:
-                self._classify_task_boundary(message_id)
-        except _AgentLoopLimitReached as exc:
-            return self._complete_turn(self._limit_response(exc.reason))
-        except AgentCancelledError:
-            return self._complete_turn(self._interrupted_response())
+        self.session.append_user_message(content, attachments=attachments)  # 把用户消息写进jsonl
 
         # run_tool_loop_interactive 是核心循环的外壳, 它负责捕获异常
         return self._run_tool_loop_interactive(
@@ -311,9 +287,7 @@ class AgentLoop:
                 status=AgentTurnStatus.WAITING_FOR_USER_INPUT,
                 pending_input=self.tool_executor.permission_input_request_from_pending(pending),
             )
-        if self.background_manager is None or not self.background_manager.pending_completions(
-            session_id=self.session.session_id
-        ):
+        if self.background_manager is None or not self.background_manager.pending_completions(session_id=self.session.session_id):
             # 无待投递通知：不空转，避免模型被空输入唤醒。
             return AgentTurnResult(status=AgentTurnStatus.COMPLETED, response=None)
 
@@ -422,14 +396,7 @@ class AgentLoop:
         self._begin_turn()
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
-        message_id = self.session.append_user_message(content, attachments=attachments)
-        try:
-            if self._initialize_active_task_if_missing(message_id) is None:
-                await self._classify_task_boundary_async(message_id)
-        except _AgentLoopLimitReached as exc:
-            return self._complete_turn(self._limit_response(exc.reason))
-        except AgentCancelledError:
-            return self._complete_turn(self._interrupted_response())
+        self.session.append_user_message(content, attachments=attachments)
 
         result = await self._run_tool_loop_interactive_async(
             self._stream_once_with_recovery,
@@ -447,53 +414,13 @@ class AgentLoop:
                 status=AgentTurnStatus.WAITING_FOR_USER_INPUT,
                 pending_input=pending_input,
             )
-        if self.background_manager is None or not self.background_manager.pending_completions(
-            session_id=self.session.session_id
-        ):
+        if self.background_manager is None or not self.background_manager.pending_completions(session_id=self.session.session_id):
             return AgentTurnResult(status=AgentTurnStatus.COMPLETED, response=None)
 
         self._begin_turn()
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
         return await self._run_tool_loop_interactive_async(self._stream_once_with_recovery)
-
-    def _initialize_active_task_if_missing(self, basis_message_id: str):
-        service = TaskBoundaryService(known_message_ids=self.session.known_message_ids)
-        observation = service.initialize_active_task(self.session.runtime_state, basis_message_id=basis_message_id)
-        if observation is not None:
-            self.session.writer.append_task_boundary_observation(observation)
-            self._tag_message_parts_with_task_hash(basis_message_id, observation.active_task_hash)
-        return observation
-
-    def _classify_task_boundary(self, basis_message_id: str) -> None:
-        self.task_boundary_classifier.classify(basis_message_id)
-
-    async def _classify_task_boundary_async(self, basis_message_id: str) -> None:
-        await self.task_boundary_classifier.classify_async(basis_message_id)
-
-    def _tag_message_parts_with_task_hash(self, message_id: str, task_hash: str | None) -> None:
-        if not task_hash:
-            return
-        view = self.session.rebuild_view()
-        message = next((message for message in view.messages if message.id == message_id), None)
-        if message is None:
-            return
-        for part in message.parts:
-            self.session.writer.append_message_part_metadata_updated(
-                message_id=message_id,
-                part_id=part.id,
-                metadata={"task_hash": task_hash},
-            )
-
-    def _tag_task_boundary_messages_with_active_hash(self, data: dict[str, object]) -> None:
-        active_hash = data.get("active_task_hash")
-        message_ids = {
-            str(data.get("basis_message_id") or ""),
-            str(data.get("candidate_basis_message_id") or ""),
-        }
-        for message_id in message_ids:
-            if message_id:
-                self._tag_message_parts_with_task_hash(message_id, active_hash)
 
     def _append_permission_resume_result(self, request_id: str, answer: str) -> AgentTurnResult | None:
         """用回答恢复一个暂停的权限/ask_user。
@@ -1361,7 +1288,6 @@ class AgentLoop:
             create_delegate_tool(
                 runner,
                 parent_session_id=self.session.session_id,
-                parent_task_hash=self.session.runtime_state.active_task_hash,
             )
         )
 

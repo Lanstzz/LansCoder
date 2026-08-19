@@ -97,7 +97,6 @@ class SubagentRequest:
     role: SubagentRole
     task: str
     parent_session_id: str
-    parent_task_hash: str | None = None
     parent_summary: str | None = None
     path_hints: list[str] = field(default_factory=list)
     run_in_background: bool = False
@@ -362,11 +361,7 @@ class SubagentRunner:
 
     def create_child_session(self, request: SubagentRequest, *, profile: SubagentProfile) -> AgentSession:
         session_id = new_session_id()
-        permission_manager = (
-            self._background_child_permission_manager()
-            if request.run_in_background
-            else self._child_permission_manager_for_inline()
-        )
+        permission_manager = self._background_child_permission_manager() if request.run_in_background else self._child_permission_manager_for_inline()
         child = AgentSession.create(
             store=self.store,
             session_id=session_id,
@@ -378,7 +373,6 @@ class SubagentRunner:
         )
         child.writer.append_session_metadata_updated(
             parent_session_id=request.parent_session_id,
-            parent_task_hash=request.parent_task_hash,
             delegate_role=profile.role,
             delegate_task=request.task,
         )
@@ -441,7 +435,6 @@ class SubagentRunner:
         child.require_prewrite_review = False
         child.writer.append_session_metadata_updated(
             parent_session_id=request.parent_session_id,
-            parent_task_hash=request.parent_task_hash,
             delegate_role=profile.role,
             delegate_task=request.task,
             worktree_path=str(worktree.path),

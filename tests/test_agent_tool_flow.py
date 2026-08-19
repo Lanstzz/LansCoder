@@ -17,7 +17,6 @@ from lanscoder.context.writer import SessionEventWriter, tool_call_to_part as wr
 from lanscoder.providers.types import ChatResponse, ToolCall
 from lanscoder.tools.apply_patch import create_apply_patch_tool
 from lanscoder.tools.python_exec import create_python_exec_tool
-from lanscoder.tools.session_registry import create_session_tool_registry
 from lanscoder.tools.write import create_write_tool
 from lanscoder.tools.types import ToolResult
 
@@ -208,15 +207,6 @@ def test_project_session_permissioned_python_exec_pauses_without_executing(tmp_p
     assert called is False
 
 
-def test_session_registry_adds_task_boundary_tool() -> None:
-    registry = create_session_tool_registry(session_id="sess_test")
-
-    assert "task_boundary" in registry.names()
-    result = registry.execute("task_boundary", {"decision": "new", "basis_message_id": "msg_1"})
-    assert result.ok is True
-    assert result.data["candidate_hash"].startswith("task_")
-
-
 def test_context_builder_rejects_orphan_tool_result() -> None:
     view = SessionView(
         session_id="sess_test",
@@ -379,7 +369,6 @@ def test_session_registry_adds_task_plan_tools_for_live_sessions(tmp_path) -> No
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
 
-    assert "task_boundary" in session.tool_registry.names()
     assert {"task_create", "task_update", "task_revise", "task_list"}.issubset(session.tool_registry.names())
 
 

@@ -59,8 +59,6 @@ def test_inspector_reports_runtime_and_context_fields() -> None:
     )
     runtime = SessionRuntimeState(
         session_id="sess_test",
-        active_task_hash="task_active",
-        candidate_task_hash="task_candidate",
         system_prompt_fingerprint="sys_fp",
         last_compaction_input_fingerprint="compact_fp",
     )
@@ -68,8 +66,6 @@ def test_inspector_reports_runtime_and_context_fields() -> None:
     report = ContextInspector().inspect(view, runtime, budget=_budget())
 
     assert report.session_id == "sess_test"
-    assert report.active_task_hash == "task_active"
-    assert report.candidate_task_hash == "task_candidate"
     assert report.system_prompt_fingerprint == "sys_fp"
     assert report.latest_checkpoint_id == "ckpt_latest"
     assert report.tail_message_count == 1
@@ -219,8 +215,6 @@ def test_inspector_report_can_be_serialized_for_tui_status() -> None:
     assert report.to_dict()["recent_compaction_events"][0]["input_fingerprint"] == "fp_1"
     assert set(report.to_dict()) >= {
         "session_id",
-        "active_task_hash",
-        "candidate_task_hash",
         "system_prompt_fingerprint",
         "latest_checkpoint_id",
         "tail_message_count",

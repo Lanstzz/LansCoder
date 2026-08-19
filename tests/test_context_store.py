@@ -60,7 +60,7 @@ def test_jsonl_store_rebuilds_session_view_from_events(tmp_path: Path) -> None:
                         "message_id": user_message_id,
                         "kind": "text",
                         "content": "实现 context store",
-                        "metadata": {"task_hash": "A"},
+                        "metadata": {"custom_meta": "A"},
                     }
                 ],
             },

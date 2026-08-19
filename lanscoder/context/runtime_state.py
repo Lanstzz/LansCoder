@@ -74,10 +74,6 @@ class SessionRuntimeState:
     """不应该塞进自然语言消息的会话状态。"""
 
     session_id: str
-    active_task_hash: str | None = None
-    candidate_task_hash: str | None = None
-    candidate_task_basis_message_id: str | None = None
-    task_hash_stable_count: int = 0
     latest_checkpoint_id: str | None = None
     auto_compact_failure_count: int = 0
     auto_compact_disabled_until: str | None = None
@@ -87,39 +83,6 @@ class SessionRuntimeState:
     last_no_effect_compaction_fingerprint: str | None = None
     consumed_tool_result_part_ids: set[str] = field(default_factory=set)
     recent_compaction_events: list[CompactionHistoryEntry] = field(default_factory=list)
-
-    def observe_task_hash_candidate(
-        self,
-        candidate_hash: str,
-        *,
-        required_stable_count: int = 2,
-    ) -> bool:
-        """观察候选 hash，稳定后切换 active hash。
-
-        返回值表示本次观察是否确认了任务切换。这样 task boundary 工具可以把“模型建议”
-        和“程序确认切换”分开，降低 hash 抖动带来的误触发。
-        """
-
-        if candidate_hash == self.active_task_hash:
-            self.candidate_task_hash = None
-            self.candidate_task_basis_message_id = None
-            self.task_hash_stable_count = 0
-            return False
-
-        if candidate_hash == self.candidate_task_hash:
-            self.task_hash_stable_count += 1
-        else:
-            self.candidate_task_hash = candidate_hash
-            self.task_hash_stable_count = 1
-
-        if self.task_hash_stable_count < required_stable_count:
-            return False
-
-        self.active_task_hash = candidate_hash
-        self.candidate_task_hash = None
-        self.candidate_task_basis_message_id = None
-        self.task_hash_stable_count = 0
-        return True
 
     def record_auto_compact_failure(
         self,

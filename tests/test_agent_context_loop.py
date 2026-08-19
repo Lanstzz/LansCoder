@@ -9,12 +9,10 @@ import time
 import pytest
 
 from lanscoder.agent.loop import AgentLoop, ToolExecutionEvent
-from lanscoder.agent.task_boundary_classifier import CLASSIFICATION_PROMPT
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.user_input import AgentTurnStatus
 from lanscoder.agent.session import AgentSession
 from lanscoder.context.manager import ContextCompactResult, ContextWindowTrigger
-from lanscoder.context.runtime_replay import replay_runtime_state
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.input.attachments import attach_path
 from lanscoder.runtime.cancellation import CancellationToken
@@ -33,7 +31,6 @@ from lanscoder.providers.types import (
     ToolCall,
     ToolDefinition,
 )
-from lanscoder.tools.task_boundary import create_task_boundary_tool
 from lanscoder.tools.ask_user import create_ask_user_tool
 from lanscoder.tools.write import create_write_tool
 from lanscoder.tools.edit import create_edit_tool
@@ -84,63 +81,6 @@ class CancellingProvider(FakeProvider):
         if len(self.requests) == 2:
             self.cancellation_token.cancel()
         return response
-
-
-@dataclass
-class BoundaryProvider(ChatProvider):
-    requests: list[ChatRequest] = field(default_factory=list)
-    boundary_calls: int = 0
-
-    @property
-    def name(self) -> str:
-        return "fake"
-
-    @property
-    def model(self) -> str:
-        return "fake-model"
-
-    def complete(self, request: ChatRequest) -> ChatResponse:
-        self.requests.append(request)
-        if self.boundary_calls >= 2:
-            return ChatResponse(provider="fake", model="fake-model", content="ok")
-
-        basis_message_id = _extract_basis_message_id(request)
-        self.boundary_calls += 1
-        return ChatResponse(
-            provider="fake",
-            model="fake-model",
-            content="",
-            tool_calls=[
-                ToolCall(
-                    id=f"call_boundary_{self.boundary_calls}",
-                    name="task_boundary",
-                    arguments={"decision": "new", "basis_message_id": basis_message_id},
-                )
-            ],
-            finish_reason="tool_calls",
-        )
-
-
-@dataclass
-class JsonBoundaryProvider(ChatProvider):
-    responses: list[str]
-    requests: list[ChatRequest] = field(default_factory=list)
-
-    @property
-    def name(self) -> str:
-        return "fake"
-
-    @property
-    def model(self) -> str:
-        return "fake-model"
-
-    def complete(self, request: ChatRequest) -> ChatResponse:
-        self.requests.append(request)
-        content = self.responses.pop(0)
-        if content in {"<boundary>", "<same>"}:
-            decision = "new" if content == "<boundary>" else "same"
-            content = '{"decision":"' + decision + '","basis_message_id":"' + _extract_basis_message_id(request) + '"}'
-        return ChatResponse(provider="fake", model="fake-model", content=content)
 
 
 @dataclass
@@ -276,37 +216,6 @@ class StreamingProvider(ChatProvider):
             yield ChatStreamEvent(kind="tool_call_started", tool_call_id=tool_call.id, tool_name=tool_call.name)
             yield ChatStreamEvent(kind="tool_call_delta", tool_call_id=tool_call.id, tool_name=tool_call.name)
             yield ChatStreamEvent(kind="tool_call_completed", tool_call=tool_call)
-        yield ChatStreamEvent(kind="message_completed", response=response)
-
-
-@dataclass
-class StreamingProviderWithClassification(ChatProvider):
-    classification_responses: list[str]
-    stream_responses: list[ChatResponse]
-    complete_requests: list[ChatRequest] = field(default_factory=list)
-    stream_requests: list[ChatRequest] = field(default_factory=list)
-
-    @property
-    def name(self) -> str:
-        return "fake-stream"
-
-    @property
-    def model(self) -> str:
-        return "fake-stream-model"
-
-    def complete(self, request: ChatRequest) -> ChatResponse:
-        self.complete_requests.append(request)
-        content = self.classification_responses.pop(0)
-        if content == "<boundary>":
-            content = '{"decision":"new","basis_message_id":"' + _extract_basis_message_id(request) + '"}'
-        return ChatResponse(provider=self.name, model=self.model, content=content)
-
-    async def astream(self, request: ChatRequest):
-        self.stream_requests.append(request)
-        response = self.stream_responses.pop(0)
-        yield ChatStreamEvent(kind="message_started")
-        for text in response.content:
-            yield ChatStreamEvent(kind="text_delta", text=text)
         yield ChatStreamEvent(kind="message_completed", response=response)
 
 
@@ -656,7 +565,7 @@ def test_agent_loop_system_prefix_uses_provider_model_and_default_permission_pol
     assert '"env_secrets": "redact"' in system_prompt
 
 
-def test_agent_loop_exposes_user_message_id_for_task_boundary(tmp_path) -> None:
+def test_agent_loop_exposes_user_message_id_as_context_anchor(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
@@ -1189,24 +1098,6 @@ def test_agent_loop_streaming_prompt_too_long_does_not_retry_when_compaction_fai
     assert [message.role for message in store.rebuild_session_view("sess_stream_retry_fail").messages] == ["user"]
 
 
-def test_agent_loop_injects_stateful_task_boundary_tool(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
-    provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
-
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("新问题")
-
-    tools = provider.requests[0].tools
-    user_message_id = store.rebuild_session_view("sess_test").messages[0].id
-    assert "task_boundary" not in [tool.name for tool in tools]
-    result = session.tool_registry.execute(
-        "task_boundary",
-        {"decision": "new", "basis_message_id": user_message_id},
-    )
-    assert result.ok
-    assert result.data["candidate_hash"].startswith("task_")
-
-
 def test_agent_loop_sends_tool_schema_only_via_request_tools(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_tool_schema", agents_md="", tools=[_echo_tool()])
@@ -1499,86 +1390,6 @@ def test_agent_loop_ignores_returned_tool_calls_when_provider_without_tool_suppo
     ]
 
 
-def test_agent_loop_persists_task_boundary_observation_for_replay(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
-    provider = BoundaryProvider()
-
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("换一个任务")
-
-    event_types = [event.type for event in store.list_events("sess_test")]
-    replayed = replay_runtime_state(store, "sess_test")
-    assert "task_boundary_observed" in event_types
-    assert session.runtime_state.active_task_hash is not None
-    assert replayed.active_task_hash == session.runtime_state.active_task_hash
-
-
-def test_agent_loop_initializes_active_task_hash_when_model_skips_task_boundary(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
-    provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
-
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("读取 README")
-
-    events = store.list_events("sess_test")
-    boundary_event = next(event for event in events if event.type == "task_boundary_observed")
-    replayed = replay_runtime_state(store, "sess_test")
-    user_message = next(message for message in store.rebuild_session_view("sess_test").messages if message.role == "user")
-
-    assert boundary_event.payload["confirmation_reason"] == "implicit_initial_task"
-    assert boundary_event.payload["basis_message_id"] == user_message.id
-    assert boundary_event.payload["active_task_hash"] == session.runtime_state.active_task_hash
-    assert session.runtime_state.active_task_hash is not None
-    assert replayed.active_task_hash == session.runtime_state.active_task_hash
-
-
-def test_agent_loop_tags_initial_user_message_with_implicit_task_hash(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
-    provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
-
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("第一任务：" + "旧任务内容" * 80)
-
-    view = store.rebuild_session_view("sess_test")
-    user_part = next(message for message in view.messages if message.role == "user").parts[0]
-    assert user_part.metadata["task_hash"] == session.runtime_state.active_task_hash
-
-
-def test_agent_loop_rejects_hidden_task_boundary_calls_from_main_model(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
-    provider = FakeProvider(
-        [
-            ChatResponse(
-                provider="fake",
-                model="fake-model",
-                content="",
-                tool_calls=[
-                    ToolCall(
-                        id="call_boundary",
-                        name="task_boundary",
-                        arguments={"decision": "new", "basis_message_id": "msg_not_in_context"},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ChatResponse(provider="fake", model="fake-model", content="ok"),
-        ]
-    )
-
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("新任务")
-
-    view = store.rebuild_session_view("sess_test")
-    tool_result = next(message for message in view.messages if message.role == "tool").parts[0]
-    event_types = [event.type for event in store.list_events("sess_test")]
-    replayed = replay_runtime_state(store, "sess_test")
-    assert tool_result.metadata["ok"] is False
-    assert "内部控制面工具" in tool_result.content
-    assert event_types.count("task_boundary_observed") == 1
-    assert session.runtime_state.active_task_hash is not None
-    assert replayed.active_task_hash == session.runtime_state.active_task_hash
-
-
 def test_agent_loop_passes_current_turn_into_context_manager(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
@@ -1701,31 +1512,6 @@ def test_agent_loop_resume_keeps_turn_counter_and_metadata(tmp_path) -> None:
     assert view.messages[1].parts[0].metadata["created_turn"] == 1
     assert view.messages[2].parts[0].metadata["created_turn"] == 2
     assert view.messages[3].parts[0].metadata["created_turn"] == 2
-
-
-def test_task_boundary_tool_result_append_preserves_stable_window_metadata(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
-    basis_message_id = session.append_user_message("新任务")
-    tool = create_task_boundary_tool(session.runtime_state, required_stable_count=3)
-    tool_call = ToolCall(
-        id="call_boundary",
-        name="task_boundary",
-        arguments={"decision": "new", "basis_message_id": basis_message_id},
-    )
-
-    result = tool.executor(decision="new", basis_message_id=basis_message_id)
-    session.append_tool_result(tool_call=tool_call, result=result)
-
-    event = next(event for event in store.list_events("sess_test") if event.type == "task_boundary_observed")
-    assert result.data["required_stable_count"] == 3
-    assert result.data["event_version"]
-    assert result.data["strategy_version"]
-    assert result.data["created_at"]
-    assert event.payload["required_stable_count"] == 3
-    assert event.payload["event_version"] == result.data["event_version"]
-    assert event.payload["strategy_version"] == result.data["strategy_version"]
-    assert event.payload["created_at"] == result.data["created_at"]
 
 
 def test_task_plan_tool_writes_one_native_state_event_without_session_inference(tmp_path) -> None:
@@ -1934,114 +1720,6 @@ def test_agent_loop_passes_tool_choice_none_for_final_only_completion(tmp_path) 
 
     assert response.content == "final"
     assert provider.requests[0].tool_choice == "none"
-
-
-def test_agent_loop_skips_classification_for_initial_task(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(store=store, session_id="sess_forced_boundary", agents_md="")
-    provider = JsonBoundaryProvider(["ok"])
-
-    response = AgentLoop(session=session, provider=provider)._run_user_turn_sync("读取 README")
-
-    assert response.content == "ok"
-    assert len(provider.requests) == 1
-    assert provider.requests[0].tool_choice == "auto"
-    observations = [event for event in store.list_events("sess_forced_boundary") if event.type == "task_boundary_observed"]
-    assert len(observations) == 1
-    assert observations[0].payload["confirmation_reason"] == "implicit_initial_task"
-
-
-def test_task_boundary_classification_prompt_defines_same_and_uncertain() -> None:
-    prompt = CLASSIFICATION_PROMPT
-
-    assert "continuation or follow-up of the active task" in prompt
-    assert 'Use "uncertain" only when the conversation does not provide enough information' in prompt
-
-
-def test_agent_loop_retries_invalid_boundary_json_then_records_valid_observation(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(store=store, session_id="sess_unforced_boundary", agents_md="")
-    provider = JsonBoundaryProvider(["初始化完成", "not json", "<boundary>", "ok"])
-
-    loop = AgentLoop(session=session, provider=provider)
-    loop._run_user_turn_sync("初始化任务")
-    loop._run_user_turn_sync("读取 README")
-
-    user_message_id = store.rebuild_session_view("sess_unforced_boundary").messages[2].id
-    assert len(provider.requests) == 4
-    assert provider.requests[1].tools == []
-    assert provider.requests[1].max_tokens == 512
-    assert provider.requests[2].tools == []
-    assert any("previous classification was invalid" in message.content for message in provider.requests[2].messages)
-    assert any(user_message_id in message.content for message in provider.requests[2].messages)
-
-
-def test_hidden_boundary_classification_counts_toward_provider_call_limit(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(store=store, session_id="sess_boundary_budget", agents_md="")
-    provider = JsonBoundaryProvider(["初始化完成", "<same>"])
-    loop = AgentLoop(
-        session=session,
-        provider=provider,
-        limits=AgentLoopLimits(max_tool_rounds=5, max_provider_calls=1, max_turn_seconds=None),
-    )
-    loop._run_user_turn_sync("初始化任务")
-
-    response = loop._run_user_turn_sync("继续")
-
-    assert response.finish_reason == "provider_call_limit"
-    assert len(provider.requests) == 2
-
-
-def test_boundary_retry_cannot_exceed_provider_call_limit_before_main_request(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(store=store, session_id="sess_boundary_retry_budget", agents_md="")
-    provider = JsonBoundaryProvider(["初始化完成", "not json"])
-    loop = AgentLoop(
-        session=session,
-        provider=provider,
-        limits=AgentLoopLimits(max_tool_rounds=5, max_provider_calls=1, max_turn_seconds=None),
-    )
-    loop._run_user_turn_sync("初始化任务")
-
-    response = loop._run_user_turn_sync("继续")
-
-    assert response.finish_reason == "provider_call_limit"
-    assert len(provider.requests) == 2
-
-
-def test_agent_loop_falls_back_to_uncertain_after_invalid_boundary_json(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(store=store, session_id="sess_boundary_fallback", agents_md="")
-    provider = JsonBoundaryProvider(["初始化完成", "not json", "still not json", "invalid again", "ok"])
-
-    loop = AgentLoop(session=session, provider=provider)
-    loop._run_user_turn_sync("初始化任务")
-    loop._run_user_turn_sync("读取 README")
-
-    observations = [event for event in store.list_events("sess_boundary_fallback") if event.type == "task_boundary_observed"]
-    assert observations[-1].payload["decision"] == "uncertain"
-    assert len(provider.requests) == 5
-
-
-def test_agent_loop_streaming_classifies_boundary_without_emitting_stream_events(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(store=store, session_id="sess_stream_forced_boundary", agents_md="")
-    provider = StreamingProviderWithClassification(
-        classification_responses=["<boundary>"],
-        stream_responses=[
-            ChatResponse(provider="fake-stream", model="fake-stream-model", content="初始"),
-            ChatResponse(provider="fake-stream", model="fake-stream-model", content="ok"),
-        ],
-    )
-
-    loop = AgentLoop(session=session, provider=provider)
-    _run_streaming(loop, "初始化任务")
-    response = _run_streaming(loop, "读取 README")
-
-    assert response.content == "ok"
-    assert provider.complete_requests[0].tools == []
-    assert provider.stream_requests[1].tool_choice == "auto"
 
 
 def test_agent_loop_runs_task_plan_reconciliation_before_final_answer(tmp_path) -> None:
@@ -3001,29 +2679,14 @@ def test_agent_loop_stops_when_turn_timeout_is_reached(tmp_path) -> None:
     assert "本轮任务耗时达到上限" in response.content
 
 
-def test_agent_session_resume_replays_runtime_state_and_known_message_ids(tmp_path) -> None:
+def test_agent_session_resume_replays_known_message_ids(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     original = AgentSession.create(store=store, session_id="sess_test", agents_md="rules")
     message_id = original.append_user_message("历史消息")
-    tool_call = ToolCall(
-        id="call_boundary",
-        name="task_boundary",
-        arguments={"decision": "new", "basis_message_id": message_id},
-    )
-    first = original.execute_tool_call(tool_call)
-    original.append_tool_result(tool_call=tool_call, result=first)
-    second = original.execute_tool_call(tool_call)
-    original.append_tool_result(tool_call=tool_call, result=second)
 
     resumed = AgentSession.resume(store=store, session_id="sess_test", agents_md="rules")
-    result = resumed.tool_registry.execute(
-        "task_boundary",
-        {"decision": "same", "basis_message_id": message_id},
-    )
 
-    assert resumed.runtime_state.active_task_hash == original.runtime_state.active_task_hash
     assert message_id in resumed.known_message_ids
-    assert result.ok is True
 
 
 def test_agent_loop_runs_auto_once_before_each_main_provider_request(tmp_path) -> None:

@@ -112,7 +112,6 @@ class ToolExecutor:
         emit_event: Callable[..., None],
         check_cancelled: Callable[[], None],
         cancellation_token: CancellationToken | None,
-        tag_task_boundary_messages: Callable[[dict[str, object]], None],
         emit_settlements: Callable[[str, object], None],
         validate_tool_call: Callable[[ToolCall], ToolResult | None] | None = None,
         observe_tool_result: Callable[[ToolCall, ToolResult], None] | None = None,
@@ -124,7 +123,6 @@ class ToolExecutor:
         self._emit_event = emit_event
         self._check_cancelled = check_cancelled
         self.cancellation_token = cancellation_token
-        self._tag_task_boundary_messages = tag_task_boundary_messages
         self._emit_settlements = emit_settlements
         self._validate_tool_call = validate_tool_call
         self._observe_tool_result = observe_tool_result
@@ -153,7 +151,7 @@ class ToolExecutor:
             validation_error = self._validate_tool_call(tool_call) if self._validate_tool_call is not None else None
             if validation_error is not None:
                 self._emit_event("denied", tool_call, result=validation_error)
-                self._record_result(tool_call, validation_error, state=state)
+                self._record_result(tool_call, validation_error)
                 index += 1
                 continue
             if tool_call.name in HIDDEN_TOOL_STATUS_NAMES:
@@ -162,7 +160,7 @@ class ToolExecutor:
                     f"内部控制面工具不可由主模型调用：{tool_call.name}",
                 )
                 self._emit_event("denied", tool_call, result=result)
-                self._record_result(tool_call, result, state=state)
+                self._record_result(tool_call, result)
                 index += 1
                 continue
             permission = self._prepare_permission(tool_call, tool_calls[index + 1 :])
@@ -173,7 +171,7 @@ class ToolExecutor:
                     result=permission.result,
                     permission_request=permission.permission_request,
                 )
-                self._record_result(tool_call, permission.result, state=state)
+                self._record_result(tool_call, permission.result)
                 index += 1
                 continue
             if permission.pending_input is not None:
@@ -194,7 +192,7 @@ class ToolExecutor:
                     label=label,
                     task_id=task_id,
                 )
-                self._record_result(tool_call, result, state=state)
+                self._record_result(tool_call, result)
                 index += 1
                 continue
 
@@ -202,7 +200,7 @@ class ToolExecutor:
                 batch_end = self.parallel_readonly_batch_end(tool_calls, index)
                 results = self.execute_parallel_readonly_batch(tool_calls[index:batch_end])
                 for batch_tool_call, result in zip(tool_calls[index:batch_end], results, strict=True):
-                    self._record_result(batch_tool_call, result, state=state)
+                    self._record_result(batch_tool_call, result)
                 index = batch_end
                 continue
 
@@ -210,7 +208,6 @@ class ToolExecutor:
             pending_input = self._record_result(
                 tool_call,
                 result,
-                state=state,
                 deferred_tool_calls=tool_calls[index + 1 :],
             )
             if pending_input is not None:
@@ -447,7 +444,6 @@ class ToolExecutor:
         tool_call: ToolCall,
         result: ToolResult,
         *,
-        state: ToolExecutionState,
         deferred_tool_calls: list[ToolCall] | None = None,
     ) -> UserInputRequest | None:
         """记录一个已执行工具的结果。
@@ -472,8 +468,6 @@ class ToolExecutor:
         self.session.append_tool_result(tool_call=tool_call, result=result)
         if self._observe_tool_result is not None:
             self._observe_tool_result(tool_call, result)
-        if tool_call.name == "task_boundary" and result.ok and result.data.get("should_trigger_compaction"):
-            self._tag_task_boundary_messages(result.data)
         return None
 
     def parallel_readonly_batch_end(self, tool_calls: list[ToolCall], start: int) -> int:

@@ -202,31 +202,6 @@ def test_resume_service_rediscovers_current_project_skill_catalog(tmp_path: Path
     assert [skill.path for skill in result.session.skill_catalog.skills] == [".lanscoder/skills/brief/SKILL.md"]
 
 
-def test_resume_service_replays_runtime_state_and_known_message_ids(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    original = AgentSession.create(store=store, session_id="sess_test", agents_md="")
-    message_id = original.append_user_message("新任务")
-    tool_call = ToolCall(
-        id="call_boundary",
-        name="task_boundary",
-        arguments={"decision": "new", "basis_message_id": message_id},
-    )
-    first = original.execute_tool_call(tool_call)
-    original.append_tool_result(tool_call=tool_call, result=first)
-    second = original.execute_tool_call(tool_call)
-    original.append_tool_result(tool_call=tool_call, result=second)
-
-    result = ResumeService(store=store, project_root=tmp_path).resume("sess_test")
-    boundary_result = result.session.tool_registry.execute(
-        "task_boundary",
-        {"decision": "same", "basis_message_id": message_id},
-    )
-
-    assert result.session.runtime_state.active_task_hash == original.runtime_state.active_task_hash
-    assert message_id in result.session.known_message_ids
-    assert boundary_result.ok is True
-
-
 def test_resume_service_keeps_permission_wrapper_for_project_tools(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     original = AgentSession.from_project(

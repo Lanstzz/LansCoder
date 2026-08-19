@@ -514,26 +514,6 @@ def test_factory_background_controls_remain_session_scoped(tmp_path: Path) -> No
         manager.shutdown()
 
 
-def test_create_lanscoder_app_hides_task_boundary_from_main_model(tmp_path: Path) -> None:
-    provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
-    app = create_lanscoder_app(
-        project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
-        provider=provider,
-        session_id="sess_test",
-    )
-
-    app.chat_runner.run_user_turn("你好")
-
-    tool_names = [tool.name for tool in provider.requests[0].tools]
-    assert "task_boundary" in app.chat_runner.current_session.session.tool_registry.names()
-    assert "task_boundary" not in tool_names
-    assert "fetch" in tool_names
-    assert "web_search" in tool_names
-    assert "Task boundaries are internal runtime state, not an agent tool" in provider.requests[0].messages[0].content
-    assert "task_boundary" not in provider.requests[0].messages[0].content
-
-
 def test_create_lanscoder_app_wires_l4_service_for_default_context_manager(tmp_path: Path) -> None:
     app = create_lanscoder_app(
         project_root=tmp_path,
