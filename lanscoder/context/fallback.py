@@ -1,11 +1,15 @@
-"""LLM compact 失败后的有限兜底策略。"""
+"""LLM compact 失败后的有限兜底策略。
+
+`hard_truncate` 是确定性兜底：L3 与所有 fallback 都失败后，保留最近 N 轮、
+把更早的对话替换为占位摘要，保证失败时也提交一个可恢复的 checkpoint。
+"""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-FallbackAction = Literal["stronger_programmatic", "retry_l3_stronger_summary", "fail"]
+FallbackAction = Literal["stronger_programmatic", "retry_l3_stronger_summary", "hard_truncate"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,4 +37,4 @@ class CompactFallbackPolicy:
             return "stronger_programmatic"
         if reason in {"timeout", "no_summary"}:
             return "retry_l3_stronger_summary"
-        return "fail"
+        return "hard_truncate"

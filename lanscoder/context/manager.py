@@ -14,6 +14,7 @@ from lanscoder.context.fallback import CompactFallbackPolicy, FallbackStep
 from lanscoder.context.identity import session_view_fingerprint
 from lanscoder.context.llm_compact import LlmCompactCandidate, LlmCompactEvent, LlmCompactRequest
 from lanscoder.context.models import AgentMessage, SessionView
+from lanscoder.context.provider_summarizer import select_compaction_boundary
 from lanscoder.context.runtime_state import SessionRuntimeState, auto_compact_circuit_is_open
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.token_budget import ContextBudget
@@ -303,6 +304,90 @@ class ContextWindowManager:
             input_tokens=rebuilt_budget.input_tokens,
         )
 
+    def _hard_truncate(
+        self,
+        *,
+        request: ContextCompactRequest,
+        view: SessionView,
+        target_tokens: int,
+        before_tokens: int,
+        before_failure_count: int,
+        trigger: ContextWindowTrigger,
+        mode: ContextCompactMode,
+    ) -> ContextCompactResult | None:
+        """L3 与 fallback 全失败后的确定性兜底：近 N 轮保留，其余替换为占位摘要。
+
+        Returns None when there is nothing outside the recent window (nothing to drop),
+        so the caller falls through to the existing failure path.
+        """
+
+        messages = [message for message in view.messages if message.role != "system_meta"]
+        boundary = select_compaction_boundary(
+            messages,
+            current_turn=request.current_turn,
+            recent_turn_window=self.config.recent_turn_window,
+        )
+        if boundary is None:
+            return None
+        covered_until_message_id, tail_start_message_id = boundary
+
+        checkpoint = Checkpoint(
+            id="",
+            session_id=view.session_id,
+            summary="[Earlier dialogue truncated — recent N turns kept]",
+            tail_start_message_id=tail_start_message_id,
+            covered_until_message_id=covered_until_message_id,
+            source_fingerprint=session_view_fingerprint(view),
+            sequence=max((existing.sequence for existing in view.checkpoints), default=0) + 1,
+            metadata={
+                "created_by": "hard_truncate",
+                "recent_turn_window": self.config.recent_turn_window,
+            },
+        )
+        candidate = LlmCompactCandidate(
+            checkpoint=checkpoint,
+            event=LlmCompactEvent(
+                status="success",
+                source_fingerprint=checkpoint.source_fingerprint,
+                checkpoint_id=checkpoint.id,
+            ),
+        )
+        truncated_view = _view_with_checkpoint(view, checkpoint)
+        after_tokens = request.estimate_budget(truncated_view).input_tokens
+        if after_tokens >= target_tokens:
+            return None
+        self.l3_service.commit_candidate(candidate, runtime_state=request.runtime_state)
+        rebuilt_view = self.store.rebuild_session_view(request.view.session_id)
+        hard_truncate_event = replace(
+            candidate.event,
+            fallback_steps=[
+                FallbackStep(
+                    step=1,
+                    reason="hard_truncate",
+                    action="hard_truncate",
+                    before_tokens=before_tokens,
+                    after_tokens=after_tokens,
+                    status="success",
+                ).to_dict()
+            ],
+        )
+        self._record_l3_event(
+            session_id=request.view.session_id,
+            trigger=trigger,
+            target_tokens=target_tokens,
+            event=hard_truncate_event,
+        )
+        self._record_auto_success_if_needed(request=request, mode=mode)
+        return ContextCompactResult(
+            status="success",
+            reason="hard_truncate",
+            view=rebuilt_view,
+            before_tokens=before_tokens,
+            after_tokens=after_tokens,
+            programmatic_event=None,
+            l3_event=hard_truncate_event,
+        )
+
     def _run_fallback(
         self,
         *,
@@ -404,31 +489,38 @@ class ContextWindowManager:
             )
             final_reason = None if retry.event.status == "success" else retry.event.failure_reason
             event = _with_fallback(retry.event, fallback_steps=steps, final_failure_reason=final_reason)
-            self._record_l3_event(
-                session_id=request.view.session_id,
-                trigger=trigger,
-                target_tokens=target_tokens,
-                event=event,
-            )
             if retry.event.status == "success":
-                self._record_auto_success_if_needed(request=request, mode=mode)
-            else:
-                self._record_auto_failure_if_needed(
-                    request=request,
-                    mode=mode,
-                    before_failure_count=before_failure_count,
-                    failure_reason=final_reason or "failed",
+                self._record_l3_event(
+                    session_id=request.view.session_id,
+                    trigger=trigger,
+                    target_tokens=target_tokens,
+                    event=event,
                 )
-            return ContextCompactResult(
-                status="success" if retry.event.status == "success" else "failed",
-                reason=_result_reason(trigger=trigger, auto_reason=reason),
-                view=retry.view,
+                self._record_auto_success_if_needed(request=request, mode=mode)
+                return ContextCompactResult(
+                    status="success",
+                    reason=_result_reason(trigger=trigger, auto_reason=reason),
+                    view=retry.view,
+                    before_tokens=before_tokens,
+                    after_tokens=retry.input_tokens,
+                    programmatic_event=current_programmatic.event,
+                    l3_event=event,
+                    fallback_steps=steps,
+                    final_failure_reason=final_reason,
+                )
+            return self._final_l3_failure_or_hard_truncate(
+                request=request,
+                trigger=trigger,
+                mode=mode,
+                target_tokens=target_tokens,
+                view=current_programmatic.view,
                 before_tokens=before_tokens,
+                before_failure_count=before_failure_count,
+                programmatic=programmatic,
                 after_tokens=retry.input_tokens,
-                programmatic_event=current_programmatic.event,
-                l3_event=event,
+                event=event,
+                reason=final_reason or "failed",
                 fallback_steps=steps,
-                final_failure_reason=final_reason,
             )
 
         steps.append(
@@ -442,6 +534,50 @@ class ContextWindowManager:
                 error=reason,
             ).to_dict()
         )
+        return self._final_l3_failure_or_hard_truncate(
+            request=request,
+            trigger=trigger,
+            mode=mode,
+            target_tokens=target_tokens,
+            view=current_programmatic.view,
+            before_tokens=before_tokens,
+            before_failure_count=before_failure_count,
+            programmatic=programmatic,
+            after_tokens=outcome.input_tokens,
+            event=_with_fallback(outcome.event, fallback_steps=steps, final_failure_reason=reason),
+            reason=reason,
+            fallback_steps=steps,
+        )
+
+    def _final_l3_failure_or_hard_truncate(
+        self,
+        *,
+        request: ContextCompactRequest,
+        trigger: ContextWindowTrigger,
+        mode: ContextCompactMode,
+        target_tokens: int,
+        view: SessionView,
+        before_tokens: int,
+        before_failure_count: int,
+        programmatic: CompactionResult,
+        after_tokens: int,
+        event: LlmCompactEvent,
+        reason: str,
+        fallback_steps: list[dict[str, object]] | None = None,
+    ) -> ContextCompactResult:
+        """Try the deterministic hard truncate; if nothing is droppable, fail."""
+
+        truncated = self._hard_truncate(
+            request=request,
+            view=view,
+            target_tokens=target_tokens,
+            before_tokens=before_tokens,
+            before_failure_count=before_failure_count,
+            trigger=trigger,
+            mode=mode,
+        )
+        if truncated is not None:
+            return truncated
         return self._final_l3_failure(
             request=request,
             trigger=trigger,
@@ -449,11 +585,11 @@ class ContextWindowManager:
             target_tokens=target_tokens,
             programmatic=programmatic,
             before_tokens=before_tokens,
-            after_tokens=outcome.input_tokens,
+            after_tokens=after_tokens,
             before_failure_count=before_failure_count,
-            event=_with_fallback(outcome.event, fallback_steps=steps, final_failure_reason=reason),
+            event=event,
             reason=reason,
-            fallback_steps=steps,
+            fallback_steps=fallback_steps,
         )
 
     def _final_l3_failure(
