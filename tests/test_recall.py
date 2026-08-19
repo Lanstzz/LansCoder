@@ -370,8 +370,11 @@ class TestRecallCommandHandler:
         result = handler.handle("/recall")
 
         assert result.handled is True
-        assert "Nothing to recall" in result.output
-        assert result.action is None
+        assert result.action is not None
+        assert result.action["type"] == "recall_picker"
+        turns = result.action["turns"]
+        assert len(turns) == 1
+        assert turns[0]["message_id"] == "msg_01"
 
     def test_handler_busy_rejects_recall(self):
         recalled = []
@@ -453,7 +456,7 @@ class TestRecallCommandHandler:
         assert result.handled is True
         assert "Recalled" in result.output
         assert "msg_03" in result.output
-        assert result.action == {"type": "replay_session"}
+        assert result.action == {"type": "replay_session", "recalled_text": "turn 2"}
         assert swapped is not None
         assert swapped.session_id == sid
 
@@ -511,6 +514,93 @@ class TestRecallCommandHandler:
         user_messages = [m for m in view.messages if m.role == "user"]
         assert len(user_messages) == 1
         assert user_messages[0].id == "msg_01"
+
+    def test_recall_single_message_empties_session(self, tmp_path):
+        """Recalling the only user message truncates to an empty session."""
+        store = JsonlSessionStore(tmp_path)
+        sid = "sess_recall_single"
+        events = [
+            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_user_message_event(sid, "msg_01", "only turn", 1),
+            _make_assistant_message_event(sid, "msg_02", "only response"),
+        ]
+        _write_session_jsonl(store._session_path(sid), events)
+
+        bootstrap = SessionBootstrap(
+            store=store,
+            project_root=tmp_path,
+            data_root=tmp_path,
+        )
+        session = bootstrap.resume(sid)
+
+        swapped = None
+
+        def on_recall(new_session):
+            nonlocal swapped
+            swapped = new_session
+
+        handler = RecallCommandHandler(
+            session=session,
+            store=store,
+            bootstrap=bootstrap,
+            on_recall=on_recall,
+        )
+
+        output = handler.recall_to("msg_01")
+
+        assert "Recalled" in output
+        assert swapped is not None
+        view = swapped.rebuild_view()
+        user_messages = [m for m in view.messages if m.role == "user"]
+        assert len(user_messages) == 0
+
+
+def test_recall_to_uses_resume_service(tmp_path):
+    from lanscoder.session.catalog import SessionCatalog
+    from lanscoder.session.resume import ResumeService
+
+    store = JsonlSessionStore(tmp_path)
+    sid = "sess_recall_svc"
+    events = [
+        _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+        _make_user_message_event(sid, "msg_01", "turn 1", 1),
+        _make_assistant_message_event(sid, "msg_02", "response 1"),
+        _make_user_message_event(sid, "msg_03", "turn 2", 2),
+        _make_assistant_message_event(sid, "msg_04", "response 2"),
+    ]
+    _write_session_jsonl(store._session_path(sid), events)
+
+    bootstrap = SessionBootstrap(store=store, project_root=tmp_path, data_root=tmp_path)
+    session = bootstrap.resume(sid)
+    resume_service = ResumeService(
+        store=store,
+        project_root=tmp_path,
+        data_root=tmp_path,
+        catalog=SessionCatalog(tmp_path),
+    )
+
+    swapped_session = None
+
+    def on_recall(new_session):
+        nonlocal swapped_session
+        swapped_session = new_session
+
+    handler = RecallCommandHandler(
+        session=session,
+        store=store,
+        bootstrap=bootstrap,
+        on_recall=on_recall,
+        resume_service=resume_service,
+    )
+
+    output = handler.recall_to("msg_03")
+
+    assert "Recalled" in output
+    assert swapped_session is not None
+    view = swapped_session.rebuild_view()
+    user_messages = [m for m in view.messages if m.role == "user"]
+    assert len(user_messages) == 1
+    assert user_messages[0].id == "msg_01"
 
 
 # ---------------------------------------------------------------------------

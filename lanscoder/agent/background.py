@@ -159,14 +159,17 @@ class BackgroundJob:
     label: str | None = None
     task_id: str | None = None
     observed_revision: int | None = None
+    dispatch_turn: int | None = None
     status: str = STATUS_RUNNING
     result: ToolResult | None = None
     error: str | None = None
     cancel_requested: bool = False
+    abandoned: bool = False
     created_at: float = 0.0
     token: CancellationToken = field(default_factory=CancellationToken)
     on_completed: Callable[["BackgroundJob"], str | None] | None = field(default=None, repr=False)
     task_plan_completion: str | None = None
+    worktree_cleanup: Callable[[], None] | None = field(default=None, repr=False)
     # Cross-thread progress tracking for the TUI activity panel.
     # Written by the subagent thread, read by the TUI timer (protected by
     # BackgroundJobManager._lock).
@@ -235,6 +238,7 @@ class BackgroundJobManager:
         label: str | None = None,
         task_id: str | None = None,
         observed_revision: int | None = None,
+        dispatch_turn: int | None = None,
         on_completed: Callable[[BackgroundJob], str | None] | None = None,
     ) -> BackgroundJob:
         """登记并调度一个后台任务。
@@ -257,6 +261,7 @@ class BackgroundJobManager:
                 label=label,
                 task_id=task_id,
                 observed_revision=observed_revision,
+                dispatch_turn=dispatch_turn,
                 created_at=self._clock(),
                 on_completed=on_completed,
             )
@@ -276,28 +281,49 @@ class BackgroundJobManager:
         self._finish(job, result=result, error=None)
 
     def _finish(self, job: BackgroundJob, *, result: ToolResult | None, error: str | None) -> None:
+        abandoned_cleanup: Callable[[], None] | None = None
         with self._lock:
             if job.status == STATUS_CANCELLED:
                 # 已被显式取消：保留取消状态，但仍记录迟到结果，避免悬空。
                 job.result = result
                 self._futures.pop(job.id, None)
                 return
-            job.result = result
-            job.error = error
-            if job.cancel_requested:
-                job.status = STATUS_CANCELLED
-            elif error is not None:
-                job.status = STATUS_FAILED
-            elif result is not None and not result.ok:
-                job.status = STATUS_FAILED
+            if job.abandoned:
+                # 该 job 在 recall 后已被丢弃：结果不再投递、也不再触发完成回调，
+                # 但若它已创建隔离 worktree，则清理之，避免留下孤儿。
+                self._futures.pop(job.id, None)
+                abandoned_cleanup = job.worktree_cleanup
             else:
-                job.status = STATUS_COMPLETED
-            self._futures.pop(job.id, None)
-            self._completed.append(job)
+                job.result = result
+                job.error = error
+                if job.cancel_requested:
+                    job.status = STATUS_CANCELLED
+                elif error is not None:
+                    job.status = STATUS_FAILED
+                elif result is not None and not result.ok:
+                    job.status = STATUS_FAILED
+                else:
+                    job.status = STATUS_COMPLETED
+                self._futures.pop(job.id, None)
+                self._completed.append(job)
+
+        if abandoned_cleanup is not None:
+            self._invoke_worktree_cleanup(abandoned_cleanup)
+            return
+
         # Fire the callback outside the lock to avoid deadlocks.
         cb = self._on_job_completed
         if cb is not None:
             cb(job)
+
+    @staticmethod
+    def _invoke_worktree_cleanup(cleanup: Callable[[], None]) -> None:
+        """Best-effort worktree teardown; failures must never break the loop."""
+
+        try:
+            cleanup()
+        except Exception:  # noqa: BLE001 - orphan cleanup is opportunistic.
+            pass
 
     def _notification_for(self, job: BackgroundJob) -> BackgroundNotification:
         summary = _summarize(job)
@@ -403,6 +429,48 @@ class BackgroundJobManager:
                 job.cancel_requested = True
                 job.token.cancel()
             return job
+
+    def abandon_since(self, session_id: str, *, min_dispatch_turn: int) -> int:
+        """丢弃某个 session 在给定 turn 及之后派发的后台任务。
+
+        /recall 回退后，被截掉的那几轮里派发的 job 已失去上下文（其占位 tool_result
+        已随截断消失），继续投递完成通知会变成"幽灵通知"。这里把未投递的完成项从
+        队列移除，并取消仍在运行的 job，使其结果既不入队、也不触发完成回调。
+
+        Returns:
+            被丢弃的 job 数量。
+        """
+
+        cleanups: list[Callable[[], None]] = []
+        with self._lock:
+            remaining: deque[BackgroundJob] = deque()
+            abandoned = 0
+            for job in self._completed:
+                if job.session_id == session_id and job.dispatch_turn is not None and job.dispatch_turn >= min_dispatch_turn:
+                    abandoned += 1
+                    if job.worktree_cleanup is not None:
+                        cleanups.append(job.worktree_cleanup)
+                else:
+                    remaining.append(job)
+            self._completed = remaining
+
+            for job in list(self._jobs.values()):
+                if job.session_id != session_id or job.status != STATUS_RUNNING:
+                    continue
+                if job.dispatch_turn is None or job.dispatch_turn < min_dispatch_turn:
+                    continue
+                job.abandoned = True
+                job.cancel_requested = True
+                job.token.cancel()
+                future = self._futures.get(job.id)
+                if future is not None and future.cancel():
+                    job.status = STATUS_CANCELLED
+                    self._futures.pop(job.id, None)
+                abandoned += 1
+
+        for cleanup in cleanups:
+            self._invoke_worktree_cleanup(cleanup)
+        return abandoned
 
     def wait(self, timeout: float | None = None) -> bool:
         """阻塞直到当前已知的 future 全部结束。主要给测试用。

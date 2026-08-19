@@ -302,6 +302,98 @@ def test_manager_cancel_before_start_marks_cancelled() -> None:
         manager.shutdown()
 
 
+def test_manager_abandon_since_drops_completed_jobs() -> None:
+    manager = BackgroundJobManager()
+    try:
+        manager.start(lambda: make_text_result("shell", "old"), session_id="sess", tool_name="shell", dispatch_turn=1)
+        manager.start(lambda: make_text_result("shell", "new"), session_id="sess", tool_name="shell", dispatch_turn=2)
+        manager.start(lambda: make_text_result("shell", "other"), session_id="other_sess", tool_name="shell", dispatch_turn=2)
+        assert manager.wait(timeout=5) is True
+
+        dropped = manager.abandon_since("sess", min_dispatch_turn=2)
+        assert dropped == 1  # only the sess/turn-2 completion is dropped
+
+        notes = manager.collect_completed(session_id="sess")
+        assert [note.job_id for note in notes] == ["bg_0001"]
+        assert notes[0].summary == "old"
+        # The other session's completion is untouched.
+        assert len(manager.collect_completed(session_id="other_sess")) == 1
+    finally:
+        manager.shutdown()
+
+
+def test_manager_abandon_since_cancels_running_job() -> None:
+    manager = BackgroundJobManager(max_jobs=4, max_workers=1)
+    gate = threading.Event()
+    started = threading.Event()
+    try:
+        manager.start(
+            lambda: (started.set(), gate.wait(5), make_text_result("shell", "orphaned"))[2],
+            session_id="sess",
+            tool_name="shell",
+            dispatch_turn=2,
+        )
+        assert started.wait(timeout=5) is True
+        dropped = manager.abandon_since("sess", min_dispatch_turn=2)
+        assert dropped == 1
+        gate.set()
+        manager.wait(timeout=5)
+        # An abandoned running job must not be delivered as a completion.
+        assert manager.collect_completed() == []
+    finally:
+        gate.set()
+        manager.wait(timeout=5)
+        manager.shutdown()
+
+
+def test_manager_abandon_since_cleans_worktree_for_completed_job() -> None:
+    manager = BackgroundJobManager()
+    cleaned = []
+    try:
+        job = manager.start(
+            lambda: make_text_result("shell", "done"),
+            session_id="sess",
+            tool_name="shell",
+            dispatch_turn=2,
+        )
+        assert manager.wait(timeout=5) is True
+        job.worktree_cleanup = lambda: cleaned.append("wt")
+
+        dropped = manager.abandon_since("sess", min_dispatch_turn=2)
+        assert dropped == 1
+        assert cleaned == ["wt"]
+        assert manager.collect_completed() == []
+    finally:
+        manager.shutdown()
+
+
+def test_manager_abandon_since_cleans_worktree_for_running_job() -> None:
+    manager = BackgroundJobManager(max_jobs=4, max_workers=1)
+    gate = threading.Event()
+    started = threading.Event()
+    cleaned = []
+    try:
+        job = manager.start(
+            lambda: (started.set(), gate.wait(5), make_text_result("shell", "orphaned"))[2],
+            session_id="sess",
+            tool_name="shell",
+            dispatch_turn=2,
+        )
+        assert started.wait(timeout=5) is True
+        job.worktree_cleanup = lambda: cleaned.append("wt")
+
+        dropped = manager.abandon_since("sess", min_dispatch_turn=2)
+        assert dropped == 1
+        gate.set()
+        manager.wait(timeout=5)
+        assert cleaned == ["wt"]  # cleanup runs once the abandoned job finishes
+        assert manager.collect_completed() == []
+    finally:
+        gate.set()
+        manager.wait(timeout=5)
+        manager.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # ToolExecutor dispatch via AgentLoop
 # ---------------------------------------------------------------------------

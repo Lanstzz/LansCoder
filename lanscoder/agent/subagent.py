@@ -287,6 +287,7 @@ class SubagentRunner:
                 summary=f"创建隔离 worktree 失败：{exc}",
                 error="worktree_create_failed",
             )
+        self._attach_worktree_cleanup(manager, worktree)
 
         try:
             child_session = self._create_isolated_child_session(request, profile=profile, worktree=worktree, session_id=session_id)
@@ -467,6 +468,23 @@ class SubagentRunner:
                 job.progress = state
 
         return _report
+
+    def _attach_worktree_cleanup(self, manager: WorktreeManager, worktree: Worktree) -> None:
+        """Attach worktree teardown to the current background job.
+
+        A background coder runs inside an isolated worktree that is normally left
+        for parent review. If a /recall abandons the job, the worktree would
+        otherwise linger as an orphan; the attached cleanup removes it.
+        """
+
+        if self.background_manager is None:
+            return
+        job_id = current_job_id()
+        if job_id is None:
+            return
+        job = self.background_manager.get(job_id)
+        if job is not None:
+            job.worktree_cleanup = lambda: manager.remove(worktree, force=True)
 
     def _child_permission_manager_for_inline(self) -> PermissionManager | None:
         """Clone the parent permission manager with a NETWORK_REQUEST grant added.
