@@ -40,6 +40,7 @@ from lanscoder.context.llm_compact import LlmCompactService
 from lanscoder.context.manager import ContextWindowManager
 from lanscoder.context.provider_summarizer import ProviderLlmCompactSummarizer
 from lanscoder.context.store import JsonlSessionStore
+from lanscoder.context.triggers import ContextCompactionConfig
 from lanscoder.mcp.adapter import adapt_mcp_tool
 from lanscoder.mcp.config import load_mcp_configs
 from lanscoder.mcp.manager import McpManager
@@ -57,7 +58,6 @@ from lanscoder.session.fork import ForkSessionService
 from lanscoder.session.new import NewSessionService
 from lanscoder.session.resume import ResumeService
 from lanscoder.session.share import SessionShareService
-from lanscoder.skills.discovery import discover_all_skills
 from lanscoder.tools.builtin import create_builtin_registry
 from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.tools.types import Tool
@@ -156,6 +156,7 @@ def create_lanscoder_app(
     app_config: AppConfig | None = None,
     mcp_manager_factory: Callable[[tuple], McpManagerLike] | None = None,
     model_spec: str | None = None,
+    compact_config: ContextCompactionConfig | None = None,
 ) -> LansCoderApp:
     """组装可运行的 LansCoder TUI。
 
@@ -249,6 +250,7 @@ def create_lanscoder_app(
     compact_summarizer = ProviderLlmCompactSummarizer(resolved_provider)
     context_manager = ContextWindowManager(  # 上下文压缩管理 → lanscoder/context/manager.py
         store=store,
+        config=compact_config,
         l4_service=LlmCompactService(
             store=store,
             summarizer=compact_summarizer,
@@ -256,6 +258,7 @@ def create_lanscoder_app(
     )
     catalog = SessionCatalog(resolved_data_root)
     from lanscoder.session.index import SessionIndex
+
     SessionIndex(resolved_data_root).prune_empty(exclude={session.session_id})
     resume_service = ResumeService(
         store=store,

@@ -67,7 +67,14 @@ class LlmCompactSummarizer(Protocol):
     Anthropic 等外部消息格式提前泄漏进 checkpoint 写入逻辑。
     """
 
-    def summarize(self, messages: list[AgentMessage], *, summary_mode: str = "default") -> LlmCompactSummary: ...
+    def summarize(
+        self,
+        messages: list[AgentMessage],
+        *,
+        summary_mode: str = "default",
+        current_turn: int = 0,
+        recent_turn_window: int = 10,
+    ) -> LlmCompactSummary: ...
 
 
 @dataclass(slots=True)
@@ -78,6 +85,8 @@ class LlmCompactRequest:
     mode: CompactMode = "auto"
     expected_source_fingerprint: str | None = None
     summary_mode: str = "default"
+    current_turn: int = 0
+    recent_turn_window: int = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +151,8 @@ class LlmCompactService:
                     self.summarizer,
                     source_messages,
                     summary_mode=request.summary_mode,
+                    current_turn=request.current_turn,
+                    recent_turn_window=request.recent_turn_window,
                 )
                 _validate_summary_boundary(
                     summary,
@@ -389,8 +400,15 @@ def _summarize(
     messages: list[AgentMessage],
     *,
     summary_mode: str,
+    current_turn: int,
+    recent_turn_window: int,
 ) -> LlmCompactSummary:
-    summary = summarizer.summarize(messages, summary_mode=summary_mode)
+    summary = summarizer.summarize(
+        messages,
+        summary_mode=summary_mode,
+        current_turn=current_turn,
+        recent_turn_window=recent_turn_window,
+    )
     return LlmCompactSummary(
         summary=normalize_coding_handoff(summary.summary),
         tail_start_message_id=summary.tail_start_message_id,

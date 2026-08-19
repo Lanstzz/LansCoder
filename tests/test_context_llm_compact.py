@@ -18,10 +18,21 @@ class FakeSummarizer:
         self.responses = responses
         self.calls: list[list[str]] = []
         self.summary_modes: list[str] = []
+        self.current_turns: list[int] = []
+        self.recent_turn_windows: list[int] = []
 
-    def summarize(self, messages: list[AgentMessage], *, summary_mode: str = "default") -> LlmCompactSummary:
+    def summarize(
+        self,
+        messages: list[AgentMessage],
+        *,
+        summary_mode: str = "default",
+        current_turn: int = 0,
+        recent_turn_window: int = 10,
+    ) -> LlmCompactSummary:
         self.calls.append([message.id for message in messages])
         self.summary_modes.append(summary_mode)
+        self.current_turns.append(current_turn)
+        self.recent_turn_windows.append(recent_turn_window)
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
@@ -552,6 +563,33 @@ def test_l4_passes_summary_mode_to_summarizer(tmp_path: Path) -> None:
     )
 
     assert summarizer.summary_modes == ["stronger"]
+
+
+def test_l4_passes_current_turn_and_recent_turn_window_to_summarizer(tmp_path: Path) -> None:
+    summarizer = FakeSummarizer(
+        [
+            LlmCompactSummary(
+                summary="摘要",
+                tail_start_message_id="msg_2",
+                covered_until_message_id="msg_1",
+            )
+        ]
+    )
+
+    LlmCompactService(store=JsonlSessionStore(tmp_path), summarizer=summarizer).generate_candidate(
+        _request(
+            view=SessionView(
+                session_id="sess_test",
+                messages=[_message("msg_1", "旧历史"), _message("msg_2", "tail")],
+            ),
+            runtime_state=SessionRuntimeState(session_id="sess_test"),
+            current_turn=7,
+            recent_turn_window=3,
+        )
+    )
+
+    assert summarizer.current_turns == [7]
+    assert summarizer.recent_turn_windows == [3]
 
 
 def test_l4_candidate_failures_do_not_mutate_circuit_breaker(tmp_path: Path) -> None:

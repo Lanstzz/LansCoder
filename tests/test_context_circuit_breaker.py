@@ -5,7 +5,7 @@ from lanscoder.context.store import JsonlSessionStore
 
 
 class ShouldNotBeCalled:
-    def summarize(self, messages, *, summary_mode: str = "default"):
+    def summarize(self, messages, *, summary_mode: str = "default", current_turn: int = 0, recent_turn_window: int = 10):
         raise AssertionError("summarizer should not be called while auto compact is disabled")
 
 
@@ -36,7 +36,7 @@ class FakeSummarizer:
     def __init__(self) -> None:
         self.called = False
 
-    def summarize(self, messages, *, summary_mode: str = "default"):
+    def summarize(self, messages, *, summary_mode: str = "default", current_turn: int = 0, recent_turn_window: int = 10):
         self.called = True
         return LlmCompactSummary(
             summary="过期熔断后的摘要",

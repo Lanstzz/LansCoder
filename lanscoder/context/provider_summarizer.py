@@ -32,8 +32,15 @@ class ProviderLlmCompactSummarizer(LlmCompactSummarizer):
         self.provider = provider
         self.max_tokens = max_tokens
 
-    def summarize(self, messages: list[AgentMessage], *, summary_mode: str = "default") -> LlmCompactSummary:
-        tail = _tail_boundary(messages)
+    def summarize(
+        self,
+        messages: list[AgentMessage],
+        *,
+        summary_mode: str = "default",
+        current_turn: int = 0,
+        recent_turn_window: int = 10,
+    ) -> LlmCompactSummary:
+        tail = _tail_boundary(messages, current_turn=current_turn, recent_turn_window=recent_turn_window)
         prompt = _build_summary_prompt(messages, summary_mode=summary_mode)
         try:
             response = self.provider.complete(
@@ -76,13 +83,27 @@ class _TailBoundary:
         self.covered_until_message_id = covered_until_message_id
 
 
-def _tail_boundary(messages: list[AgentMessage]) -> _TailBoundary:
-    """选择一个保守 tail：尽量保留少量尾部，同时保证 tool 序列合法。"""
+def _tail_boundary(
+    messages: list[AgentMessage],
+    *,
+    current_turn: int,
+    recent_turn_window: int,
+) -> _TailBoundary:
+    """选择保守 tail，同时保证保留最近 N 轮对话。"""
 
     candidates = _boundary_candidates(messages)
     if len(candidates) < 2:
         raise NoSummaryError("not enough messages to summarize")
-    for index in range(len(candidates) - 1, 0, -1):
+
+    max_tail_start_index = _recent_turn_max_tail_start_index(
+        candidates,
+        current_turn=current_turn,
+        recent_turn_window=recent_turn_window,
+    )
+    if max_tail_start_index <= 0:
+        raise NoSummaryError("no dialogue outside the recent turn window")
+
+    for index in range(max_tail_start_index, 0, -1):
         try:
             validate_tool_call_sequence(candidates[index:])
         except InvalidToolCallSequenceError:
@@ -92,6 +113,36 @@ def _tail_boundary(messages: list[AgentMessage]) -> _TailBoundary:
             covered_until_message_id=candidates[index - 1].id,
         )
     raise NoSummaryError("could not find a valid checkpoint tail boundary")
+
+
+def _recent_turn_max_tail_start_index(
+    candidates: list[AgentMessage],
+    *,
+    current_turn: int,
+    recent_turn_window: int,
+) -> int:
+    """tail_start 允许的最大候选下标。
+
+    保留最近 N 轮意味着 tail 必须包含 turn [T-N+1, T] 的全部消息，所以
+    tail_start 最晚必须落在 turn T-N+1 开头的消息上。若 T-N+1 <= 1（全部
+    都在窗口内）或历史不足，返回 0（无可摘要）。
+    """
+
+    min_created_turn = current_turn - recent_turn_window + 1
+    if min_created_turn <= 1:
+        return 0
+    for index, message in enumerate(candidates):
+        if _message_created_turn(message) >= min_created_turn:
+            return index
+    return 0
+
+
+def _message_created_turn(message: AgentMessage) -> int | None:
+    for part in message.parts:
+        created_turn = part.metadata.get("created_turn")
+        if isinstance(created_turn, int) and not isinstance(created_turn, bool):
+            return created_turn
+    return None
 
 
 def _boundary_candidates(messages: list[AgentMessage]) -> list[AgentMessage]:
