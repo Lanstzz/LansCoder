@@ -1,213 +1,107 @@
-<p align="center">
-  <img src="assets/firstcoder-logo.png" alt="FirstCoder logo" width="156">
-</p>
+# LansCoder
 
-<h1 align="center">LansCoder</h1>
+> A local coding agent you can read end to end.
 
-<p align="center">
-  <strong>A local Python coding agent built to make agent internals visible.</strong>
-</p>
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-<p align="center">
-  <a href="#quickstart"><img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white"></a>
-  <a href="#tui"><img alt="Textual TUI" src="https://img.shields.io/badge/Textual-TUI-5B5BD6?style=flat-square"></a>
-  <a href="#configuration"><img alt="OpenAI Compatible" src="https://img.shields.io/badge/OpenAI-Compatible-111827?style=flat-square"></a>
-  <a href="#development"><img alt="pytest" src="https://img.shields.io/badge/pytest-tested-0A9EDC?style=flat-square&logo=pytest&logoColor=white"></a>
-  <a href="https://deepwiki.com/KomorGiaoGiao/FirstCoder"><img alt="Ask DeepWiki" src="https://img.shields.io/badge/Ask-DeepWiki-0F7BBF?style=flat-square&labelColor=2B2B2B"></a>
-</p>
+![LansCoder TUI screenshot](./assets/tui-screenshot.png)
 
-<p align="center">
-  English
-  · <a href="README.zh-CN.md">简体中文</a>
-</p>
+## What is it?
 
----
+LansCoder is a locally-runnable Python coding agent. It understands your codebase, edits files, and runs shell commands — like Claude Code or Aider. But its core design goal isn't feature volume; it's **understandability.**
 
-LansCoder is a real, runnable local coding agent with a Textual TUI, tool calling, permissions, sessions, and context compaction. It is designed to be useful in daily work and easy to study in code.
+~30,000 lines of Python, clean module boundaries, solid test coverage. Real enough to use daily, small enough to read from end to end.
 
-If you want to understand how coding agents actually work, LansCoder keeps the moving parts visible instead of hiding them behind a black box.
+96.38% reward pass@1 on the Harbor Aider Polyglot benchmark.
 
-- Learn the agent loop, tool calling, permissions, sessions, and context handling.
-- Build on a small Python codebase with clear module boundaries.
-- Use a local coding agent while still being able to inspect how it works.
+## Highlights
 
-![LansCoder planning, requesting permission, and completing a local task](docs/images/firstcoder-demo.gif)
+- **Small, so you can read it** — ~30k lines of Python, not 570k lines of TypeScript. Every module's job is obvious.
+- **Built to learn from** — strict layering, clear dependency rules. Great for studying how coding agents work, for hacking on, or for interview prep.
+- **Actually usable** — 40+ built-in tools, multi-provider support, MCP integration, session persistence, context compression. Not a toy.
+- **Preview before you write** — syntax-highlighted diffs shown before every file change, even in high-permission mode.
 
-## Why LansCoder
-
-Most coding-agent demos show the surface: a prompt goes in, code changes come out. LansCoder focuses on the machinery in between.
-
-Compared with larger projects like OpenCode, LansCoder is intentionally smaller in scope.
-
-| Dimension | LansCoder | Larger projects like OpenCode |
-| --- | --- | --- |
-| Primary goal | Make agent internals readable and teachable | Deliver a broader production-style coding-agent platform |
-| Codebase shape | Roughly 25k lines of Python under `lanscoder/` (174 files) | Roughly 575k lines of TS/JS across a much larger multi-surface codebase |
-| Engineering tradeoff | Drops some extra platform surface area to stay inspectable | Accepts more complexity to support a broader product surface |
-| Best fit | Learning, modification, interview prep, portfolio projects, and local experimentation | Users who want a larger, more full-surface coding-agent environment |
-
-The goal is not to out-feature a bigger coding agent. The goal is to keep the system real enough to use, but small enough that you can still read it end to end and understand why each subsystem exists.
-
-That also makes LansCoder a practical repo to study deeply, adapt for your own workflow, and turn into a resume-worthy or portfolio-friendly project after you have extended it.
-
-Compared with more tutorial-first or lightweight learning repos, LansCoder also tries to stay closer to a small but testable engineering system.
-
-| Dimension | LansCoder | Many learning-oriented agent repos |
-| --- | --- | --- |
-| Learning value | Readable subsystem boundaries and explicit docs | Often optimized for a single tutorial path or demo flow |
-| Practical surface | Real TUI, tools, permissions, sessions, provider adapters | Often focused on a narrower loop or a simpler proof of concept |
-| Verification | Broad pytest coverage plus one Harbor evaluation integration | Often lighter on testing and benchmark integration |
-| Extension path | Easier to adapt into a portfolio or resume project | Often better for following along than for long-term extension |
-
-In this repo, the learning goal is important, but it is paired with enough runtime structure, tests, and a Harbor evaluation path to make the project useful after the first read-through.
-
-It is built for people who want to:
-
-- study how a coding agent is assembled
-- modify or extend a local Python implementation
-- understand the architecture well enough to explain it in an interview
-
-Detailed subsystem design lives in the docs, not in this README.
-
-## Quickstart
-
-Install with `pipx`:
+## Quick start
 
 ```sh
 pipx install lanscoder
+lanscoder config init
 ```
 
-Start the TUI:
+Edit the config file with your API key:
+
+- **macOS / Linux**: `~/.config/lanscoder/config.toml`
+- **Windows**: `C:\Users\<username>\.config\lanscoder\config.toml`
+
+Example config:
+
+```toml
+default_model = "openai/gpt-4o"
+
+[providers.openai]
+type = "openai-compatible"
+base_url = "https://api.openai.com/v1"
+api_key = "sk-xxx"
+api_key_env = "OPENAI_API_KEY"
+```
+
+Then launch from your project directory:
 
 ```sh
 lanscoder
 ```
 
-Run one message without opening the TUI:
-
-```sh
-lanscoder --message "Summarize this repository in one paragraph"
-```
-
-Use line-oriented interactive mode:
-
-```sh
-lanscoder --interactive
-```
-
-## What You Get
-
-- Local Python coding agent
-- Textual TUI that exposes agent activity instead of hiding it
-- Tool calling with highlighted diffs before direct file mutations
-- Session persistence, resume flow, and context compaction
-- Skills, provider adapters, and clean modules for study and modification
-
-## Configuration
-
-Create a starter config:
-
-```sh
-lanscoder config init
-lanscoder config path
-lanscoder config show
-```
-
-Keep secrets in environment variables:
-
-```sh
-export LANSCODER_API_KEY="your-api-key"
-```
-
-Default config locations:
-
-```text
-global:  ~/.config/lanscoder/config.toml
-project: ./lanscoder.toml
-```
-
-Provider support is centered on the OpenAI Chat Completions-compatible path and a native Anthropic Messages API adapter. Both paths implement the same internal complete/streaming contracts (text deltas, tool-call accumulation, forced `tool_choice`, usage, and `PROMPT_TOO_LONG`-style error classification). The TUI's native multimodal input can stage pasted file paths and clipboard images; images and small text files then travel through the session/context pipeline to providers that support vision. Model and provider vision capability still matters. Anthropic-only extras such as prompt caching remain optional future work. LansCoder does not use the OpenAI Responses API yet.
-
-### Multiple models and request options
-
-You can keep several provider/model profiles in one global or project TOML file. Project values are merged over global values, so a project can override only the fields it needs:
-
-```toml
-default_model = "yuren/gpt-5.6-terra"
-
-[providers.yuren]
-type = "openai-compatible"
-base_url = "https://yurenapi.cn/v1"
-api_key_env = "YURENAPI_API_KEY"
-
-[models."yuren/gpt-5.6-terra"]
-label = "Yuren Terra"
-context_window = 128000
-
-[models."yuren/gpt-5.6-terra".request]
-temperature = 0.2
-max_tokens = 8192
-reasoning_effort = "high"
-extra_body = { reasoning_summary = "auto" }
-```
-
-Use `lanscoder --model provider/model` to choose the initial profile for a run. In the TUI, `/models` opens the configured model picker and `/model provider/model` switches immediately. `lanscoder config show` prints the configured model references and labels, but never prints API keys, environment-variable values, request bodies, or model-state contents.
-
-`temperature`, `max_tokens`, and `extra_body` are sent with the main model request. `reasoning_effort` is represented as a request extension and passed through when the selected provider supports it; providers that do not recognize it may reject or ignore it. Internal classifiers and compact summarization keep their own bounded token budgets.
-
-> A small detail for observant users: some provider/model combinations give the
-> TUI topbar a little more character.
-
-## TUI
-
-LansCoder's TUI is designed to expose the agent loop instead of hiding it. You can see session state, streamed assistant output, tool calls, tool results, and permission prompts in one place.
-
-Before `write`, `edit`, `apply_patch`, or `delete` changes local files, LansCoder builds a trusted unified diff with red removals, green additions, per-file statistics, and bounded expansion controls. In standard mode it accompanies the normal permission confirmation; an existing grant or aggressive mode still requires a review-only Apply confirmation. Approve the reviewed operation, deny it, or reply with `reject: <feedback>` so the model can revise the proposed change. LansCoder rechecks reviewed file snapshots immediately before dispatch and blocks stale operations, reducing accidental overwrites from concurrent changes; this is a guard, not a filesystem-level atomic transaction. In bypass mode the review is shown as a non-blocking event and the operation proceeds immediately; the Harbor adapter disables that event for its non-interactive task turn. Shell commands follow the permission policy for the active mode because arbitrary command effects cannot be precomputed safely.
-
-Ready state:
-
-![LansCoder ready state](docs/images/firstcoder-ready.png)
-
-Conversation flow:
-
-![LansCoder conversation flow](docs/images/tui-empty.png)
-
-## Documentation
-
-- [Technical Docs Index](docs/README.md)
-- [Chinese Docs Index](docs/README.zh-CN.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Codebase Reading Guide](docs/CODEBASE_READING_GUIDE.md)
-- [Multimodal Input Design](docs/MULTIMODAL_INPUT_DESIGN.md)
-- [MCP Client Configuration](docs/MCP.md)
-- [Harbor Evaluation](benchmark/harbor/README.md)
-
-## Development
-
-Install dev dependencies:
+Development setup:
 
 ```sh
 python -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
-```
-
-Run all tests:
-
-```sh
 .venv/bin/python -m pytest
 ```
 
-Run a focused test file:
+## Features at a glance
 
-```sh
-.venv/bin/python -m pytest tests/test_app_tui.py -q
+| Capability | What it does |
+|-----------|--------------|
+| Coding agent | Understands code, edits files, runs shell commands, 40+ built-in tools |
+| Multi-model | OpenAI-compatible and Anthropic providers, hot-switchable mid-session |
+| Permissions | Standard / aggressive / bypass modes, diff preview before every mutation |
+| TUI | Textual-based terminal UI, streams reasoning, tool calls, and results in real time |
+| Sessions | Create, resume, fork, share — persisted as JSONL |
+| Context compression | 4-level pipeline (L1–L4) to manage token usage in long conversations |
+| Background subagents | Subagents run independently in the background, notify on completion |
+| MCP integration | Connect external tool servers via Model Context Protocol |
+
+## Architecture
+
+```
+lanscoder/
+├── app/           Textual TUI
+├── agent/         Agent loop and orchestration
+├── providers/     Model provider adapters
+├── tools/         Tool registration and execution (40+ tools)
+├── permissions/   Policy and grant management
+├── context/       Event log and context management
+├── session/       Session lifecycle
+├── mcp/           MCP protocol integration
+├── memory/        Cross-session persistent memory
+├── skills/        Local skill discovery and loading
+├── config/        TOML configuration
+└── utils/         Shared utilities
 ```
 
-## Philosophy
+## Who is it for?
 
-LansCoder was built to answer a question most coding agents do not address:
+- Developers who want to **deeply understand how coding agents work**
+- People looking to **extend or modify** a Python-based coding agent
+- Anyone who needs **a project they can explain architecturally** for interviews or portfolios
+- AI enthusiasts who want to **experiment with different models** locally
 
-> What actually happens inside when an agent streams, calls tools, asks for
-> permission, compacts context, and resumes a session?
+## Contributing
 
-It is a real runnable agent, but it is also a readable Python project you can learn from one subsystem at a time.
+Issues and PRs are welcome. Tests cover most core modules — please make sure they pass before submitting.
+
+## License
+
+MIT
