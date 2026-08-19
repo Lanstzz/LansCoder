@@ -206,10 +206,15 @@ class LansCoderViewMixin:
             tool_name = str(getattr(tool_call, "name", "") or "tool")
             if tool_name in HIDDEN_TOOL_STATUS_NAMES:
                 return
-            if str(getattr(event, "kind", "") or "") == "prewrite_review":
+            event_kind = str(getattr(event, "kind", "") or "")
+            if event_kind == "prewrite_review":
                 review = getattr(event, "prewrite_review", None)
                 if isinstance(review, dict):
                     self._call_ui_thread(self._write_review_payload, review)
+                return
+            if event_kind == "permission_requested":
+                # Permission prompts are displayed by _write_pending_input() after
+                # the response is received, so skip them here to avoid duplication.
                 return
             line = tool_status_text(event)
             if not line:
