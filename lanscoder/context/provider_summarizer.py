@@ -115,6 +115,30 @@ def _tail_boundary(
     raise NoSummaryError("could not find a valid checkpoint tail boundary")
 
 
+def select_compaction_boundary(
+    messages: list[AgentMessage],
+    *,
+    current_turn: int,
+    recent_turn_window: int,
+) -> tuple[str, str] | None:
+    """Return (covered_until_message_id, tail_start_message_id) for hard truncation.
+
+    Mirrors `_tail_boundary`: respects the recent-N window and tool-call sequence
+    validity. Returns None when the whole conversation is inside the window (nothing
+    to drop) or no valid boundary exists — the manager then falls through to failure.
+    """
+
+    try:
+        boundary = _tail_boundary(
+            messages,
+            current_turn=current_turn,
+            recent_turn_window=recent_turn_window,
+        )
+    except NoSummaryError:
+        return None
+    return boundary.covered_until_message_id, boundary.tail_start_message_id
+
+
 def _recent_turn_max_tail_start_index(
     candidates: list[AgentMessage],
     *,

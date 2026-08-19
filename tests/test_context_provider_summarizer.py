@@ -18,6 +18,7 @@ from lanscoder.context.provider_summarizer import (
     _build_dialogue_summary_prompt,
     _message_text,
     _tail_boundary,
+    select_compaction_boundary,
 )
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.errors import ProviderError, ProviderErrorKind
@@ -203,6 +204,30 @@ def test_tail_boundary_rejects_when_entire_conversation_is_recent() -> None:
 
     with pytest.raises(NoSummaryError, match="no dialogue outside the recent turn window"):
         _tail_boundary(messages, current_turn=2, recent_turn_window=2)
+
+
+def test_select_compaction_boundary_matches_tail_boundary() -> None:
+    messages = [
+        _user_message_with_turn("msg_1", created_turn=1),
+        _user_message_with_turn("msg_2", created_turn=2),
+        _user_message_with_turn("msg_3", created_turn=3),
+        _user_message_with_turn("msg_4", created_turn=4),
+    ]
+    boundary = select_compaction_boundary(messages, current_turn=4, recent_turn_window=2)
+    expected = _tail_boundary(messages, current_turn=4, recent_turn_window=2)
+
+    assert boundary == (expected.covered_until_message_id, expected.tail_start_message_id)
+
+
+def test_select_compaction_boundary_returns_none_for_fully_recent_conversation() -> None:
+    messages = [
+        _user_message_with_turn("msg_1", created_turn=1),
+        _user_message_with_turn("msg_2", created_turn=2),
+    ]
+
+    boundary = select_compaction_boundary(messages, current_turn=2, recent_turn_window=2)
+
+    assert boundary is None
 
 
 def _user_message_with_turn(message_id: str, *, created_turn: int) -> AgentMessage:

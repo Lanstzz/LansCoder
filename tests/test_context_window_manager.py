@@ -5,6 +5,7 @@ from pathlib import Path
 from lanscoder.context.compaction import CompactionEvent, CompactionResult
 from lanscoder.context.checkpoint import Checkpoint
 from lanscoder.context.events import SessionEvent
+from lanscoder.context.fallback import CompactFallbackPolicy
 from lanscoder.context.llm_compact import LlmCompactCandidate, LlmCompactEvent
 from lanscoder.context.manager import (
     ContextCompactMode,
@@ -100,6 +101,37 @@ class WritingFakeL3:
         return checkpoint
 
 
+class HardTruncateFakeL3:
+    """L3 that fails generate_candidate but persists the hard-truncate checkpoint."""
+
+    def __init__(self, store: JsonlSessionStore, results: list[LlmCompactCandidate]) -> None:
+        self.store = store
+        self.results = list(results)
+        self.calls = []
+        self.commit_calls = []
+
+    def generate_candidate(self, request):
+        self.calls.append(request)
+        if len(self.results) == 1:
+            return self.results[0]
+        return self.results.pop(0)
+
+    def commit_candidate(self, candidate, *, runtime_state):
+        self.commit_calls.append(candidate)
+        checkpoint = candidate.checkpoint
+        assert checkpoint is not None
+        self.store.append_event(
+            SessionEvent(
+                id="evt_hard_truncate",
+                session_id=checkpoint.session_id,
+                type="checkpoint_created",
+                payload=checkpoint.to_dict(),
+            )
+        )
+        runtime_state.latest_checkpoint_id = checkpoint.id
+        return checkpoint
+
+
 def _message(message_id: str, content: str) -> AgentMessage:
     return AgentMessage(
         id=message_id,
@@ -114,6 +146,12 @@ def _message(message_id: str, content: str) -> AgentMessage:
             )
         ],
     )
+
+
+def _turn_message(message_id: str, *, created_turn: int, content: str = "content") -> AgentMessage:
+    message = _message(message_id, content)
+    message.parts[0].metadata["created_turn"] = created_turn
+    return message
 
 
 def _view(*messages: AgentMessage) -> SessionView:
@@ -998,3 +1036,111 @@ def test_auto_compact_failure_after_fallback_updates_circuit_breaker(tmp_path: P
     assert result.status == "failed"
     assert state.auto_compact_failure_count == 3
     assert state.auto_compact_disabled_until is not None
+
+
+def test_fallback_policy_returns_hard_truncate_for_unknown_reason() -> None:
+    policy = CompactFallbackPolicy()
+
+    assert policy.action_for("provider_error") == "hard_truncate"
+    assert policy.action_for("prompt_too_long") == "stronger_programmatic"
+    assert policy.action_for("no_summary") == "retry_l3_stronger_summary"
+
+
+def test_manager_hard_truncates_when_l3_and_fallbacks_fail(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    messages = [
+        _turn_message("msg_1", created_turn=1),
+        _turn_message("msg_2", created_turn=2),
+        _turn_message("msg_3", created_turn=3),
+        _turn_message("msg_4", created_turn=4),
+    ]
+    for message in messages:
+        store.append_event(
+            SessionEvent(
+                id=f"evt_{message.id}",
+                session_id="sess_test",
+                type="user_message",
+                payload={"message_id": message.id, "parts": [message.parts[0].to_dict()]},
+            )
+        )
+    view = _view(*messages)
+    pipeline = FakePipeline(
+        [
+            _programmatic_result(view, before_tokens=1000, after_tokens=900, stopped_at="not_reached"),
+            _programmatic_result(view, before_tokens=900, after_tokens=800, stopped_at="not_reached"),
+        ]
+    )
+    l3 = HardTruncateFakeL3(
+        store,
+        [
+            _l3_result(status="failed", failure_reason="prompt_too_long"),
+            _l3_result(status="failed", failure_reason="no_summary"),
+        ],
+    )
+    manager = ContextWindowManager(
+        store=store,
+        pipeline=pipeline,
+        l3_service=l3,
+        config=ContextCompactionConfig(recent_turn_window=2),
+    )
+
+    result = manager.compact_if_needed(
+        _compact_request(
+            view=view,
+            runtime_state=SessionRuntimeState(session_id="sess_test"),
+            trigger=ContextWindowTrigger.AUTO,
+            current_turn=4,
+        )
+    )
+
+    assert result.status == "success"
+    assert result.reason == "hard_truncate"
+    assert result.l3_event is not None
+    assert result.l3_event.status == "success"
+    assert result.l3_event.fallback_steps is not None
+    assert result.l3_event.fallback_steps[-1]["action"] == "hard_truncate"
+    assert result.l3_event.fallback_steps[-1]["status"] == "success"
+    checkpoint = result.view.checkpoints[-1]
+    assert checkpoint.summary == "[Earlier dialogue truncated — recent N turns kept]"
+    assert checkpoint.tail_start_message_id == "msg_3"
+    assert checkpoint.covered_until_message_id == "msg_2"
+    assert {message.id for message in result.view.messages} >= {"msg_3", "msg_4"}
+    assert any(event.type == "checkpoint_created" for event in store.list_events("sess_test"))
+
+
+def test_manager_hard_truncate_returns_none_when_all_recent(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    messages = [
+        _turn_message("msg_1", created_turn=1),
+        _turn_message("msg_2", created_turn=2),
+    ]
+    for message in messages:
+        store.append_event(
+            SessionEvent(
+                id=f"evt_{message.id}",
+                session_id="sess_test",
+                type="user_message",
+                payload={"message_id": message.id, "parts": [message.parts[0].to_dict()]},
+            )
+        )
+    view = _view(*messages)
+    manager = ContextWindowManager(
+        store=store,
+        pipeline=FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=900)),
+        l3_service=HardTruncateFakeL3(store, [_l3_result(status="failed", failure_reason="provider_error")]),
+        config=ContextCompactionConfig(recent_turn_window=2),
+    )
+
+    result = manager.compact_if_needed(
+        _compact_request(
+            view=view,
+            runtime_state=SessionRuntimeState(session_id="sess_test"),
+            trigger=ContextWindowTrigger.AUTO,
+            current_turn=2,
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.reason != "hard_truncate"
+    assert result.final_failure_reason == "provider_error"
+    assert not any(event.type == "checkpoint_created" for event in store.list_events("sess_test"))
