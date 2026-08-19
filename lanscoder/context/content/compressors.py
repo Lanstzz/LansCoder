@@ -6,40 +6,13 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from lanscoder.context.content.router import (
     RouteCompactResult,
     RouteContentType,
     RouteContext,
 )
-from lanscoder.context.identity import content_fingerprint
-from lanscoder.context.models import MessagePart, utc_now_iso
+from lanscoder.context.models import MessagePart
 from lanscoder.context.token_budget import estimate_text_tokens
-from lanscoder.context.versions import COMPACTION_STRATEGY_VERSION
-
-
-def compact_old_task_part(part: MessagePart) -> MessagePart:
-    """Return the L1 representation for an old-task dialogue part.
-
-    L1 is deliberate forgetting, rather than a tiny natural-language summary.
-    The original event remains in JSONL, but the effective view has no visible
-    text for this part.  ``ContextBuilder`` emits one aggregate marker for a
-    tail containing any such part.
-    """
-
-    metadata = _compacted_metadata(
-        part,
-        state="trimmed",
-        compacted_by="l1_old_task_dialogue",
-    )
-    return MessagePart(
-        id=part.id,
-        message_id=part.message_id,
-        kind=part.kind,
-        content="",
-        metadata=metadata,
-    )
 
 
 class PlainTextRouteCompressor:
@@ -77,18 +50,3 @@ class PlainTextRouteCompressor:
                 "tail_preview_tokens": tail_preview_tokens,
             },
         )
-
-
-def _compacted_metadata(part: MessagePart, *, state: str, compacted_by: str) -> dict[str, Any]:
-    metadata = dict(part.metadata)
-    metadata.update(
-        {
-            "original_tokens": estimate_text_tokens(part.content),
-            "content_fingerprint": content_fingerprint(part.content),
-            "compaction_state": state,
-            "compacted_by": compacted_by,
-            "compacted_at": utc_now_iso(),
-            "compaction_strategy_version": COMPACTION_STRATEGY_VERSION,
-        }
-    )
-    return metadata

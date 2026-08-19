@@ -9,7 +9,7 @@ from lanscoder.context.models import SessionView
 
 @dataclass(frozen=True, slots=True)
 class ContextCompactionConfig:
-    """L1-L3 内容策略配置。
+    """L1-L2 内容策略配置。
 
     窗口容量、高低水位和输出预留属于每次 provider 请求的 ``ContextBudget``，
     不在这里维护第二套固定阈值。
@@ -19,7 +19,7 @@ class ContextCompactionConfig:
     large_tool_result_tokens: int = 1_200
     max_turn_tool_result_tokens: int = 4_000
     max_tail_messages: int = 120
-    cold_turn_distance: int = 8
+    recent_turn_window: int = 10
     cold_preview_chars: int = 160
 
 

@@ -101,7 +101,6 @@ class ContextWindowManager:
             self.pipeline = CompactionPipeline(
                 root=self.store.root,
                 large_tool_result_tokens=self.config.large_tool_result_tokens,
-                cold_turn_distance=self.config.cold_turn_distance,
                 cold_preview_chars=self.config.cold_preview_chars,
             )
 
@@ -140,7 +139,6 @@ class ContextWindowManager:
         programmatic = self.pipeline.compact(
             CompactionRequest(
                 view=request.view,
-                active_task_hash=request.runtime_state.active_task_hash,
                 target_tokens=target_tokens,
                 current_turn=request.current_turn,
                 estimate_tokens=lambda candidate: request.estimate_budget(candidate).input_tokens,
@@ -324,12 +322,11 @@ class ContextWindowManager:
             stronger = self.pipeline.compact(
                 CompactionRequest(
                     view=programmatic.view,
-                    active_task_hash=request.runtime_state.active_task_hash,
                     target_tokens=target_tokens,
                     current_turn=request.current_turn,
                     estimate_tokens=lambda candidate: request.estimate_budget(candidate).input_tokens,
                     consumed_tool_result_part_ids=frozenset(request.runtime_state.consumed_tool_result_part_ids),
-                    enabled_levels=("l1", "l2", "l3"),
+                    enabled_levels=("l1", "l2"),
                     l2_result_target_tokens=self.config.l2_result_target_tokens,
                     force_route_current_text=_force_route_current_text_for_trigger(trigger),
                 )
