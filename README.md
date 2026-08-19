@@ -37,13 +37,22 @@ Edit the config file with your API key:
 Example config:
 
 ```toml
-default_model = "openai/gpt-4o"
+default_model = "deepseek/deepseek-v4-flash"
 
-[providers.openai]
+[providers.deepseek]
 type = "openai-compatible"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.deepseek.com"
 api_key = "sk-xxx"
-api_key_env = "OPENAI_API_KEY"
+
+[models."deepseek/deepseek-v4-flash"]
+label = "DeepSeek V4 Flash"
+context_window = 1000000
+
+[permissions]
+mode = "ask"
+
+[ui]
+theme = "default"
 ```
 
 Then launch from your project directory:
