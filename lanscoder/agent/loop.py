@@ -25,7 +25,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import anyio
 
@@ -171,13 +171,12 @@ class AgentLoop:
         self._tool_rounds_completed = 0
 
         # -------- 阶段 6：任务边界分类器 --------
-        # TaskBoundaryClassifier 判断新消息是否开启新任务，必要时触发 compact
+        # TaskBoundaryClassifier 判断新消息是否开启新任务，记录任务边界状态
         # → 见 lanscoder/agent/task_boundary_classifier.py::TaskBoundaryClassifier
         self.task_boundary_classifier = TaskBoundaryClassifier(
             session=session,
             provider=provider,
             context_builder=self.context_builder,
-            compact_if_needed=self._compact_if_needed,
             check_cancelled=self._check_cancelled,
             reserve_provider_call=self._reserve_provider_call,
             check_turn_timeout=self._check_turn_timeout,
@@ -267,8 +266,7 @@ class AgentLoop:
     # 3. _repair_interrupted_tool_calls_before_provider_request()：修复上一轮意外中断
     #    留下的"有 tool_call 但缺 tool_result"的非法序列（补一条 canceled tool_result）。
     # 4. append_user_message()：把用户输入写入 JSONL。
-    # 5. 任务边界分类 (TaskBoundaryClassifier.classify)：判断是否开启新任务，
-    #    必要时触发 compact，避免上下文漂移。
+    # 5. 任务边界分类 (TaskBoundaryClassifier.classify)：判断是否开启新任务。
     # 6. 进入 _run_tool_loop_interactive 核心循环（见下方）。
     def _run_user_turn_sync(
         self,
@@ -618,8 +616,6 @@ class AgentLoop:
         if not pending.deferred_tool_calls:
             return None
         execution = self.tool_executor.execute_interactive(pending.deferred_tool_calls)
-        if execution.task_hash_changed:
-            self._compact_after_task_hash_changed()
         return execution.pending_input
 
     async def _finish_permission_resume_async(self, pending: PendingPermissionExecution, result: ToolResult) -> UserInputRequest | None:
@@ -631,8 +627,6 @@ class AgentLoop:
         if not pending.deferred_tool_calls:
             return None
         execution = await self.tool_executor.execute_interactive_async(pending.deferred_tool_calls)
-        if execution.task_hash_changed:
-            self._compact_after_task_hash_changed()
         return execution.pending_input
 
     def _resolve_pending_confirmation(
@@ -996,8 +990,6 @@ class AgentLoop:
             execution = self.tool_executor.execute_interactive(response.tool_calls)
             if execution.pending_input is not None:
                 return response, execution.pending_input, tool_rounds
-            if execution.task_hash_changed:
-                self._compact_after_task_hash_changed()
 
             tool_rounds += 1
             self._tool_rounds_completed = tool_rounds
@@ -1056,8 +1048,6 @@ class AgentLoop:
             execution = await self.tool_executor.execute_interactive_async(response.tool_calls)
             if execution.pending_input is not None:
                 return response, execution.pending_input, tool_rounds
-            if execution.task_hash_changed:
-                self._compact_after_task_hash_changed()
 
             tool_rounds += 1
             self._tool_rounds_completed = tool_rounds
@@ -1273,9 +1263,6 @@ class AgentLoop:
             trigger=ContextWindowTrigger.PROMPT_TOO_LONG,
             runtime_instruction=runtime_instruction,
         )
-
-    def _compact_after_task_hash_changed(self):
-        return self._compact_if_needed(trigger=ContextWindowTrigger.TASK_HASH_CHANGED)
 
     def _build_provider_messages(self, view, *, system_prefix):
         return self.context_builder.build_provider_messages(

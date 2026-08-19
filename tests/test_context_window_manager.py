@@ -395,67 +395,6 @@ def test_manager_reports_still_over_budget_after_successful_l4_checkpoint(tmp_pa
     assert result.final_failure_reason == "still_over_budget"
 
 
-def test_manager_runs_pipeline_when_task_hash_changed(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    view = _view(_message("msg_1", "long" * 400))
-    pipeline_result = _programmatic_result(_view(_message("msg_1", "short")), before_tokens=1000, after_tokens=100)
-    pipeline = FakePipeline(pipeline_result)
-    manager = ContextWindowManager(
-        store=store,
-        pipeline=pipeline,
-        l4_service=FakeL4(_l4_result()),
-    )
-
-    result = manager.compact_if_needed(
-        _compact_request(
-            view=view,
-            runtime_state=SessionRuntimeState(session_id="sess_test", active_task_hash="task_new"),
-            trigger=ContextWindowTrigger.TASK_HASH_CHANGED,
-        )
-    )
-
-    assert result.status == "success"
-    assert result.reason == "task_hash_changed"
-    assert result.programmatic_event == pipeline_result.event
-    assert len(pipeline.calls) == 1
-    assert pipeline.calls[0].active_task_hash == "task_new"
-    assert pipeline.calls[0].target_tokens == 40
-    assert pipeline.calls[0].required_levels == ("l2", "l3")
-    assert pipeline.calls[0].l2_result_target_tokens == 800
-    assert pipeline.calls[0].force_route_current_text is False
-    assert pipeline.calls[0].force_old_task_compaction is True
-    assert [event.type for event in store.list_events("sess_test")] == ["compaction_completed"]
-
-
-def test_task_switch_uses_explicit_lower_target_and_requires_l2_l3_below_budget(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    view = _view(_message("msg_1", "short"))
-    pipeline = FakePipeline(_programmatic_result(view, before_tokens=5, after_tokens=5, stopped_at="l3"))
-    manager = ContextWindowManager(
-        store=store,
-        pipeline=pipeline,
-        l4_service=FakeL4(_l4_result()),
-        config=ContextCompactionConfig(
-            l2_result_target_tokens=77,
-        ),
-    )
-
-    result = manager.compact_if_needed(
-        _compact_request(
-            view=view,
-            runtime_state=SessionRuntimeState(session_id="sess_test", active_task_hash="task_new"),
-            trigger=ContextWindowTrigger.TASK_HASH_CHANGED,
-            target_tokens=50,
-        )
-    )
-
-    assert result.status == "success"
-    assert pipeline.calls[0].target_tokens == 50
-    assert pipeline.calls[0].required_levels == ("l2", "l3")
-    assert pipeline.calls[0].l2_result_target_tokens == 77
-    assert pipeline.calls[0].force_old_task_compaction is True
-
-
 def test_manual_and_prompt_too_long_enable_forced_route_compaction(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
@@ -732,33 +671,6 @@ def test_manual_compact_ignores_auto_circuit_breaker(tmp_path: Path) -> None:
     assert result.status == "success"
     assert len(l4.calls) == 1
     assert l4.calls[0].mode == "manual"
-
-
-def test_task_hash_changed_ignores_auto_circuit_breaker(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    view = _view(_message("msg_1", "old task text" * 80))
-    pipeline = FakePipeline(_programmatic_result(view, after_tokens=100, stopped_at="l1"))
-    manager = ContextWindowManager(
-        store=store,
-        pipeline=pipeline,
-        l4_service=FakeL4(_l4_result()),
-    )
-
-    result = manager.compact_if_needed(
-        _compact_request(
-            view=view,
-            runtime_state=SessionRuntimeState(
-                session_id="sess_test",
-                active_task_hash="task_new",
-                auto_compact_disabled_until="2099-01-01T00:00:00Z",
-            ),
-            trigger=ContextWindowTrigger.TASK_HASH_CHANGED,
-        )
-    )
-
-    assert result.status == "success"
-    assert len(pipeline.calls) == 1
-    assert pipeline.calls[0].force_old_task_compaction is True
 
 
 def test_manual_compact_honors_explicit_lower_target(tmp_path: Path) -> None:

@@ -11,7 +11,6 @@ from collections.abc import Callable
 
 from lanscoder.agent.session import AgentSession
 from lanscoder.context.context_builder import ContextBuilder
-from lanscoder.context.manager import ContextWindowTrigger
 from lanscoder.context.task_boundary import observation_from_tool_result_data
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.errors import ProviderError
@@ -59,7 +58,6 @@ class TaskBoundaryClassifier:
         session: AgentSession,
         provider: ChatProvider,
         context_builder: ContextBuilder,
-        compact_if_needed: Callable[..., object],
         check_cancelled: Callable[[], None],
         reserve_provider_call: Callable[[], None],
         check_turn_timeout: Callable[[], None],
@@ -68,7 +66,6 @@ class TaskBoundaryClassifier:
         self.session = session
         self.provider = provider
         self.context_builder = context_builder
-        self._compact_if_needed = compact_if_needed
         self._check_cancelled = check_cancelled
         self._reserve_provider_call = reserve_provider_call
         self._check_turn_timeout = check_turn_timeout
@@ -135,5 +132,3 @@ class TaskBoundaryClassifier:
             return
         self.session.writer.append_task_boundary_observation(observation)
         self._tag_task_boundary_messages(result.data)
-        if result.data.get("should_trigger_compaction"):
-            self._compact_if_needed(trigger=ContextWindowTrigger.TASK_HASH_CHANGED)
