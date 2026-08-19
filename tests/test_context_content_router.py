@@ -152,7 +152,7 @@ def test_search_results_compressor_groups_files_and_records_omissions() -> None:
 
     assert result is not None
     assert result.metadata["content_type"] == "search_results"
-    assert result.metadata["compacted_by"] == "l2_search_results"
+    assert result.metadata["compacted_by"] == "l1_search_results"
     assert result.metadata["search_original_matches"] > 70
     assert result.metadata["search_kept_matches"] < result.metadata["search_original_matches"]
     assert "lanscoder/app.py:1:" in result.content
@@ -217,7 +217,7 @@ def test_git_diff_compressor_keeps_headers_changes_and_limited_context() -> None
 
     assert result is not None
     assert result.metadata["content_type"] == "git_diff"
-    assert result.metadata["compacted_by"] == "l2_git_diff"
+    assert result.metadata["compacted_by"] == "l1_git_diff"
     assert result.metadata["diff_files_affected"] == 1
     assert result.metadata["diff_additions"] == 2
     assert result.metadata["diff_deletions"] == 1
@@ -279,7 +279,7 @@ def test_build_output_compressor_keeps_errors_tracebacks_and_summary() -> None:
 
     assert result is not None
     assert result.metadata["content_type"] == "build_output"
-    assert result.metadata["compacted_by"] == "l2_build_output"
+    assert result.metadata["compacted_by"] == "l1_build_output"
     assert result.metadata["build_error_lines"] >= 2
     assert result.metadata["build_warning_lines"] == 1
     assert result.metadata["build_omitted_lines"] > 0
@@ -312,7 +312,7 @@ def test_build_output_compressor_detects_late_errors_in_large_logs() -> None:
 
     assert result is not None
     assert result.metadata["content_type"] == "build_output"
-    assert result.metadata["compacted_by"] == "l2_build_output"
+    assert result.metadata["compacted_by"] == "l1_build_output"
     assert result.metadata["build_omitted_lines"] > 900
     assert "AssertionError: RESUME_SENTINEL_42" in result.content
     assert "1 failed, 120 passed" in result.content
@@ -335,7 +335,7 @@ def test_json_array_compressor_keeps_anchors_and_important_items() -> None:
 
     assert result is not None
     assert result.metadata["content_type"] == "json_array"
-    assert result.metadata["compacted_by"] == "l2_json_array"
+    assert result.metadata["compacted_by"] == "l1_json_array"
     assert result.metadata["json_original_items"] == 40
     assert result.metadata["json_kept_items"] <= 8
     assert '"error":"TimeoutError"' in result.content
@@ -355,7 +355,7 @@ def test_json_object_compressor_keeps_important_keys() -> None:
 
     assert result is not None
     assert result.metadata["content_type"] == "json_object"
-    assert result.metadata["compacted_by"] == "l2_json_object"
+    assert result.metadata["compacted_by"] == "l1_json_object"
     assert result.metadata["json_original_keys"] == 52
     assert result.metadata["json_kept_keys"] <= 6
     assert '"error":"permission denied"' in result.content
@@ -389,7 +389,7 @@ def test_source_code_compressor_keeps_imports_signatures_and_important_lines() -
 
     assert result is not None
     assert result.metadata["content_type"] == "source_code"
-    assert result.metadata["compacted_by"] == "l2_source_code"
+    assert result.metadata["compacted_by"] == "l1_source_code"
     assert result.metadata["code_language"] == "python"
     assert result.metadata["code_signature_lines"] >= 3
     assert result.metadata["code_omitted_lines"] > 0
@@ -428,7 +428,7 @@ def test_html_compressor_extracts_visible_content_and_links() -> None:
 
     assert result is not None
     assert result.metadata["content_type"] == "html"
-    assert result.metadata["compacted_by"] == "l2_html"
+    assert result.metadata["compacted_by"] == "l1_html"
     assert result.metadata["html_title"] == "FirstCoder Notes"
     assert result.metadata["html_omitted_text_blocks"] > 0
     assert "Context Compression" in result.content

@@ -266,8 +266,8 @@ class CompactionPipeline:
                         "replacement_tokens": estimate_text_tokens(compacted.content),
                         "lifecycle": lifecycle.lifecycle.value,
                         "lifecycle_reason": lifecycle.reason,
-                        "compaction_state": "l2_route_compacted",
-                        "compacted_by": _l2_compacted_by(compacted.metadata.get("compacted_by")),
+                        "compaction_state": "l1_route_compacted",
+                        "compacted_by": _l1_compacted_by(compacted.metadata.get("compacted_by")),
                     }
                 )
                 if _replace_if_smaller(message.parts, index, compacted):
@@ -422,16 +422,16 @@ def _make_route_router(*, preview_chars: int) -> RouteCompactRouter:
     )
 
 
-def _l2_compacted_by(value: object) -> str:
-    """Translate the existing route labels at the L2 ownership boundary.
+def _l1_compacted_by(value: object) -> str:
+    """Translate the archive level's legacy labels at the L1 ownership boundary.
 
     Content compressors deliberately remain independently usable.  The
-    pipeline is where their output acquires its L2 semantic label.
+    pipeline is where their output acquires its L1 semantic label.
     """
 
-    label = str(value or "l2_route")
-    if label.startswith("l3_"):
-        return f"l2_{label[3:]}"
+    label = str(value or "l1_route")
+    if label.startswith("l2_"):
+        return f"l1_{label[3:]}"
     return label
 
 
@@ -639,7 +639,7 @@ def _can_archive_l2_part(
     # must not consume a pinned/retrieved result or replay a legacy/terminal
     # compaction projection whose backing is not this L2 flow's raw record.
     state = str(part.metadata.get("compaction_state") or "raw")
-    if state not in {"raw", "l2_route_compacted"}:
+    if state not in {"raw", "l1_route_compacted"}:
         return False
     if _is_retrieval_protected(part, current_turn=current_turn):
         return False

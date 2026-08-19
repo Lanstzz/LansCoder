@@ -114,7 +114,7 @@ def test_v2_placeholder_has_no_raw_preview_and_is_bounded(tmp_path) -> None:
     assert "SECRET_RESULT_SHOULD_NOT_APPEAR" not in placeholder.content
     assert "preview" not in placeholder.content
     assert "preview" not in placeholder.metadata
-    assert placeholder.metadata["compacted_by"] == "l3_archive"
+    assert placeholder.metadata["compacted_by"] == "l2_archive"
     assert placeholder.content.endswith("Use retrieve_archive(archive_id, ...) to inspect the original.")
 
 

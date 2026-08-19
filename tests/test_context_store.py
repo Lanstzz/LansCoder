@@ -151,7 +151,7 @@ def test_programmatic_compaction_rebuilds_replaced_parts(tmp_path: Path) -> None
 
     rebuilt = store.rebuild_session_view(session_id)
 
-    assert rebuilt.messages[0].parts[0].metadata["compaction_state"] == "l2_route_compacted"
+    assert rebuilt.messages[0].parts[0].metadata["compaction_state"] == "l1_route_compacted"
     assert rebuilt.messages[0].parts[0].content == result.view.messages[0].parts[0].content
 
 
@@ -198,9 +198,9 @@ def test_l1_route_result_with_raw_backing_survives_rebuild_without_l4(tmp_path: 
     rebuilt = store.rebuild_session_view(session_id)
     part = rebuilt.messages[0].parts[0]
 
-    assert part.metadata["compaction_state"] == "l2_route_compacted"
+    assert part.metadata["compaction_state"] == "l1_route_compacted"
     assert part.metadata["archive_id"]
-    assert part.metadata["compacted_by"] == "l2_search_results"
+    assert part.metadata["compacted_by"] == "l1_search_results"
     assert part.content == result.view.messages[0].parts[0].content
     assert ToolResultArchive(tmp_path).read(session_id, part.metadata["archive_id"])[1] == message.parts[0].content
 
