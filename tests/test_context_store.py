@@ -15,14 +15,12 @@ from lanscoder.context.writer import SessionEventWriter
 def _request(
     *,
     view: SessionView,
-    active_task_hash: str | None,
     target_tokens: int,
     current_turn: int,
     **kwargs,
 ) -> CompactionRequest:
     return CompactionRequest(
         view=view,
-        active_task_hash=active_task_hash,
         target_tokens=target_tokens,
         current_turn=current_turn,
         estimate_tokens=lambda candidate: sum(estimate_text_tokens(part.content) for message in candidate.messages for part in message.parts),
@@ -122,51 +120,29 @@ def test_programmatic_compaction_rebuilds_replaced_parts(tmp_path: Path) -> None
     store = JsonlSessionStore(tmp_path)
     session_id = "sess_test"
     message = AgentMessage(
-        id="msg_old",
+        id="msg_tool",
         session_id=session_id,
-        role="user",
+        role="tool",
         parts=[
             MessagePart(
-                id="part_old",
-                message_id="msg_old",
-                kind="text",
-                content="旧任务内容" * 120,
-                metadata={"task_hash": "task_old", "created_turn": 1},
+                id="part_tool",
+                message_id="msg_tool",
+                kind="tool_result",
+                content="\n".join(f"lanscoder/app.py:{line}: def function_{line}(): pass" for line in range(1, 160)),
+                metadata={"tool_name": "grep", "tool_call_id": "call_1", "ok": True, "data": {}},
             )
         ],
     )
     store.append_event(
         SessionEvent(
-            id="evt_user",
+            id="evt_tool",
             session_id=session_id,
-            type="user_message",
+            type="tool_result",
             payload={"message_id": message.id, "parts": [message.parts[0].to_dict()]},
         )
     )
-    latest_message = AgentMessage(
-        id="msg_latest",
-        session_id=session_id,
-        role="user",
-        parts=[
-            MessagePart(
-                id="part_latest",
-                message_id="msg_latest",
-                kind="text",
-                content="new task",
-                metadata={"task_hash": "task_current", "created_turn": 10},
-            )
-        ],
-    )
-    store.append_event(
-        SessionEvent(
-            id="evt_latest",
-            session_id=session_id,
-            type="user_message",
-            payload={"message_id": latest_message.id, "parts": [latest_message.parts[0].to_dict()]},
-        )
-    )
-    view = SessionView(session_id=session_id, messages=[message, latest_message])
-    result = CompactionPipeline(root=tmp_path).compact(_request(view=view, active_task_hash="task_current", target_tokens=1, current_turn=10))
+    view = SessionView(session_id=session_id, messages=[message])
+    result = CompactionPipeline(root=tmp_path).compact(_request(view=view, target_tokens=1, current_turn=10, enabled_levels=("l1",)))
     SessionEventWriter(store=store, session_id=session_id).append_compaction_completed(
         trigger="manual",
         target_tokens=1,
@@ -175,11 +151,11 @@ def test_programmatic_compaction_rebuilds_replaced_parts(tmp_path: Path) -> None
 
     rebuilt = store.rebuild_session_view(session_id)
 
-    assert rebuilt.messages[0].parts[0].metadata["compaction_state"] == "trimmed"
+    assert rebuilt.messages[0].parts[0].metadata["compaction_state"] == "l2_route_compacted"
     assert rebuilt.messages[0].parts[0].content == result.view.messages[0].parts[0].content
 
 
-def test_l2_route_result_with_raw_backing_survives_rebuild_without_l4(tmp_path: Path) -> None:
+def test_l1_route_result_with_raw_backing_survives_rebuild_without_l4(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     session_id = "sess_test"
     message = AgentMessage(
@@ -208,10 +184,9 @@ def test_l2_route_result_with_raw_backing_survives_rebuild_without_l4(tmp_path: 
     result = CompactionPipeline(root=tmp_path, large_tool_result_tokens=20).compact(
         _request(
             view=view,
-            active_task_hash="task_current",
             target_tokens=1,
             current_turn=10,
-            enabled_levels=("l2",),
+            enabled_levels=("l1",),
         )
     )
     SessionEventWriter(store=store, session_id=session_id).append_compaction_completed(
@@ -258,7 +233,6 @@ def test_store_and_compaction_pipeline_share_data_root(tmp_path: Path) -> None:
     result = CompactionPipeline(root=store.root, large_tool_result_tokens=20).compact(
         _request(
             view=SessionView(session_id=session_id, messages=[message]),
-            active_task_hash="task_current",
             target_tokens=1,
             current_turn=10,
             enabled_levels=("l2",),
