@@ -1108,7 +1108,52 @@ def test_manager_hard_truncates_when_l3_and_fallbacks_fail(tmp_path: Path) -> No
     assert any(event.type == "checkpoint_created" for event in store.list_events("sess_test"))
 
 
-def test_manager_hard_truncate_returns_none_when_all_recent(tmp_path: Path) -> None:
+def test_manager_hard_truncate_reports_over_budget_reason_when_recent_tail_exceeds_target(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    messages = [
+        _turn_message("msg_1", created_turn=1),
+        _turn_message("msg_2", created_turn=2),
+        _turn_message("msg_3", created_turn=3),
+        _turn_message("msg_4", created_turn=4),
+    ]
+    for message in messages:
+        store.append_event(
+            SessionEvent(
+                id=f"evt_{message.id}",
+                session_id="sess_test",
+                type="user_message",
+                payload={"message_id": message.id, "parts": [message.parts[0].to_dict()]},
+            )
+        )
+    view = _view(*messages)
+    manager = ContextWindowManager(
+        store=store,
+        pipeline=FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=900)),
+        l3_service=HardTruncateFakeL3(store, [_l3_result(status="failed", failure_reason="provider_error")]),
+        config=ContextCompactionConfig(recent_turn_window=2),
+    )
+
+    result = manager.compact_if_needed(
+        _compact_request(
+            view=view,
+            runtime_state=SessionRuntimeState(session_id="sess_test"),
+            trigger=ContextWindowTrigger.AUTO,
+            current_turn=4,
+            target_tokens=25,
+            estimate_tokens=lambda candidate: 30 if candidate.checkpoints else 1_000,
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.reason == "still_over_budget_after_hard_truncate"
+    assert result.final_failure_reason == "still_over_budget_after_hard_truncate"
+    assert result.l3_event is not None
+    assert result.l3_event.final_failure_reason == "still_over_budget_after_hard_truncate"
+    assert not any(event.type == "checkpoint_created" for event in store.list_events("sess_test"))
+    assert manager.l3_service.commit_calls == []
+
+
+def test_manager_hard_truncate_falls_through_when_all_recent(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     messages = [
         _turn_message("msg_1", created_turn=1),

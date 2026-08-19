@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from lanscoder.context.checkpoint import Checkpoint
@@ -7,6 +8,7 @@ from lanscoder.context.llm_compact import (
     LlmCompactSummary,
     LlmSourceFingerprintMismatchError,
     NoSummaryError,
+    source_fingerprint_for_view,
 )
 from lanscoder.context.models import AgentMessage, MessagePart, SessionView
 from lanscoder.context.runtime_state import SessionRuntimeState
@@ -342,6 +344,66 @@ def test_same_source_fingerprint_is_not_summarized_twice(tmp_path: Path) -> None
     assert result.event.status == "skipped"
     assert result.event.failure_reason == "duplicate_source"
     assert second_summarizer.calls == []
+
+
+def test_source_fingerprint_for_view_matches_generate_candidate_domain(tmp_path: Path) -> None:
+    view = SessionView(
+        session_id="sess_test",
+        messages=[_message("msg_1", "旧历史"), _message("msg_2", "tail")],
+    )
+    summarizer = FakeSummarizer(
+        [
+            LlmCompactSummary(
+                summary="摘要",
+                tail_start_message_id="msg_2",
+                covered_until_message_id="msg_1",
+            )
+        ]
+    )
+    candidate = LlmCompactService(store=JsonlSessionStore(tmp_path), summarizer=summarizer).generate_candidate(_request(view=view, runtime_state=SessionRuntimeState(session_id="sess_test")))
+
+    fingerprint = source_fingerprint_for_view(view)
+
+    assert fingerprint == candidate.event.source_fingerprint
+    assert fingerprint == source_fingerprint_for_view(view)
+    assert re.fullmatch(r"[0-9a-f]{24}", fingerprint) is not None
+
+
+def test_source_fingerprint_for_view_includes_latest_checkpoint_source(tmp_path: Path) -> None:
+    view = SessionView(
+        session_id="sess_test",
+        messages=[
+            _message("msg_1", "已由 checkpoint 覆盖"),
+            _message("msg_2", "旧 tail"),
+            _message("msg_3", "新 tail"),
+        ],
+        checkpoints=[
+            Checkpoint(
+                id="ckpt_1",
+                session_id="sess_test",
+                summary="旧摘要",
+                tail_start_message_id="msg_2",
+                covered_until_message_id="msg_1",
+                source_fingerprint="fp_old",
+                sequence=1,
+            )
+        ],
+    )
+    summarizer = FakeSummarizer(
+        [
+            LlmCompactSummary(
+                summary="更新摘要",
+                tail_start_message_id="msg_3",
+                covered_until_message_id="msg_2",
+            )
+        ]
+    )
+    candidate = LlmCompactService(store=JsonlSessionStore(tmp_path), summarizer=summarizer).generate_candidate(_request(view=view, runtime_state=SessionRuntimeState(session_id="sess_test")))
+
+    fingerprint = source_fingerprint_for_view(view)
+
+    assert fingerprint == candidate.event.source_fingerprint
+    assert re.fullmatch(r"[0-9a-f]{24}", fingerprint) is not None
 
 
 def test_l3_source_fingerprint_includes_latest_checkpoint_boundary(tmp_path: Path) -> None:
