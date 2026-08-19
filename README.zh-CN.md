@@ -1,211 +1,107 @@
-<p align="center">
-  <img src="assets/firstcoder-logo.png" alt="FirstCoder logo" width="156">
-</p>
+# LansCoder
 
-<h1 align="center">LansCoder</h1>
+> 一个你能从头读到尾的本地编程代理。
 
-<p align="center">
-  <strong>一个把 coding agent 内部机制摊开给你看的本地 Python 项目。</strong>
-</p>
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-<p align="center">
-  <a href="#快速开始"><img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white"></a>
-  <a href="#tui"><img alt="Textual TUI" src="https://img.shields.io/badge/Textual-TUI-5B5BD6?style=flat-square"></a>
-  <a href="#配置"><img alt="OpenAI Compatible" src="https://img.shields.io/badge/OpenAI-Compatible-111827?style=flat-square"></a>
-  <a href="#开发"><img alt="pytest" src="https://img.shields.io/badge/pytest-tested-0A9EDC?style=flat-square&logo=pytest&logoColor=white"></a>
-  <a href="https://deepwiki.com/KomorGiaoGiao/FirstCoder"><img alt="Ask DeepWiki" src="https://img.shields.io/badge/Ask-DeepWiki-0F7BBF?style=flat-square&labelColor=2B2B2B"></a>
-</p>
+![LansCoder TUI 界面截图](./assets/tui-screenshot.png)
 
-<p align="center">
-  <a href="README.md">English</a>
-  · 简体中文
-</p>
+## 简介
 
----
+LansCoder 是一个本地运行的 Python 编程代理。它像 Claude Code 或 Aider 一样，能理解你的代码库、编辑文件、运行命令——但它的核心设计目标不是功能堆砌，而是**可理解**。
 
-LansCoder 是一个能真实运行的本地 coding agent，带有 Textual TUI、工具调用、权限系统、会话持久化和上下文压缩。它既可以日常使用，也刻意保持了适合阅读和学习的 Python 代码结构。
+约 30,000 行 Python 代码，清晰的模块边界，完整的测试覆盖。整个系统足够真实可用，也足够小到你能从头读到尾。
 
-如果你想真正理解 coding agent 是怎么工作的，LansCoder 会尽量把关键环节展示出来，而不是把它们藏在黑盒后面。
+在 Harbor Aider Polyglot 基准测试中达到 96.38% 通过率。
 
-- 学习 agent loop、工具调用、权限系统、session 和上下文处理。
-- 基于一个模块边界清晰的小型 Python 代码库继续改造。
-- 一边使用本地 coding agent，一边读懂它的内部机制。
+## 核心亮点
 
-![LansCoder 规划、请求权限并完成本地任务](docs/images/firstcoder-demo.gif)
+- **小，所以可读** — ~30k 行 Python，不是 570k 行 TypeScript。每个模块的职责一目了然。
+- **为学习而生** — 架构分层严格，依赖规则明确。适合学习编程代理的内部原理、二次开发、面试准备。
+- **真实可用** — 40+ 内置工具、多模型提供商支持、MCP 集成、会话持久化、上下文压缩，不是玩具。
+- **写前预览** — 每次文件修改前显示语法高亮 diff，即使在高权限模式下也不跳过。
 
-## 为什么做 LansCoder
-
-大多数 coding-agent 演示展示的是表面：一个 prompt 进去，代码改完出来。LansCoder 关注的是中间的机械结构。
-
-和 OpenCode 这类更大的项目相比，LansCoder 刻意把范围收得更小。
-
-| 维度 | LansCoder | OpenCode 这类更大的项目 |
-| --- | --- | --- |
-| 主要目标 | 把 agent 内部机制做得可读、可学、可讲清楚 | 提供更完整、更偏产品化的 coding-agent 平台 |
-| 代码形态 | 当前 `lanscoder/` 约 2.5 万行 Python（174 个文件） | TS/JS 代码规模约 57 万行，平台层和工程表面也更多 |
-| 工程取舍 | 主动放弃一部分额外平台能力，换取更强可读性 | 接受更高复杂度，以支持更宽的产品能力面 |
-| 更适合谁 | 学习、二次改造、面试讲解、作品集 / 简历项目、本地实验 | 更想直接使用一个大而完整的 coding-agent 环境的用户 |
-
-目标不是在功能数量上和更大的 coding agent 正面对抗，而是把系统做得既足够真实可用，又足够小，让你还能从头到尾读懂它，并理解每个子系统为什么存在。
-
-这也意味着 LansCoder 很适合被深入学习、按自己的工作流继续改造，并在做出有代表性的扩展后，作为一个能写进简历或作品集的项目来展示。
-
-和更偏教程型、轻量参考型的学习项目相比，LansCoder 也尽量保持它更像一个“小而完整、可验证”的工程系统。
-
-| 维度 | LansCoder | 常见学习型 agent 项目 |
-| --- | --- | --- |
-| 学习价值 | 子系统边界清楚，文档明确，适合按模块阅读 | 往往更偏单一路径教程或 demo 流程 |
-| 实用表面 | 有真实 TUI、tools、permissions、sessions、provider adapters | 往往更聚焦某个更窄的 loop 或概念验证 |
-| 可验证性 | 有 pytest 测试体系，并接入 Harbor benchmark | 往往较少强调测试体系和 benchmark 集成 |
-| 延展路径 | 更适合继续改造成作品集或简历项目 | 更适合跟做和入门，但未必适合长期扩展 |
-
-也就是说，这个仓库在“适合学习”之外，还尽量保留了足够的运行时结构、测试和 benchmark 钩子，让它在你第一次读完之后依然有继续演化的价值。
-
-它适合这样的人：
-
-- 想系统理解一个 coding agent 是如何组织起来的
-- 想修改或扩展一个本地 Python 实现
-- 想把 agent 架构真正看懂，并能在面试或学习中讲清楚
-
-更细的子系统说明已经放进文档，这个 README 只保留项目首页需要的信息。
-
-## 快速开始
-
-推荐用 `pipx` 安装：
+## 快速上手
 
 ```sh
 pipx install lanscoder
+lanscoder config init
 ```
 
-启动 TUI：
+编辑配置文件，填写你的 API 密钥：
+
+- **macOS / Linux**：`~/.config/lanscoder/config.toml`
+- **Windows**：`C:\Users\<用户名>\.config\lanscoder\config.toml`
+
+示例配置：
+
+```toml
+default_model = "openai/gpt-4o"
+
+[providers.openai]
+type = "openai-compatible"
+base_url = "https://api.openai.com/v1"
+api_key = "sk-xxx"
+api_key_env = "OPENAI_API_KEY"
+```
+
+然后在工作目录启动：
 
 ```sh
 lanscoder
 ```
 
-不打开 TUI，直接跑一轮消息：
-
-```sh
-lanscoder --message "用一段话介绍这个仓库"
-```
-
-使用行式交互模式：
-
-```sh
-lanscoder --interactive
-```
-
-## 你会得到什么
-
-- 本地 Python coding agent
-- 不隐藏 agent 活动状态的 Textual TUI
-- 本地文件修改前展示高亮 diff 的权限确认流程
-- 会话持久化、恢复和上下文压缩
-- 适合学习和二次开发的 skills、provider 和清晰模块结构
-
-## 配置
-
-创建初始配置：
-
-```sh
-lanscoder config init
-lanscoder config path
-lanscoder config show
-```
-
-密钥建议放在环境变量里：
-
-```sh
-export LANSCODER_API_KEY="your-api-key"
-```
-
-Provider 主线同时覆盖 OpenAI Chat Completions 兼容路径与原生 Anthropic Messages API；二者在 complete/streaming、tools、forced `tool_choice`、usage 与错误归类上对齐同一内部契约。TUI 可以暂存粘贴进来的文件路径和剪贴板图片；图片及小型文本文件会经过 session/context 管道交给支持视觉的 provider。实际能否看图仍取决于模型与 provider 的视觉能力；OpenAI Responses API 目前尚未接入。
-
-### 多模型与请求参数
-
-可以在同一个全局或项目 TOML 中保存多个 provider/model 配置。项目配置会覆盖全局配置，因此只需要写项目差异：
-
-```toml
-default_model = "yuren/gpt-5.6-terra"
-
-[providers.yuren]
-type = "openai-compatible"
-base_url = "https://yurenapi.cn/v1"
-api_key_env = "YURENAPI_API_KEY"
-
-[models."yuren/gpt-5.6-terra"]
-label = "Yuren Terra"
-
-[models."yuren/gpt-5.6-terra".request]
-temperature = 0.2
-max_tokens = 8192
-reasoning_effort = "high"
-extra_body = { reasoning_summary = "auto" }
-```
-
-命令行可以用 `lanscoder --model provider/model` 指定本次运行的初始模型。TUI 中 `/models` 会打开已配置模型的选择器，`/model provider/model` 可以立即切换。`lanscoder config show` 只显示模型引用和标签，不会显示 API key、环境变量值、请求体或模型状态文件内容。
-
-`temperature`、`max_tokens` 和 `extra_body` 会随主模型请求发送。`reasoning_effort` 作为请求扩展参数透传；是否支持取决于所选 provider，不支持的 provider 可能忽略或拒绝它。内部分类器和上下文压缩仍使用各自固定的 token 上限。
-
-默认配置路径：
-
-```text
-全局:  ~/.config/lanscoder/config.toml
-项目:  ./lanscoder.toml
-```
-
-> 给细心用户的小提示：某些 provider 与模型组合，会让 TUI 顶栏多一点个性。
-
-## TUI
-
-LansCoder 的 TUI 不是为了把 agent loop 藏起来，而是为了把它展示出来。你可以在一个界面里看到 session 状态、流式输出、工具调用、工具结果和权限请求。
-
-`write`、`edit`、`apply_patch` 或 `delete` 真正修改本地文件前，LansCoder 会先生成可信的 unified diff：删除行标红、新增行标绿，并显示每个文件的增删统计和有界展开控制。standard 模式中它会随普通权限确认一同展示；已有长期授权或 aggressive 模式也仍需一次仅用于 review 的 Apply 确认。你可以批准本次已预览操作、直接拒绝，或回复 `reject: <反馈>` 让模型按意见重做。LansCoder 会在调度实际写入前再次核对文件快照并阻止过期预览，这能降低外部并发修改造成的误覆盖风险，但不等同于文件系统级原子事务。bypass 模式不等待确认，但默认仍会发出非阻塞的写前 diff 事件并立即执行；非交互 benchmark adapter 会显式关闭该事件。`shell` 无法安全预计算任意命令的文件影响，因此只遵循当前模式的权限策略。
-
-空闲状态：
-
-![LansCoder 空闲状态](docs/images/firstcoder-ready.png)
-
-基础对话流：
-
-![LansCoder 基础对话流](docs/images/tui-empty.png)
-
-## 文档
-
-- [技术文档入口](docs/README.zh-CN.md)
-- [English Docs Index](docs/README.md)
-- [架构说明](docs/ARCHITECTURE.zh-CN.md)
-- [代码阅读指南](docs/CODEBASE_READING_GUIDE.zh-CN.md)
-- [多模态输入设计](docs/MULTIMODAL_INPUT_DESIGN.zh-CN.md)
-- [MCP 客户端配置](docs/MCP.zh-CN.md)
-- [Harbor 测评说明](benchmark/harbor/README.md)
-
-## 开发
-
-安装开发依赖：
+开发环境：
 
 ```sh
 python -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
-```
-
-运行全部测试：
-
-```sh
 .venv/bin/python -m pytest
 ```
 
-运行单个测试文件：
+## 功能概览
 
-```sh
-.venv/bin/python -m pytest tests/test_app_tui.py -q
+| 能力 | 说明 |
+|------|------|
+| 编程代理 | 理解代码、编辑文件、运行 Shell 命令，支持 40+ 内置工具 |
+| 多模型 | 兼容 OpenAI 和 Anthropic，模型可在会话中热切换 |
+| 权限控制 | 标准/宽松/放行三种模式，每次文件操作前展示 diff |
+| TUI 界面 | Textual 构建的终端界面，实时展示推理、工具调用、结果 |
+| 会话管理 | 创建、恢复、分支、分享会话，JSONL 持久化 |
+| 上下文压缩 | 四级压缩管线（L1–L4），控制长对话的 token 消耗 |
+| 后台子代理 | 子代理可独立在后台运行，完成后通知 |
+| MCP 集成 | 连接外部工具服务器 |
+
+## 架构速览
+
+```
+lanscoder/
+├── app/           Textual TUI 界面
+├── agent/         代理循环与编排
+├── providers/     模型提供商适配器
+├── tools/         工具注册与执行（40+ 工具）
+├── permissions/   权限策略与授权
+├── context/       事件日志与上下文管理
+├── session/       会话生命周期
+├── mcp/           MCP 协议集成
+├── memory/        跨会话持久记忆
+├── skills/        本地技能文件系统
+├── config/        TOML 配置加载
+└── utils/         工具函数
 ```
 
-## 设计理念
+## 适合谁
 
-LansCoder 想回答的是一个很多 coding agent 不会正面回答的问题：
+- 想**深入理解编程代理内部原理**的开发者
+- 想基于 Python 编程代理**做二次开发**的人
+- 准备面试、需要**能讲清楚架构**的项目
+- 想在本地**实验不同模型**的 AI 爱好者
 
-> 当 agent 在流式输出、调用工具、申请权限、压缩上下文、恢复会话时，
-> 内部到底发生了什么？
+## 参与贡献
 
-它是一个真实可运行的 agent，但它同样也是一个可以按子系统逐步读懂的 Python 项目。
+欢迎提交 Issue 和 PR。测试覆盖大部分核心模块，修改前请确保测试通过。
+
+## 许可证
+
+MIT
