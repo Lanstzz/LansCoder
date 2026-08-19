@@ -91,7 +91,6 @@ class ToolExecutionEvent:
 
 @dataclass(slots=True)
 class ToolExecutionState:
-    task_hash_changed: bool = False
     pending_input: UserInputRequest | None = None
 
 
@@ -475,7 +474,6 @@ class ToolExecutor:
             self._observe_tool_result(tool_call, result)
         if tool_call.name == "task_boundary" and result.ok and result.data.get("should_trigger_compaction"):
             self._tag_task_boundary_messages(result.data)
-            state.task_hash_changed = True
         return None
 
     def parallel_readonly_batch_end(self, tool_calls: list[ToolCall], start: int) -> int:

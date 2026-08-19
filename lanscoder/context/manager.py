@@ -24,7 +24,6 @@ from lanscoder.context.writer import SessionEventWriter
 
 class ContextWindowTrigger(StrEnum):
     AUTO = "auto"
-    TASK_HASH_CHANGED = "task_hash_changed"
     PROMPT_TOO_LONG = "prompt_too_long"
     MANUAL = "manual"
 
@@ -138,7 +137,6 @@ class ContextWindowManager:
                 final_failure_reason="fixed_context_over_budget",
             )
 
-        required_levels: tuple[Literal["l1", "l2", "l3"], ...] = ("l2", "l3") if trigger == ContextWindowTrigger.TASK_HASH_CHANGED else ()
         programmatic = self.pipeline.compact(
             CompactionRequest(
                 view=request.view,
@@ -147,10 +145,8 @@ class ContextWindowManager:
                 current_turn=request.current_turn,
                 estimate_tokens=lambda candidate: request.estimate_budget(candidate).input_tokens,
                 consumed_tool_result_part_ids=frozenset(request.runtime_state.consumed_tool_result_part_ids),
-                required_levels=required_levels,
                 l2_result_target_tokens=self.config.l2_result_target_tokens,
                 force_route_current_text=_force_route_current_text_for_trigger(trigger),
-                force_old_task_compaction=trigger == ContextWindowTrigger.TASK_HASH_CHANGED,
             )
         )
         after_tokens = request.estimate_budget(programmatic.view).input_tokens
@@ -334,10 +330,8 @@ class ContextWindowManager:
                     estimate_tokens=lambda candidate: request.estimate_budget(candidate).input_tokens,
                     consumed_tool_result_part_ids=frozenset(request.runtime_state.consumed_tool_result_part_ids),
                     enabled_levels=("l1", "l2", "l3"),
-                    required_levels=("l2", "l3") if trigger == ContextWindowTrigger.TASK_HASH_CHANGED else (),
                     l2_result_target_tokens=self.config.l2_result_target_tokens,
                     force_route_current_text=_force_route_current_text_for_trigger(trigger),
-                    force_old_task_compaction=trigger == ContextWindowTrigger.TASK_HASH_CHANGED,
                 )
             )
             self._record_programmatic_event(
@@ -565,8 +559,6 @@ class ContextWindowManager:
 def _target_tokens(request: ContextCompactRequest, trigger: ContextWindowTrigger) -> int:
     if request.target_tokens is not None:
         return request.target_tokens
-    if trigger == ContextWindowTrigger.TASK_HASH_CHANGED:
-        return max(1, request.budget.low_watermark * 2 // 3)
     return request.budget.low_watermark
 
 
