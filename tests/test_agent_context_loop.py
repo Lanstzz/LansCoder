@@ -3026,28 +3026,6 @@ def test_agent_session_resume_replays_runtime_state_and_known_message_ids(tmp_pa
     assert result.ok is True
 
 
-def test_agent_loop_runs_compact_when_task_boundary_confirms_change(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
-    session.runtime_state.active_task_hash = "task_previous"
-    provider = JsonBoundaryProvider(["<boundary>", "ok", "<same>", "ok"])
-    context_manager = FakeContextManager()
-
-    AgentLoop(
-        session=session,
-        provider=provider,
-        context_manager=context_manager,
-    )._run_user_turn_sync("换一个任务")
-    AgentLoop(
-        session=session,
-        provider=provider,
-        context_manager=context_manager,
-    )._run_user_turn_sync("继续处理")
-
-    triggers = [call.trigger for call in context_manager.calls]
-    assert ContextWindowTrigger.TASK_HASH_CHANGED in triggers
-
-
 def test_agent_loop_runs_auto_once_before_each_main_provider_request(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test", agents_md="")

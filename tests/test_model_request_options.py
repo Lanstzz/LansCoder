@@ -5,9 +5,7 @@ from dataclasses import dataclass, field
 
 from lanscoder.agent.loop import AgentLoop
 from lanscoder.agent.session import AgentSession
-from lanscoder.agent.task_boundary_classifier import TaskBoundaryClassifier
 from lanscoder.app.runtime import AgentChatRunner, CurrentSessionState
-from lanscoder.context.context_builder import ContextBuilder
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import (
@@ -86,26 +84,6 @@ def test_main_stream_request_inherits_selected_model_options(tmp_path) -> None:
     assert request.temperature == 0.3
     assert request.max_tokens == 4096
     assert request.extra_body == {"reasoning_effort": "medium"}
-
-
-def test_task_boundary_classifier_keeps_its_fixed_request_options(tmp_path) -> None:
-    session = _session(tmp_path)
-    classifier = TaskBoundaryClassifier(
-        session=session,
-        provider=RecordingProvider(),
-        context_builder=ContextBuilder(),
-        compact_if_needed=lambda **_: None,
-        check_cancelled=lambda: None,
-        reserve_provider_call=lambda: None,
-        check_turn_timeout=lambda: None,
-        tag_task_boundary_messages=lambda *_: None,
-    )
-
-    request = classifier.build_request(attempt=0)
-
-    assert request.max_tokens == 512
-    assert request.temperature is None
-    assert request.extra_body == {}
 
 
 def test_main_request_options_copy_extra_body() -> None:
