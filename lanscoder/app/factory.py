@@ -245,13 +245,13 @@ def create_lanscoder_app(
     # 阶段 5: 上下文管理 (Context window management & compaction)
     # ------------------------------------------------------------------
     # ContextWindowManager 来自 lanscoder/context/manager.py，负责在 token 预算
-    # 内管理对话历史。L4 压缩使用 LLM 把过长的 context 摘要成更短的版本。
+    # 内管理对话历史。L3 压缩使用 LLM 把过长的 context 摘要成更短的版本。
     # ProviderLlmCompactSummarizer 让压缩服务复用当前 provider 来做摘要。
     compact_summarizer = ProviderLlmCompactSummarizer(resolved_provider)
     context_manager = ContextWindowManager(  # 上下文压缩管理 → lanscoder/context/manager.py
         store=store,
         config=compact_config,
-        l4_service=LlmCompactService(
+        l3_service=LlmCompactService(
             store=store,
             summarizer=compact_summarizer,
         ),

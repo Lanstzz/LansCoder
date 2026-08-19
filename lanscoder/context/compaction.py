@@ -352,7 +352,7 @@ def _effective_tail_messages(view: SessionView) -> list[AgentMessage]:
     """只让程序化压缩处理 latest checkpoint 之后的真实 tail。
 
     checkpoint 覆盖过的旧历史已经由 summary 表达；L1-L2 如果继续扫描旧 raw message，
-    会和 ContextBuilder/L4 的 effective context 边界不一致。
+    会和 ContextBuilder/L3 的 effective context 边界不一致。
     """
 
     checkpoint = CheckpointIndex(view.checkpoints).latest()

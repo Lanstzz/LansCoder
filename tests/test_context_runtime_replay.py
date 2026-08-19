@@ -60,7 +60,7 @@ def test_replay_restores_auto_compact_failure_state(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     store.append_event(
         SessionEvent(
-            id="evt_l4_failed",
+            id="evt_l3_failed",
             session_id="sess_test",
             type="llm_compaction_completed",
             payload={
@@ -68,7 +68,7 @@ def test_replay_restores_auto_compact_failure_state(tmp_path) -> None:
                 "target_tokens": 100,
                 "event": {
                     "status": "failed",
-                    "source_fingerprint": "fp_l4",
+                    "source_fingerprint": "fp_l3",
                     "retry_count": 1,
                     "failure_reason": "no_summary",
                     "checkpoint_id": None,
@@ -87,20 +87,20 @@ def test_replay_restores_manager_level_auto_compact_failure_state(tmp_path) -> N
     store = JsonlSessionStore(tmp_path)
     store.append_event(
         SessionEvent(
-            id="evt_l4_missing",
+            id="evt_l3_missing",
             session_id="sess_test",
             type="llm_compaction_completed",
             payload={
                 "trigger": "auto",
                 "target_tokens": 100,
                 "status": "failed",
-                "reason": "l4_service_missing",
+                "reason": "l3_service_missing",
                 "input_fingerprint": "fp_programmatic",
                 "event": {
                     "status": "failed",
                     "source_fingerprint": "fp_programmatic",
                     "retry_count": 0,
-                    "failure_reason": "l4_service_missing",
+                    "failure_reason": "l3_service_missing",
                     "checkpoint_id": None,
                 },
             },
@@ -110,7 +110,7 @@ def test_replay_restores_manager_level_auto_compact_failure_state(tmp_path) -> N
     state = replay_runtime_state(store, "sess_test")
 
     assert state.auto_compact_failure_count == 1
-    assert state.last_auto_compact_failure_reason == "l4_service_missing"
+    assert state.last_auto_compact_failure_reason == "l3_service_missing"
 
 
 def test_replay_records_compaction_input_fingerprint(tmp_path) -> None:
