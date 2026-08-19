@@ -12,7 +12,7 @@ from lanscoder.context.llm_compact import (
     normalize_coding_handoff,
 )
 from lanscoder.context.models import AgentMessage, MessagePart
-from lanscoder.context.provider_summarizer import ProviderLlmCompactSummarizer
+from lanscoder.context.provider_summarizer import ProviderLlmCompactSummarizer, _tail_boundary
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.errors import ProviderError, ProviderErrorKind
 from lanscoder.providers.types import ChatRequest, ChatResponse
@@ -53,9 +53,11 @@ def test_provider_summarizer_requests_plain_summary_without_tools() -> None:
 
     summary = ProviderLlmCompactSummarizer(provider).summarize(
         [
-            _message("msg_1", "user", "目标"),
-            _message("msg_2", "assistant", "进展"),
-        ]
+            _message("msg_1", "user", "目标", created_turn=1),
+            _message("msg_2", "assistant", "进展", created_turn=2),
+        ],
+        current_turn=2,
+        recent_turn_window=1,
     )
 
     assert isinstance(summary, LlmCompactSummary)
@@ -72,10 +74,12 @@ def test_provider_summarizer_keeps_tool_call_sequence_in_tail() -> None:
 
     summary = ProviderLlmCompactSummarizer(provider).summarize(
         [
-            _message("msg_1", "user", "目标"),
-            _assistant_tool_call("msg_2", "call_1"),
-            _tool_result("msg_3", "call_1"),
-        ]
+            _message("msg_1", "user", "目标", created_turn=1),
+            _assistant_tool_call("msg_2", "call_1", created_turn=2),
+            _tool_result("msg_3", "call_1", created_turn=3),
+        ],
+        current_turn=3,
+        recent_turn_window=1,
     )
 
     assert summary.covered_until_message_id == "msg_1"
@@ -88,9 +92,11 @@ def test_provider_summarizer_maps_prompt_too_long_provider_error() -> None:
     with pytest.raises(PromptTooLongError):
         ProviderLlmCompactSummarizer(provider).summarize(
             [
-                _message("msg_1", "user", "目标"),
-                _message("msg_2", "assistant", "进展"),
-            ]
+                _message("msg_1", "user", "目标", created_turn=1),
+                _message("msg_2", "assistant", "进展", created_turn=2),
+            ],
+            current_turn=2,
+            recent_turn_window=1,
         )
 
 
@@ -117,7 +123,14 @@ def test_provider_summarizer_prompt_and_normalizer_enforce_exact_handoff_heading
     )
     provider = FakeProvider(ChatResponse(provider="fake", model="fake-model", content=model_output))
 
-    summary = ProviderLlmCompactSummarizer(provider).summarize([_message("msg_1", "user", "目标"), _message("msg_2", "assistant", "进展")])
+    summary = ProviderLlmCompactSummarizer(provider).summarize(
+        [
+            _message("msg_1", "user", "目标", created_turn=1),
+            _message("msg_2", "assistant", "进展", created_turn=2),
+        ],
+        current_turn=2,
+        recent_turn_window=1,
+    )
 
     assert all(summary.summary.count(heading) == 1 for heading in CODING_HANDOFF_HEADINGS)
     assert "Implement L1.\nKeep the latest user message." in summary.summary
@@ -135,7 +148,37 @@ def test_normalize_coding_handoff_preserves_body_under_matching_heading() -> Non
     assert all(normalized.count(heading) == 1 for heading in CODING_HANDOFF_HEADINGS)
 
 
-def _message(message_id: str, role: str, content: str) -> AgentMessage:
+def test_tail_boundary_keeps_recent_turn_window() -> None:
+    messages = [
+        _user_message_with_turn("msg_1", created_turn=1),
+        _user_message_with_turn("msg_2", created_turn=2),
+        _user_message_with_turn("msg_3", created_turn=3),
+        _user_message_with_turn("msg_4", created_turn=4),
+    ]
+    boundary = _tail_boundary(messages, current_turn=4, recent_turn_window=2)
+
+    assert boundary.covered_until_message_id == "msg_2"
+    assert boundary.tail_start_message_id == "msg_3"
+
+
+def test_tail_boundary_rejects_when_entire_conversation_is_recent() -> None:
+    messages = [
+        _user_message_with_turn("msg_1", created_turn=1),
+        _user_message_with_turn("msg_2", created_turn=2),
+    ]
+
+    with pytest.raises(NoSummaryError, match="no dialogue outside the recent turn window"):
+        _tail_boundary(messages, current_turn=2, recent_turn_window=2)
+
+
+def _user_message_with_turn(message_id: str, *, created_turn: int) -> AgentMessage:
+    message = _message(message_id, "user", "内容")
+    message.parts[0].metadata["created_turn"] = created_turn
+    return message
+
+
+def _message(message_id: str, role: str, content: str, *, created_turn: int | None = None) -> AgentMessage:
+    metadata = {"created_turn": created_turn} if created_turn is not None else {}
     return AgentMessage(
         id=message_id,
         session_id="sess_test",
@@ -146,12 +189,16 @@ def _message(message_id: str, role: str, content: str) -> AgentMessage:
                 message_id=message_id,
                 kind="text",
                 content=content,
+                metadata=metadata,
             )
         ],
     )
 
 
-def _assistant_tool_call(message_id: str, tool_call_id: str) -> AgentMessage:
+def _assistant_tool_call(message_id: str, tool_call_id: str, *, created_turn: int | None = None) -> AgentMessage:
+    metadata = {"tool_call_id": tool_call_id, "tool_name": "grep"}
+    if created_turn is not None:
+        metadata["created_turn"] = created_turn
     return AgentMessage(
         id=message_id,
         session_id="sess_test",
@@ -162,13 +209,16 @@ def _assistant_tool_call(message_id: str, tool_call_id: str) -> AgentMessage:
                 message_id=message_id,
                 kind="tool_call",
                 content="{}",
-                metadata={"tool_call_id": tool_call_id, "tool_name": "grep"},
+                metadata=metadata,
             )
         ],
     )
 
 
-def _tool_result(message_id: str, tool_call_id: str) -> AgentMessage:
+def _tool_result(message_id: str, tool_call_id: str, *, created_turn: int | None = None) -> AgentMessage:
+    metadata = {"tool_call_id": tool_call_id, "tool_name": "grep"}
+    if created_turn is not None:
+        metadata["created_turn"] = created_turn
     return AgentMessage(
         id=message_id,
         session_id="sess_test",
@@ -179,7 +229,7 @@ def _tool_result(message_id: str, tool_call_id: str) -> AgentMessage:
                 message_id=message_id,
                 kind="tool_result",
                 content="结果",
-                metadata={"tool_call_id": tool_call_id, "tool_name": "grep"},
+                metadata=metadata,
             )
         ],
     )

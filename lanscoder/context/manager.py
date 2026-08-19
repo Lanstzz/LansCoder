@@ -207,6 +207,8 @@ class ContextWindowManager:
                 runtime_state=request.runtime_state,
                 consumed_tool_result_part_ids=frozenset(request.runtime_state.consumed_tool_result_part_ids),
                 mode=mode.value,
+                current_turn=request.current_turn,
+                recent_turn_window=self.config.recent_turn_window,
             ),
             target_tokens=target_tokens,
         )
@@ -384,6 +386,8 @@ class ContextWindowManager:
                     consumed_tool_result_part_ids=frozenset(request.runtime_state.consumed_tool_result_part_ids),
                     mode=mode.value,
                     summary_mode="stronger",
+                    current_turn=request.current_turn,
+                    recent_turn_window=self.config.recent_turn_window,
                 ),
                 target_tokens=target_tokens,
             )

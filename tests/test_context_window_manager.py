@@ -470,10 +470,40 @@ def test_manager_runs_l4_only_after_l1_l3_fail_target(tmp_path: Path) -> None:
     assert result.l4_event is not None
     assert len(l4.calls) == 1
     assert l4.calls[0].mode == "auto"
+    assert l4.calls[0].current_turn == 0
+    assert l4.calls[0].recent_turn_window == 10
     assert [event.type for event in store.list_events("sess_test")] == [
         "compaction_completed",
         "llm_compaction_completed",
     ]
+
+
+def test_manager_threads_current_turn_and_recent_turn_window_to_l4(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    view = _view(_message("msg_1", "long" * 400))
+    pipeline = FakePipeline(_programmatic_result(view, after_tokens=900, stopped_at="not_reached"))
+    l4 = FakeL4(_l4_result())
+    manager = ContextWindowManager(
+        store=store,
+        pipeline=pipeline,
+        l4_service=l4,
+        config=ContextCompactionConfig(recent_turn_window=3),
+    )
+
+    result = manager.compact_if_needed(
+        _compact_request(
+            view=view,
+            runtime_state=SessionRuntimeState(session_id="sess_test"),
+            trigger=ContextWindowTrigger.AUTO,
+            current_turn=5,
+            estimate_tokens=lambda candidate: 30 if candidate.checkpoints else 100,
+        )
+    )
+
+    assert result.status == "success"
+    assert len(l4.calls) == 1
+    assert l4.calls[0].current_turn == 5
+    assert l4.calls[0].recent_turn_window == 3
 
 
 def test_manager_persists_l4_missing_failure_for_replay(tmp_path: Path) -> None:

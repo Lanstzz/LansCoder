@@ -217,6 +217,7 @@ def test_prompt_too_long_e2e_writes_l4_checkpoint_and_retries_with_summary(tmp_p
     )
     context_manager = ContextWindowManager(
         store=store,
+        config=ContextCompactionConfig(recent_turn_window=1),
         l4_service=LlmCompactService(
             store=store,
             summarizer=ProviderLlmCompactSummarizer(provider),
@@ -250,6 +251,7 @@ def _compact_manager(store: JsonlSessionStore, provider: ChatProvider, *, reason
         config=ContextCompactionConfig(
             large_tool_result_tokens=large_tool_result_tokens,
             max_turn_tool_result_tokens=max_turn_tool_result_tokens,
+            recent_turn_window=1,
         ),
         l4_service=LlmCompactService(
             store=store,
@@ -407,6 +409,7 @@ def test_manual_compact_command_e2e_writes_l4_handoff_when_only_current_plain_di
     provider = FakeProvider(
         [
             ChatResponse(provider="fake", model="fake-model", content="旧回复"),
+            ChatResponse(provider="fake", model="fake-model", content="第二轮回复"),
             ChatResponse(provider="fake", model="fake-model", content="手动压缩摘要"),
         ]
     )
@@ -416,12 +419,15 @@ def test_manual_compact_command_e2e_writes_l4_handoff_when_only_current_plain_di
         provider=provider,
         session_id="sess_manual_compact",
         tools=[],
+        compact_config=ContextCompactionConfig(recent_turn_window=1),
     )
 
     first = app.chat_runner.run_user_turn("旧问题 " * 10_000)
+    second = app.chat_runner.run_user_turn("第二轮")
     result = app.command_handler.handle("/compact")
 
     assert first.content == "旧回复"
+    assert second.content == "第二轮回复"
     assert "Manual compact success" in result.output
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     compact = _compact_events(store, "sess_manual_compact")[0]
