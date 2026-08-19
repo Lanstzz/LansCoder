@@ -33,6 +33,7 @@ from lanscoder.providers.types import ChatResponse, ProviderCapabilities, ToolCa
 from lanscoder.runtime.user_input import UserInputRequest, _options_from_data
 from lanscoder.permissions.types import PermissionDecision, PermissionRequest
 from lanscoder.tools.permission_registry import PermissionAwareToolRegistry
+from lanscoder.tools.registry import ToolRegistry
 from lanscoder.tools.review import PrewriteReview, build_prewrite_review, supports_prewrite_review
 from lanscoder.tools.session_registry import ToolRegistryLike, create_session_tool_registry
 from lanscoder.tools.types import Tool, ToolResult, make_error_result
@@ -136,6 +137,22 @@ class AgentSession:
         runtime_state = SessionRuntimeState(session_id=session_id)
         known_message_ids: set[str] = set()
         writer = SessionEventWriter(store=store, session_id=session_id)
+        resolved_catalog = (skill_catalog or SkillCatalog()).resolved()
+        session = cls(
+            session_id=session_id,
+            store=store,
+            runtime_state=runtime_state,
+            tool_registry=ToolRegistry([]),
+            writer=writer,
+            agents_md=agents_md,
+            skill_catalog=resolved_catalog,
+            known_message_ids=known_message_ids,
+            permission_manager=permission_manager,
+            sandbox_access=sandbox_access or SandboxAccess(),
+            turn_counter=0,
+            mode=permission_manager.mode.value if permission_manager is not None else "default",
+            memory_manager=memory_manager,
+        )
         registry = create_session_tool_registry(
             session_id=session_id,
             runtime_state=runtime_state,
@@ -147,24 +164,10 @@ class AgentSession:
             current_turn=lambda: writer.current_turn,
             store=store,
             writer=writer,
-            skill_catalog=(skill_catalog or SkillCatalog()).resolved(),
+            get_skill_catalog=lambda: session.skill_catalog,
             memory_manager=memory_manager,
         )
-        session = cls(
-            session_id=session_id,
-            store=store,
-            runtime_state=runtime_state,
-            tool_registry=registry,
-            writer=writer,
-            agents_md=agents_md,
-            skill_catalog=(skill_catalog or SkillCatalog()).resolved(),
-            known_message_ids=known_message_ids,
-            permission_manager=permission_manager,
-            sandbox_access=sandbox_access or SandboxAccess(),
-            turn_counter=0,
-            mode=permission_manager.mode.value if permission_manager is not None else "default",
-            memory_manager=memory_manager,
-        )
+        session.tool_registry = registry
         session._sync_sandbox_access_with_mode()
         session.append_session_created()
         return session
@@ -229,6 +232,23 @@ class AgentSession:
         known_message_ids = {message.id for message in view.messages}
         turn_counter = _infer_turn_counter(view.messages)
         writer = SessionEventWriter(store=store, session_id=session_id, current_turn=turn_counter)
+        resolved_catalog = (skill_catalog or SkillCatalog()).resolved()
+        session = cls(
+            session_id=session_id,
+            store=store,
+            runtime_state=runtime_state,
+            tool_registry=ToolRegistry([]),
+            writer=writer,
+            agents_md=agents_md,
+            skill_catalog=resolved_catalog,
+            known_message_ids=known_message_ids,
+            permission_manager=permission_manager,
+            sandbox_access=sandbox_access or SandboxAccess(),
+            turn_counter=turn_counter,
+            mode=permission_manager.mode.value if permission_manager is not None else "default",
+            memory_manager=memory_manager,
+            _tool_result_message_ids=_tool_result_message_ids_from_view(view),
+        )
         registry = create_session_tool_registry(
             session_id=session_id,
             runtime_state=runtime_state,
@@ -240,25 +260,10 @@ class AgentSession:
             current_turn=lambda: writer.current_turn,
             store=store,
             writer=writer,
-            skill_catalog=(skill_catalog or SkillCatalog()).resolved(),
+            get_skill_catalog=lambda: session.skill_catalog,
             memory_manager=memory_manager,
         )
-        session = cls(
-            session_id=session_id,
-            store=store,
-            runtime_state=runtime_state,
-            tool_registry=registry,
-            writer=writer,
-            agents_md=agents_md,
-            skill_catalog=(skill_catalog or SkillCatalog()).resolved(),
-            known_message_ids=known_message_ids,
-            permission_manager=permission_manager,
-            sandbox_access=sandbox_access or SandboxAccess(),
-            turn_counter=turn_counter,
-            mode=permission_manager.mode.value if permission_manager is not None else "default",
-            memory_manager=memory_manager,
-            _tool_result_message_ids=_tool_result_message_ids_from_view(view),
-        )
+        session.tool_registry = registry
         session._sync_sandbox_access_with_mode()
         return session
 
@@ -409,6 +414,16 @@ class AgentSession:
         if not self.skill_catalog.skills:
             return ""
         return render_skill_catalog(self.skill_catalog)
+
+    def refresh_skills(self, project_root: str | Path) -> SkillCatalog:
+        """Re-discover skills from disk and update the catalog.
+
+        Returns the new catalog. The load_skill tool picks up changes automatically
+        because it reads from this catalog via a callable.
+        """
+        new_catalog = discover_all_skills(project_root).resolved()
+        self.skill_catalog = new_catalog
+        return new_catalog
 
     def append_user_message(self, content: str, *, attachments: list[UserAttachment] | None = None) -> str:
         """把用户输入写成可恢复的 user_message 事件。"""

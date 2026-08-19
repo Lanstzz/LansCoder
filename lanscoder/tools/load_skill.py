@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from lanscoder.context.writer import SessionEventWriter
 from lanscoder.providers.types import ToolDefinition
 from lanscoder.skills.loader import SkillLoadError, SkillLoader
@@ -11,11 +13,10 @@ from lanscoder.tools.types import Tool, make_error_result, make_text_result
 from lanscoder.utils.schema import object_schema
 
 
-def create_load_skill_tool(catalog: SkillCatalog, writer: SessionEventWriter) -> Tool:
-    resolved = catalog.resolved()
-    skills_by_name = {skill.name: skill for skill in resolved.skills}
-
+def create_load_skill_tool(get_catalog: Callable[[], SkillCatalog], writer: SessionEventWriter) -> Tool:
     def load_skill(*, name: str, args: str | None = None):
+        catalog = get_catalog().resolved()
+        skills_by_name = {skill.name: skill for skill in catalog.skills}
         skill = skills_by_name.get(name)
         if skill is None:
             available = ", ".join(skills_by_name) or "none"

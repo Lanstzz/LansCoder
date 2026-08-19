@@ -131,7 +131,7 @@ def test_load_skill_tool_returns_full_content_and_writes_audit_events(tmp_path: 
     )
     store = JsonlSessionStore(tmp_path / "events")
     writer = SessionEventWriter(store=store, session_id="sess_skill")
-    tool = create_load_skill_tool(SkillCatalog(skills=[skill]), writer)
+    tool = create_load_skill_tool(lambda: SkillCatalog(skills=[skill]), writer)
 
     result = tool.executor(name="review", args="check app.py")
 
@@ -157,7 +157,7 @@ def test_load_skill_tool_rejects_unknown_or_missing_skill_without_audit_events(t
     )
     store = JsonlSessionStore(tmp_path / "events")
     writer = SessionEventWriter(store=store, session_id="sess_skill")
-    tool = create_load_skill_tool(SkillCatalog(skills=[skill]), writer)
+    tool = create_load_skill_tool(lambda: SkillCatalog(skills=[skill]), writer)
 
     unknown = tool.executor(name="missing")
     skill_path.unlink()
@@ -179,7 +179,7 @@ def test_load_skill_tool_turns_file_read_error_into_safe_failure(tmp_path: Path,
     )
     store = JsonlSessionStore(tmp_path / "events")
     writer = SessionEventWriter(store=store, session_id="sess_skill")
-    tool = create_load_skill_tool(SkillCatalog(skills=[skill]), writer)
+    tool = create_load_skill_tool(lambda: SkillCatalog(skills=[skill]), writer)
 
     def fail_read(_loader, _skill):
         raise OSError("private filesystem detail")
@@ -192,3 +192,38 @@ def test_load_skill_tool_turns_file_read_error_into_safe_failure(tmp_path: Path,
     assert result.content == "Unable to load skill: review"
     assert "private filesystem detail" not in result.content
     assert store.list_events("sess_skill") == []
+
+
+def test_load_skill_tool_picks_up_catalog_changes_via_callable(tmp_path: Path) -> None:
+    initial_skill_path = tmp_path / "review" / "SKILL.md"
+    initial_skill_path.parent.mkdir()
+    initial_skill_path.write_text("# Review\n\nCheck correctness.\n", encoding="utf-8")
+    initial_skill = SkillDefinition(
+        name="review",
+        path="review/SKILL.md",
+        source=SkillSource.PROJECT,
+        root=str(tmp_path),
+        description="Review code.",
+    )
+    catalog_holder = [SkillCatalog(skills=[initial_skill])]
+    store = JsonlSessionStore(tmp_path / "events")
+    writer = SessionEventWriter(store=store, session_id="sess_skill")
+    tool = create_load_skill_tool(lambda: catalog_holder[0], writer)
+
+    new_skill_path = tmp_path / "deploy" / "SKILL.md"
+    new_skill_path.parent.mkdir()
+    new_skill_path.write_text("# Deploy\n\nDeploy steps.\n", encoding="utf-8")
+    new_skill = SkillDefinition(
+        name="deploy",
+        path="deploy/SKILL.md",
+        source=SkillSource.PROJECT,
+        root=str(tmp_path),
+        description="Deploy app.",
+    )
+    catalog_holder[0] = SkillCatalog(skills=[initial_skill, new_skill])
+
+    result = tool.executor(name="deploy")
+
+    assert result.ok is True
+    assert "Loaded skill: deploy" in result.content
+    assert "# Deploy" in result.content
