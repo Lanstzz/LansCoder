@@ -111,7 +111,7 @@ def _tool_transaction_view() -> SessionView:
     )
 
 
-def test_l4_generate_candidate_does_not_write_checkpoint(tmp_path) -> None:
+def test_l3_generate_candidate_does_not_write_checkpoint(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     state = SessionRuntimeState(session_id="sess_test")
     service = LlmCompactService(
@@ -146,7 +146,7 @@ def test_l4_generate_candidate_does_not_write_checkpoint(tmp_path) -> None:
     assert [event.type for event in store.list_events("sess_test")] == ["checkpoint_created"]
 
 
-def test_l4_candidate_cannot_cover_unconsumed_tool_transaction(tmp_path) -> None:
+def test_l3_candidate_cannot_cover_unconsumed_tool_transaction(tmp_path) -> None:
     candidate = LlmCompactService(
         store=JsonlSessionStore(tmp_path),
         summarizer=FakeSummarizer(
@@ -171,7 +171,7 @@ def test_l4_candidate_cannot_cover_unconsumed_tool_transaction(tmp_path) -> None
     assert candidate.event.failure_reason == "unconsumed_boundary"
 
 
-def test_l4_candidate_can_cover_consumed_tool_transaction(tmp_path) -> None:
+def test_l3_candidate_can_cover_consumed_tool_transaction(tmp_path) -> None:
     candidate = LlmCompactService(
         store=JsonlSessionStore(tmp_path),
         summarizer=FakeSummarizer(
@@ -196,7 +196,7 @@ def test_l4_candidate_can_cover_consumed_tool_transaction(tmp_path) -> None:
     assert candidate.checkpoint.tail_start_message_id == "msg_recent"
 
 
-def test_l4_writes_checkpoint_on_success(tmp_path: Path) -> None:
+def test_l3_writes_checkpoint_on_success(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = SessionView(
         session_id="sess_test",
@@ -233,7 +233,7 @@ def test_l4_writes_checkpoint_on_success(tmp_path: Path) -> None:
     assert state.auto_compact_failure_count == 0
 
 
-def test_l4_summary_prompt_scope_excludes_system_prompt_and_tool_schema(tmp_path: Path) -> None:
+def test_l3_summary_prompt_scope_excludes_system_prompt_and_tool_schema(tmp_path: Path) -> None:
     view = SessionView(
         session_id="sess_test",
         messages=[
@@ -269,7 +269,7 @@ def test_l4_summary_prompt_scope_excludes_system_prompt_and_tool_schema(tmp_path
     assert summarizer.calls == [["msg_1", "msg_2"]]
 
 
-def test_l4_input_uses_latest_checkpoint_summary_plus_tail(tmp_path: Path) -> None:
+def test_l3_input_uses_latest_checkpoint_summary_plus_tail(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = SessionView(
         session_id="sess_test",
@@ -344,7 +344,7 @@ def test_same_source_fingerprint_is_not_summarized_twice(tmp_path: Path) -> None
     assert second_summarizer.calls == []
 
 
-def test_l4_source_fingerprint_includes_latest_checkpoint_boundary(tmp_path: Path) -> None:
+def test_l3_source_fingerprint_includes_latest_checkpoint_boundary(tmp_path: Path) -> None:
     base_messages = [
         _message("msg_1", "已覆盖"),
         _message("msg_2", "tail"),
@@ -502,13 +502,13 @@ def test_expected_source_fingerprint_mismatch_is_rejected(tmp_path: Path) -> Non
             )
         )
     except LlmSourceFingerprintMismatchError as exc:
-        assert "expected_source_fingerprint does not match current L4 source" in str(exc)
+        assert "expected_source_fingerprint does not match current L3 source" in str(exc)
     else:
         raise AssertionError("expected stale source fingerprint to be rejected")
     assert summarizer.calls == []
 
 
-def test_l4_retries_no_summary_once_then_succeeds(tmp_path: Path) -> None:
+def test_l3_retries_no_summary_once_then_succeeds(tmp_path: Path) -> None:
     state = SessionRuntimeState(session_id="sess_test")
     summarizer = FakeSummarizer(
         [
@@ -539,7 +539,7 @@ def test_l4_retries_no_summary_once_then_succeeds(tmp_path: Path) -> None:
     assert state.latest_checkpoint_id == result.checkpoint.id
 
 
-def test_l4_passes_summary_mode_to_summarizer(tmp_path: Path) -> None:
+def test_l3_passes_summary_mode_to_summarizer(tmp_path: Path) -> None:
     summarizer = FakeSummarizer(
         [
             LlmCompactSummary(
@@ -564,7 +564,7 @@ def test_l4_passes_summary_mode_to_summarizer(tmp_path: Path) -> None:
     assert summarizer.summary_modes == ["stronger"]
 
 
-def test_l4_passes_current_turn_and_recent_turn_window_to_summarizer(tmp_path: Path) -> None:
+def test_l3_passes_current_turn_and_recent_turn_window_to_summarizer(tmp_path: Path) -> None:
     summarizer = FakeSummarizer(
         [
             LlmCompactSummary(
@@ -591,7 +591,7 @@ def test_l4_passes_current_turn_and_recent_turn_window_to_summarizer(tmp_path: P
     assert summarizer.recent_turn_windows == [3]
 
 
-def test_l4_candidate_failures_do_not_mutate_circuit_breaker(tmp_path: Path) -> None:
+def test_l3_candidate_failures_do_not_mutate_circuit_breaker(tmp_path: Path) -> None:
     state = SessionRuntimeState(session_id="sess_test")
 
     for _ in range(3):
@@ -645,7 +645,7 @@ def test_manual_compact_ignores_auto_circuit_breaker(tmp_path: Path) -> None:
     assert summarizer.calls == [["msg_1", "msg_2"]]
 
 
-def test_l4_rejects_checkpoint_tail_that_starts_with_tool_result(tmp_path: Path) -> None:
+def test_l3_rejects_checkpoint_tail_that_starts_with_tool_result(tmp_path: Path) -> None:
     view = SessionView(
         session_id="sess_test",
         messages=[

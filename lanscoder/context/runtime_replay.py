@@ -50,26 +50,26 @@ def _apply_event(state: SessionRuntimeState, event: SessionEvent) -> None:
         return
 
     if event.type == "llm_compaction_completed":
-        _apply_l4_compaction(state, event)
+        _apply_l3_compaction(state, event)
 
 
-def _apply_l4_compaction(state: SessionRuntimeState, event: SessionEvent) -> None:
+def _apply_l3_compaction(state: SessionRuntimeState, event: SessionEvent) -> None:
     payload = event.payload
-    l4_event = _event_payload(event)
-    source_fingerprint = l4_event.get("source_fingerprint")
+    l3_event = _event_payload(event)
+    source_fingerprint = l3_event.get("source_fingerprint")
     if source_fingerprint:
         state.last_compaction_input_fingerprint = str(source_fingerprint)
-    state.record_compaction_event(_compaction_history_entry(event, l4_event))
+    state.record_compaction_event(_compaction_history_entry(event, l3_event))
 
-    if l4_event.get("status") == "success":
-        checkpoint_id = l4_event.get("checkpoint_id")
+    if l3_event.get("status") == "success":
+        checkpoint_id = l3_event.get("checkpoint_id")
         if checkpoint_id:
             state.latest_checkpoint_id = str(checkpoint_id)
         state.record_auto_compact_success()
         return
 
-    if payload.get("trigger") == "auto" and l4_event.get("status") == "failed":
-        state.record_auto_compact_failure(str(l4_event.get("failure_reason") or "unknown"))
+    if payload.get("trigger") == "auto" and l3_event.get("status") == "failed":
+        state.record_auto_compact_failure(str(l3_event.get("failure_reason") or "unknown"))
 
 
 def _event_payload(event: SessionEvent) -> dict[str, object]:

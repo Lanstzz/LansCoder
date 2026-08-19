@@ -200,8 +200,8 @@ def test_app_user_flow_e2e_reads_file_renames_shares_resumes_and_continues(tmp_p
     assert provider.requests[-1].messages[-1].content.endswith("继续")
 
 
-def test_prompt_too_long_e2e_writes_l4_checkpoint_and_retries_with_summary(tmp_path) -> None:
-    """模拟上下文过长后的 L4 摘要恢复链路。"""
+def test_prompt_too_long_e2e_writes_l3_checkpoint_and_retries_with_summary(tmp_path) -> None:
+    """模拟上下文过长后的 L3 摘要恢复链路。"""
 
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_prompt_retry", agents_md="规则")
@@ -218,7 +218,7 @@ def test_prompt_too_long_e2e_writes_l4_checkpoint_and_retries_with_summary(tmp_p
     context_manager = ContextWindowManager(
         store=store,
         config=ContextCompactionConfig(recent_turn_window=1),
-        l4_service=LlmCompactService(
+        l3_service=LlmCompactService(
             store=store,
             summarizer=ProviderLlmCompactSummarizer(provider),
         ),
@@ -253,7 +253,7 @@ def _compact_manager(store: JsonlSessionStore, provider: ChatProvider, *, reason
             max_turn_tool_result_tokens=max_turn_tool_result_tokens,
             recent_turn_window=1,
         ),
-        l4_service=LlmCompactService(
+        l3_service=LlmCompactService(
             store=store,
             summarizer=ProviderLlmCompactSummarizer(provider),
         ),
@@ -314,9 +314,9 @@ def test_auto_token_threshold_e2e_writes_compaction_and_checkpoint(tmp_path) -> 
     compact = _compact_events(store, "sess_auto_token")[0]
     assert compact.payload["trigger"] == "auto"
     assert compact.payload["reason"] == "not_reached"
-    l4_event = _llm_compact_events(store, "sess_auto_token")[0]
-    assert l4_event.payload["trigger"] == "auto"
-    assert l4_event.payload["reason"] == "still_over_budget"
+    l3_event = _llm_compact_events(store, "sess_auto_token")[0]
+    assert l3_event.payload["trigger"] == "auto"
+    assert l3_event.payload["reason"] == "still_over_budget"
     assert _checkpoint_events(store, "sess_auto_token") == []
     normal_requests = [request for request in provider.requests if request.tools]
     assert normal_requests[-1].messages[-1].content.endswith("触发 token 阈值 ")
@@ -405,7 +405,7 @@ def test_auto_tail_message_count_does_not_bypass_dynamic_watermark(tmp_path) -> 
     assert _checkpoint_events(store, "sess_tail_count") == []
 
 
-def test_manual_compact_command_e2e_writes_l4_handoff_when_only_current_plain_dialogue_remains(tmp_path) -> None:
+def test_manual_compact_command_e2e_writes_l3_handoff_when_only_current_plain_dialogue_remains(tmp_path) -> None:
     provider = FakeProvider(
         [
             ChatResponse(provider="fake", model="fake-model", content="旧回复"),
@@ -433,8 +433,8 @@ def test_manual_compact_command_e2e_writes_l4_handoff_when_only_current_plain_di
     compact = _compact_events(store, "sess_manual_compact")[0]
     assert compact.payload["trigger"] == "manual"
     event = compact.payload["event"]
-    # L1-L3 must not route/trim current plain dialogue. It remains for the
-    # semantic L4 checkpoint, rather than becoming the old L3 text preview.
+    # L1-L2 must not route/trim current plain dialogue. It remains for the
+    # semantic L3 checkpoint, rather than becoming the old L2 text preview.
     assert event["changed_parts"] == 0
     assert event["replacements"] == []
     checkpoints = _checkpoint_events(store, "sess_manual_compact")

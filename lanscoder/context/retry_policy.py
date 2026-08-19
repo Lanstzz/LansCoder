@@ -1,4 +1,4 @@
-"""L4 compact 的有限重试策略。"""
+"""L3 compact 的有限重试策略。"""
 
 from __future__ import annotations
 

@@ -514,7 +514,7 @@ def test_factory_background_controls_remain_session_scoped(tmp_path: Path) -> No
         manager.shutdown()
 
 
-def test_create_lanscoder_app_wires_l4_service_for_default_context_manager(tmp_path: Path) -> None:
+def test_create_lanscoder_app_wires_l3_service_for_default_context_manager(tmp_path: Path) -> None:
     app = create_lanscoder_app(
         project_root=tmp_path,
         data_root=tmp_path / ".lanscoder",
@@ -523,7 +523,7 @@ def test_create_lanscoder_app_wires_l4_service_for_default_context_manager(tmp_p
         tools=[],
     )
 
-    assert isinstance(app.chat_runner.context_manager.l4_service, LlmCompactService)
+    assert isinstance(app.chat_runner.context_manager.l3_service, LlmCompactService)
 
 
 def test_create_lanscoder_app_persists_permission_grants(tmp_path: Path) -> None:

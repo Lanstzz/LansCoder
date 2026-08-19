@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-FallbackAction = Literal["stronger_programmatic", "retry_l4_stronger_summary", "fail"]
+FallbackAction = Literal["stronger_programmatic", "retry_l3_stronger_summary", "fail"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,11 +26,11 @@ class FallbackStep:
 
 @dataclass(frozen=True, slots=True)
 class CompactFallbackPolicy:
-    """根据 L4 失败原因选择有限 fallback。"""
+    """根据 L3 失败原因选择有限 fallback。"""
 
     def action_for(self, reason: str | None) -> FallbackAction:
         if reason == "prompt_too_long":
             return "stronger_programmatic"
         if reason in {"timeout", "no_summary"}:
-            return "retry_l4_stronger_summary"
+            return "retry_l3_stronger_summary"
         return "fail"

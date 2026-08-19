@@ -1157,7 +1157,7 @@ class AgentLoop:
     ):
         """把压缩触发交给 context manager。
 
-        AgentLoop 不判断 token 细节，也不决定 L1/L2/L3/L4 怎么做；它只在关键时机告诉
+        AgentLoop 不判断 token 细节，也不决定 L1/L2/L3 怎么做；它只在关键时机告诉
         context 层：“现在可能需要整理上下文了”。
         """
 

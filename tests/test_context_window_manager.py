@@ -32,7 +32,7 @@ class FakePipeline:
         return self.results.pop(0)
 
 
-class FakeL4:
+class FakeL3:
     def __init__(self, result: LlmCompactCandidate | list[LlmCompactCandidate]) -> None:
         self.results = list(result) if isinstance(result, list) else [result]
         self.calls = []
@@ -51,12 +51,12 @@ class FakeL4:
         return candidate.checkpoint
 
 
-class WritingFakeL4:
+class WritingFakeL3:
     def __init__(
         self,
         store: JsonlSessionStore,
         *,
-        summary: str = "L4 摘要",
+        summary: str = "L3 摘要",
         tail_start_message_id: str = "msg_1",
         covered_until_message_id: str = "msg_1",
     ) -> None:
@@ -73,13 +73,13 @@ class WritingFakeL4:
             summary=self.summary,
             tail_start_message_id=self.tail_start_message_id,
             covered_until_message_id=self.covered_until_message_id,
-            source_fingerprint="fp_l4",
+            source_fingerprint="fp_l3",
         )
         return LlmCompactCandidate(
             checkpoint=checkpoint,
             event=LlmCompactEvent(
                 status="success",
-                source_fingerprint="fp_l4",
+                source_fingerprint="fp_l3",
                 checkpoint_id=checkpoint.id,
             ),
         )
@@ -90,7 +90,7 @@ class WritingFakeL4:
         assert checkpoint is not None
         self.store.append_event(
             SessionEvent(
-                id="evt_l4",
+                id="evt_l3",
                 session_id=checkpoint.session_id,
                 type="checkpoint_created",
                 payload=checkpoint.to_dict(),
@@ -183,7 +183,7 @@ def test_manager_uses_high_watermark_for_auto_and_low_for_target(tmp_path) -> No
     manager = ContextWindowManager(
         store=JsonlSessionStore(tmp_path),
         pipeline=pipeline,
-        l4_service=None,
+        l3_service=None,
     )
 
     result = manager.compact_if_needed(
@@ -201,7 +201,7 @@ def test_manager_uses_high_watermark_for_auto_and_low_for_target(tmp_path) -> No
     assert pipeline.calls[0].target_tokens == 60
 
 
-def test_manager_fails_without_l4_when_fixed_context_exceeds_low_watermark(tmp_path) -> None:
+def test_manager_fails_without_l3_when_fixed_context_exceeds_low_watermark(tmp_path) -> None:
     pipeline = FakePipeline([])
     manager = ContextWindowManager(store=JsonlSessionStore(tmp_path), pipeline=pipeline)
 
@@ -224,11 +224,11 @@ def test_manager_fails_without_l4_when_fixed_context_exceeds_low_watermark(tmp_p
 def test_manager_reports_unconsumed_result_when_input_exceeds_capacity(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "content"))
-    l4 = FakeL4(_l4_result(status="failed", failure_reason="unconsumed_boundary"))
+    l3 = FakeL3(_l3_result(status="failed", failure_reason="unconsumed_boundary"))
     manager = ContextWindowManager(
         store=store,
         pipeline=FakePipeline(_programmatic_result(view, before_tokens=30_000, after_tokens=28_000)),
-        l4_service=l4,
+        l3_service=l3,
     )
     over_capacity = _budget(input_tokens=28_000)
 
@@ -245,9 +245,9 @@ def test_manager_reports_unconsumed_result_when_input_exceeds_capacity(tmp_path)
     assert result.status == "failed"
     assert result.reason == "unconsumed_result_over_budget"
     assert result.final_failure_reason == "unconsumed_result_over_budget"
-    assert result.l4_event is not None
-    assert result.l4_event.final_failure_reason == "unconsumed_result_over_budget"
-    assert l4.commit_calls == []
+    assert result.l3_event is not None
+    assert result.l3_event.final_failure_reason == "unconsumed_result_over_budget"
+    assert l3.commit_calls == []
 
 
 def _programmatic_result(
@@ -270,15 +270,15 @@ def _programmatic_result(
     )
 
 
-def _l4_result(*, status: str = "success", failure_reason: str | None = None) -> LlmCompactCandidate:
+def _l3_result(*, status: str = "success", failure_reason: str | None = None) -> LlmCompactCandidate:
     checkpoint = (
         Checkpoint(
             id="ckpt_test",
             session_id="sess_test",
-            summary="L4 summary",
+            summary="L3 summary",
             tail_start_message_id="msg_1",
             covered_until_message_id="msg_0",
-            source_fingerprint="fp_l4",
+            source_fingerprint="fp_l3",
         )
         if status == "success"
         else None
@@ -287,7 +287,7 @@ def _l4_result(*, status: str = "success", failure_reason: str | None = None) ->
         checkpoint=checkpoint,
         event=LlmCompactEvent(
             status=status,
-            source_fingerprint="fp_l4",
+            source_fingerprint="fp_l3",
             retry_count=0,
             failure_reason=failure_reason if status != "success" else None,
             checkpoint_id="ckpt_test" if status == "success" else None,
@@ -299,11 +299,11 @@ def test_manager_skips_compact_when_under_threshold(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "short"))
     pipeline = FakePipeline(_programmatic_result(view))
-    l4 = FakeL4(_l4_result())
+    l3 = FakeL3(_l3_result())
     manager = ContextWindowManager(
         store=store,
         pipeline=pipeline,
-        l4_service=l4,
+        l3_service=l3,
     )
 
     result = manager.compact_if_needed(
@@ -318,7 +318,7 @@ def test_manager_skips_compact_when_under_threshold(tmp_path: Path) -> None:
     assert result.status == "skipped"
     assert result.reason == "under_threshold"
     assert pipeline.calls == []
-    assert l4.calls == []
+    assert l3.calls == []
     assert store.list_events("sess_test") == []
 
 
@@ -331,7 +331,7 @@ def test_manager_skips_repeated_auto_noop_without_persisting_a_second_completion
     manager = ContextWindowManager(
         store=store,
         pipeline=FakePipeline(noop),
-        l4_service=FakeL4(_l4_result()),
+        l3_service=FakeL3(_l3_result()),
         config=ContextCompactionConfig(),
     )
 
@@ -360,7 +360,7 @@ def test_manager_skips_repeated_auto_noop_without_persisting_a_second_completion
     assert [event.type for event in store.list_events("sess_test")] == ["compaction_skipped"]
 
 
-def test_manager_reports_still_over_budget_after_successful_l4_checkpoint(tmp_path: Path) -> None:
+def test_manager_reports_still_over_budget_after_successful_l3_checkpoint(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     writer = SessionEventWriter(store=store, session_id="sess_test")
     message_id = writer.append_user_message("x" * 80)
@@ -369,7 +369,7 @@ def test_manager_reports_still_over_budget_after_successful_l4_checkpoint(tmp_pa
     manager = ContextWindowManager(
         store=store,
         pipeline=pipeline,
-        l4_service=WritingFakeL4(store, tail_start_message_id=message_id, covered_until_message_id=message_id),
+        l3_service=WritingFakeL3(store, tail_start_message_id=message_id, covered_until_message_id=message_id),
         config=ContextCompactionConfig(),
     )
 
@@ -384,9 +384,9 @@ def test_manager_reports_still_over_budget_after_successful_l4_checkpoint(tmp_pa
 
     assert result.status == "failed"
     assert result.reason == "still_over_budget"
-    assert result.l4_event is not None
-    assert result.l4_event.status == "failed"
-    assert manager.l4_service.commit_calls == []
+    assert result.l3_event is not None
+    assert result.l3_event.status == "failed"
+    assert manager.l3_service.commit_calls == []
     assert [event.type for event in store.list_events("sess_test")] == [
         "user_message",
         "compaction_completed",
@@ -407,7 +407,7 @@ def test_manual_and_prompt_too_long_enable_forced_route_compaction(tmp_path: Pat
                 _programmatic_result(view, before_tokens=1000, after_tokens=100),
             ]
         ),
-        l4_service=FakeL4(_l4_result()),
+        l3_service=FakeL3(_l3_result()),
     )
     state = SessionRuntimeState(session_id="sess_test")
 
@@ -439,7 +439,7 @@ def test_manual_and_prompt_too_long_enable_forced_route_compaction(tmp_path: Pat
     assert manager.pipeline.calls[2].force_route_current_text is True
 
 
-def test_manager_runs_l4_only_after_l1_l3_fail_target(tmp_path: Path) -> None:
+def test_manager_runs_l3_only_after_l1_l2_fail_target(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
     pipeline = FakePipeline(
@@ -450,11 +450,11 @@ def test_manager_runs_l4_only_after_l1_l3_fail_target(tmp_path: Path) -> None:
             stopped_at="not_reached",
         )
     )
-    l4 = FakeL4(_l4_result())
+    l3 = FakeL3(_l3_result())
     manager = ContextWindowManager(
         store=store,
         pipeline=pipeline,
-        l4_service=l4,
+        l3_service=l3,
     )
 
     result = manager.compact_if_needed(
@@ -467,26 +467,26 @@ def test_manager_runs_l4_only_after_l1_l3_fail_target(tmp_path: Path) -> None:
     )
 
     assert result.status == "success"
-    assert result.l4_event is not None
-    assert len(l4.calls) == 1
-    assert l4.calls[0].mode == "auto"
-    assert l4.calls[0].current_turn == 0
-    assert l4.calls[0].recent_turn_window == 10
+    assert result.l3_event is not None
+    assert len(l3.calls) == 1
+    assert l3.calls[0].mode == "auto"
+    assert l3.calls[0].current_turn == 0
+    assert l3.calls[0].recent_turn_window == 10
     assert [event.type for event in store.list_events("sess_test")] == [
         "compaction_completed",
         "llm_compaction_completed",
     ]
 
 
-def test_manager_threads_current_turn_and_recent_turn_window_to_l4(tmp_path: Path) -> None:
+def test_manager_threads_current_turn_and_recent_turn_window_to_l3(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
     pipeline = FakePipeline(_programmatic_result(view, after_tokens=900, stopped_at="not_reached"))
-    l4 = FakeL4(_l4_result())
+    l3 = FakeL3(_l3_result())
     manager = ContextWindowManager(
         store=store,
         pipeline=pipeline,
-        l4_service=l4,
+        l3_service=l3,
         config=ContextCompactionConfig(recent_turn_window=3),
     )
 
@@ -501,12 +501,12 @@ def test_manager_threads_current_turn_and_recent_turn_window_to_l4(tmp_path: Pat
     )
 
     assert result.status == "success"
-    assert len(l4.calls) == 1
-    assert l4.calls[0].current_turn == 5
-    assert l4.calls[0].recent_turn_window == 3
+    assert len(l3.calls) == 1
+    assert l3.calls[0].current_turn == 5
+    assert l3.calls[0].recent_turn_window == 3
 
 
-def test_manager_persists_l4_missing_failure_for_replay(tmp_path: Path) -> None:
+def test_manager_persists_l3_missing_failure_for_replay(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
     pipeline = FakePipeline(
@@ -520,7 +520,7 @@ def test_manager_persists_l4_missing_failure_for_replay(tmp_path: Path) -> None:
     manager = ContextWindowManager(
         store=store,
         pipeline=pipeline,
-        l4_service=None,
+        l3_service=None,
     )
     runtime_state = SessionRuntimeState(session_id="sess_test")
 
@@ -534,10 +534,10 @@ def test_manager_persists_l4_missing_failure_for_replay(tmp_path: Path) -> None:
 
     events = store.list_events("sess_test")
     assert result.status == "failed"
-    assert result.reason == "l4_service_missing"
+    assert result.reason == "l3_service_missing"
     assert [event.type for event in events] == ["compaction_completed", "llm_compaction_completed"]
     assert events[-1].payload["status"] == "failed"
-    assert events[-1].payload["reason"] == "l4_service_missing"
+    assert events[-1].payload["reason"] == "l3_service_missing"
 
 
 def test_manager_uses_effective_tokens_after_programmatic_compaction(tmp_path: Path) -> None:
@@ -573,10 +573,10 @@ def test_manager_uses_effective_tokens_after_programmatic_compaction(tmp_path: P
             )
         ],
     )
-    l4 = FakeL4(_l4_result())
+    l3 = FakeL3(_l3_result())
     manager = ContextWindowManager(
         store=store,
-        l4_service=l4,
+        l3_service=l3,
         config=ContextCompactionConfig(
             large_tool_result_tokens=20,
         ),
@@ -592,13 +592,13 @@ def test_manager_uses_effective_tokens_after_programmatic_compaction(tmp_path: P
 
     assert result.status == "skipped"
     assert result.reason == "skipped_no_effect"
-    assert result.l4_event is None
-    assert l4.calls == []
+    assert result.l3_event is None
+    assert l3.calls == []
     assert result.after_tokens <= 1_000
     assert [event.type for event in store.list_events("sess_test")] == ["compaction_skipped"]
 
 
-def test_manager_returns_rebuilt_view_after_l4_writes_checkpoint(tmp_path: Path) -> None:
+def test_manager_returns_rebuilt_view_after_l3_writes_checkpoint(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
     store.append_event(
@@ -615,7 +615,7 @@ def test_manager_returns_rebuilt_view_after_l4_writes_checkpoint(tmp_path: Path)
     manager = ContextWindowManager(
         store=store,
         pipeline=FakePipeline(_programmatic_result(view, after_tokens=900, stopped_at="not_reached")),
-        l4_service=WritingFakeL4(store),
+        l3_service=WritingFakeL3(store),
     )
 
     result = manager.compact_if_needed(
@@ -631,7 +631,7 @@ def test_manager_returns_rebuilt_view_after_l4_writes_checkpoint(tmp_path: Path)
     assert [checkpoint.id for checkpoint in result.view.checkpoints] == ["ckpt_test"]
 
 
-def test_manager_reports_effective_tokens_after_l4_rebuild(tmp_path: Path) -> None:
+def test_manager_reports_effective_tokens_after_l3_rebuild(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(
         _message("msg_old", "old context " * 4_000),
@@ -653,7 +653,7 @@ def test_manager_reports_effective_tokens_after_l4_rebuild(tmp_path: Path) -> No
     manager = ContextWindowManager(
         store=store,
         pipeline=FakePipeline(_programmatic_result(view, after_tokens=5_001, stopped_at="not_reached")),
-        l4_service=WritingFakeL4(
+        l3_service=WritingFakeL3(
             store,
             summary="short checkpoint",
             tail_start_message_id="msg_tail",
@@ -679,11 +679,11 @@ def test_manager_reports_effective_tokens_after_l4_rebuild(tmp_path: Path) -> No
 def test_manual_compact_ignores_auto_circuit_breaker(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
-    l4 = FakeL4(_l4_result())
+    l3 = FakeL3(_l3_result())
     manager = ContextWindowManager(
         store=store,
         pipeline=FakePipeline(_programmatic_result(view, after_tokens=900, stopped_at="not_reached")),
-        l4_service=l4,
+        l3_service=l3,
     )
 
     result = manager.compact_if_needed(
@@ -699,19 +699,19 @@ def test_manual_compact_ignores_auto_circuit_breaker(tmp_path: Path) -> None:
     )
 
     assert result.status == "success"
-    assert len(l4.calls) == 1
-    assert l4.calls[0].mode == "manual"
+    assert len(l3.calls) == 1
+    assert l3.calls[0].mode == "manual"
 
 
 def test_manual_compact_honors_explicit_lower_target(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 4_000))
     pipeline = FakePipeline(_programmatic_result(view, after_tokens=900, stopped_at="not_reached"))
-    l4 = FakeL4(_l4_result())
+    l3 = FakeL3(_l3_result())
     manager = ContextWindowManager(
         store=store,
         pipeline=pipeline,
-        l4_service=l4,
+        l3_service=l3,
     )
 
     result = manager.compact_if_needed(
@@ -726,7 +726,7 @@ def test_manual_compact_honors_explicit_lower_target(tmp_path: Path) -> None:
 
     assert result.status == "success"
     assert pipeline.calls[0].target_tokens == 40
-    assert len(l4.calls) == 1
+    assert len(l3.calls) == 1
 
 
 def test_manager_handles_prompt_too_long_as_blocking_trigger(tmp_path: Path) -> None:
@@ -736,7 +736,7 @@ def test_manager_handles_prompt_too_long_as_blocking_trigger(tmp_path: Path) -> 
     manager = ContextWindowManager(
         store=store,
         pipeline=pipeline,
-        l4_service=FakeL4(_l4_result()),
+        l3_service=FakeL3(_l3_result()),
     )
 
     result = manager.compact_if_needed(
@@ -752,7 +752,7 @@ def test_manager_handles_prompt_too_long_as_blocking_trigger(tmp_path: Path) -> 
     assert pipeline.calls[0].target_tokens == 60
 
 
-def test_manager_runs_stronger_programmatic_fallback_after_prompt_too_long_l4_failure(tmp_path: Path) -> None:
+def test_manager_runs_stronger_programmatic_fallback_after_prompt_too_long_l3_failure(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     first_programmatic = _programmatic_result(view, before_tokens=1200, after_tokens=900, stopped_at="not_reached")
@@ -764,11 +764,11 @@ def test_manager_runs_stronger_programmatic_fallback_after_prompt_too_long_l4_fa
         stopped_at="l1",
     )
     pipeline = FakePipeline([first_programmatic, stronger_programmatic])
-    l4 = FakeL4(_l4_result(status="failed", failure_reason="prompt_too_long"))
+    l3 = FakeL3(_l3_result(status="failed", failure_reason="prompt_too_long"))
     manager = ContextWindowManager(
         store=store,
         pipeline=pipeline,
-        l4_service=l4,
+        l3_service=l3,
     )
 
     result = manager.compact_if_needed(
@@ -782,12 +782,12 @@ def test_manager_runs_stronger_programmatic_fallback_after_prompt_too_long_l4_fa
     assert result.status == "success"
     assert result.after_tokens <= 200
     assert len(pipeline.calls) == 2
-    assert len(l4.calls) == 1
+    assert len(l3.calls) == 1
     assert result.fallback_steps[0]["action"] == "stronger_programmatic"
     assert result.fallback_steps[0]["status"] == "success"
 
 
-def test_programmatic_fallback_success_records_successful_l4_event_for_replay(tmp_path: Path) -> None:
+def test_programmatic_fallback_success_records_successful_l3_event_for_replay(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     first_programmatic = _programmatic_result(view, before_tokens=1200, after_tokens=900, stopped_at="not_reached")
@@ -796,7 +796,7 @@ def test_programmatic_fallback_success_records_successful_l4_event_for_replay(tm
     manager = ContextWindowManager(
         store=store,
         pipeline=FakePipeline([first_programmatic, stronger_programmatic]),
-        l4_service=FakeL4(_l4_result(status="failed", failure_reason="prompt_too_long")),
+        l3_service=FakeL3(_l3_result(status="failed", failure_reason="prompt_too_long")),
     )
 
     manager.compact_if_needed(
@@ -807,28 +807,28 @@ def test_programmatic_fallback_success_records_successful_l4_event_for_replay(tm
         )
     )
 
-    l4_events = [event for event in store.list_events("sess_test") if event.type == "llm_compaction_completed"]
-    assert l4_events[0].payload["status"] == "success"
-    assert l4_events[0].payload["reason"] == "fallback_success"
-    assert l4_events[0].payload["event"]["fallback_steps"][0]["status"] == "success"
+    l3_events = [event for event in store.list_events("sess_test") if event.type == "llm_compaction_completed"]
+    assert l3_events[0].payload["status"] == "success"
+    assert l3_events[0].payload["reason"] == "fallback_success"
+    assert l3_events[0].payload["event"]["fallback_steps"][0]["status"] == "success"
 
 
-def test_prompt_too_long_fallback_retries_l4_when_still_over_budget(tmp_path: Path) -> None:
+def test_prompt_too_long_fallback_retries_l3_when_still_over_budget(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     first_programmatic = _programmatic_result(view, before_tokens=1200, after_tokens=900, stopped_at="not_reached")
     stronger_programmatic = _programmatic_result(view, before_tokens=900, after_tokens=800, stopped_at="not_reached")
     pipeline = FakePipeline([first_programmatic, stronger_programmatic])
-    l4 = FakeL4(
+    l3 = FakeL3(
         [
-            _l4_result(status="failed", failure_reason="prompt_too_long"),
-            _l4_result(status="success"),
+            _l3_result(status="failed", failure_reason="prompt_too_long"),
+            _l3_result(status="success"),
         ]
     )
     manager = ContextWindowManager(
         store=store,
         pipeline=pipeline,
-        l4_service=l4,
+        l3_service=l3,
     )
 
     result = manager.compact_if_needed(
@@ -841,15 +841,15 @@ def test_prompt_too_long_fallback_retries_l4_when_still_over_budget(tmp_path: Pa
 
     assert result.status == "success"
     assert len(pipeline.calls) == 2
-    assert len(l4.calls) == 2
-    assert l4.calls[1].summary_mode == "stronger"
+    assert len(l3.calls) == 2
+    assert l3.calls[1].summary_mode == "stronger"
     assert result.fallback_steps[0]["action"] == "stronger_programmatic"
     assert result.fallback_steps[0]["status"] == "failed"
-    assert result.fallback_steps[1]["action"] == "retry_l4_stronger_summary"
+    assert result.fallback_steps[1]["action"] == "retry_l3_stronger_summary"
     assert result.fallback_steps[1]["status"] == "success"
 
 
-def test_prompt_too_long_retry_records_one_l4_event_with_fallback_steps(tmp_path: Path) -> None:
+def test_prompt_too_long_retry_records_one_l3_event_with_fallback_steps(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     pipeline = FakePipeline(
@@ -858,16 +858,16 @@ def test_prompt_too_long_retry_records_one_l4_event_with_fallback_steps(tmp_path
             _programmatic_result(view, before_tokens=900, after_tokens=800, stopped_at="not_reached"),
         ]
     )
-    l4 = FakeL4(
+    l3 = FakeL3(
         [
-            _l4_result(status="failed", failure_reason="prompt_too_long"),
-            _l4_result(status="success"),
+            _l3_result(status="failed", failure_reason="prompt_too_long"),
+            _l3_result(status="success"),
         ]
     )
     manager = ContextWindowManager(
         store=store,
         pipeline=pipeline,
-        l4_service=l4,
+        l3_service=l3,
     )
 
     manager.compact_if_needed(
@@ -878,26 +878,26 @@ def test_prompt_too_long_retry_records_one_l4_event_with_fallback_steps(tmp_path
         )
     )
 
-    l4_events = [event for event in store.list_events("sess_test") if event.type == "llm_compaction_completed"]
-    assert len(l4_events) == 1
-    assert l4_events[0].payload["status"] == "success"
-    assert len(l4_events[0].payload["event"]["fallback_steps"]) == 2
+    l3_events = [event for event in store.list_events("sess_test") if event.type == "llm_compaction_completed"]
+    assert len(l3_events) == 1
+    assert l3_events[0].payload["status"] == "success"
+    assert len(l3_events[0].payload["event"]["fallback_steps"]) == 2
 
 
-def test_manager_retries_l4_once_after_no_summary_with_stronger_summary_mode(tmp_path: Path) -> None:
+def test_manager_retries_l3_once_after_no_summary_with_stronger_summary_mode(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=900, stopped_at="not_reached"))
-    l4 = FakeL4(
+    l3 = FakeL3(
         [
-            _l4_result(status="failed", failure_reason="no_summary"),
-            _l4_result(status="success"),
+            _l3_result(status="failed", failure_reason="no_summary"),
+            _l3_result(status="success"),
         ]
     )
     manager = ContextWindowManager(
         store=store,
         pipeline=pipeline,
-        l4_service=l4,
+        l3_service=l3,
     )
 
     result = manager.compact_if_needed(
@@ -909,26 +909,26 @@ def test_manager_retries_l4_once_after_no_summary_with_stronger_summary_mode(tmp
     )
 
     assert result.status == "success"
-    assert len(l4.calls) == 2
-    assert l4.calls[1].summary_mode == "stronger"
-    assert result.fallback_steps[0]["action"] == "retry_l4_stronger_summary"
+    assert len(l3.calls) == 2
+    assert l3.calls[1].summary_mode == "stronger"
+    assert result.fallback_steps[0]["action"] == "retry_l3_stronger_summary"
     assert result.fallback_steps[0]["status"] == "success"
 
 
-def test_manager_records_fallback_steps_in_l4_event_payload(tmp_path: Path) -> None:
+def test_manager_records_fallback_steps_in_l3_event_payload(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=900, stopped_at="not_reached"))
-    l4 = FakeL4(
+    l3 = FakeL3(
         [
-            _l4_result(status="failed", failure_reason="no_summary"),
-            _l4_result(status="success"),
+            _l3_result(status="failed", failure_reason="no_summary"),
+            _l3_result(status="success"),
         ]
     )
     manager = ContextWindowManager(
         store=store,
         pipeline=pipeline,
-        l4_service=l4,
+        l3_service=l3,
     )
 
     manager.compact_if_needed(
@@ -940,25 +940,25 @@ def test_manager_records_fallback_steps_in_l4_event_payload(tmp_path: Path) -> N
     )
 
     events = store.list_events("sess_test")
-    l4_events = [event for event in events if event.type == "llm_compaction_completed"]
-    assert len(l4_events) == 1
-    assert l4_events[0].payload["event"]["fallback_steps"][0]["action"] == "retry_l4_stronger_summary"
-    assert l4_events[0].payload["event"]["final_failure_reason"] is None
+    l3_events = [event for event in events if event.type == "llm_compaction_completed"]
+    assert len(l3_events) == 1
+    assert l3_events[0].payload["event"]["fallback_steps"][0]["action"] == "retry_l3_stronger_summary"
+    assert l3_events[0].payload["event"]["final_failure_reason"] is None
 
 
 def test_manual_compact_reports_fallback_failure_reason(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=900, stopped_at="not_reached"))
-    l4 = FakeL4(
+    l3 = FakeL3(
         [
-            _l4_result(status="failed", failure_reason="provider_error"),
+            _l3_result(status="failed", failure_reason="provider_error"),
         ]
     )
     manager = ContextWindowManager(
         store=store,
         pipeline=pipeline,
-        l4_service=l4,
+        l3_service=l3,
     )
 
     result = manager.compact_if_needed(
@@ -980,11 +980,11 @@ def test_auto_compact_failure_after_fallback_updates_circuit_breaker(tmp_path: P
     view = _view(_message("msg_1", "long" * 800))
     state = SessionRuntimeState(session_id="sess_test", auto_compact_failure_count=2)
     pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=900, stopped_at="not_reached"))
-    l4 = FakeL4(_l4_result(status="failed", failure_reason="provider_error"))
+    l3 = FakeL3(_l3_result(status="failed", failure_reason="provider_error"))
     manager = ContextWindowManager(
         store=store,
         pipeline=pipeline,
-        l4_service=l4,
+        l3_service=l3,
     )
 
     result = manager.compact_if_needed(

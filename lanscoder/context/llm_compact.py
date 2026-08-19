@@ -1,4 +1,4 @@
-"""L4 LLM compact 的 MVP 实现。"""
+"""L3 LLM compact 的 MVP 实现。"""
 
 from __future__ import annotations
 
@@ -49,11 +49,11 @@ class NoSummaryError(RuntimeError):
 
 
 class InvalidLlmCheckpointBoundaryError(ValueError):
-    """L4 summarizer 返回的 checkpoint 边界会破坏 resume 投影。"""
+    """L3 summarizer 返回的 checkpoint 边界会破坏 resume 投影。"""
 
 
 class UnconsumedLlmCheckpointBoundaryError(InvalidLlmCheckpointBoundaryError):
-    """L4 boundary would hide a tool result before its first successful projection."""
+    """L3 boundary would hide a tool result before its first successful projection."""
 
 
 class LlmSourceFingerprintMismatchError(ValueError):
@@ -121,12 +121,12 @@ class LlmCompactService:
     auto_failure_limit: int = 3
 
     def generate_candidate(self, request: LlmCompactRequest) -> LlmCompactCandidate:
-        source = _build_l4_source(request.view)
+        source = _build_l3_source(request.view)
         source_messages = source.messages
         source_fingerprint = _source_fingerprint(request.view.session_id, source)
         if request.expected_source_fingerprint and request.expected_source_fingerprint != source_fingerprint:
             raise LlmSourceFingerprintMismatchError(
-                "expected_source_fingerprint does not match current L4 source",
+                "expected_source_fingerprint does not match current L3 source",
             )
 
         if request.runtime_state.last_compaction_input_fingerprint == source_fingerprint:
@@ -201,7 +201,7 @@ class LlmCompactService:
     ) -> Checkpoint:
         checkpoint = candidate.checkpoint
         if checkpoint is None or candidate.event.status != "success":
-            raise ValueError("only successful L4 candidates can be committed")
+            raise ValueError("only successful L3 candidates can be committed")
         self.store.append_event(
             SessionEvent(
                 id=new_event_id(),
@@ -216,14 +216,14 @@ class LlmCompactService:
 
 
 @dataclass(frozen=True, slots=True)
-class L4Source:
+class L3Source:
     messages: list[AgentMessage]
     base_checkpoint_id: str | None = None
     tail_message_ids: tuple[str, ...] = ()
 
 
 def _conversation_messages_only(view: SessionView) -> list[AgentMessage]:
-    """L4 摘要只看会话历史。
+    """L3 摘要只看会话历史。
 
     system prompt、工具 schema 和 provider 能力属于 stable prefix/cache 输入，不属于可被 LLM
     总结折叠的历史。如果把它们混入 summary，resume 时容易污染系统提示词保护边界。
@@ -232,16 +232,16 @@ def _conversation_messages_only(view: SessionView) -> list[AgentMessage]:
     return [message for message in view.messages if message.role != "system_meta"]
 
 
-def _build_l4_source(view: SessionView) -> L4Source:
+def _build_l3_source(view: SessionView) -> L3Source:
     messages = _conversation_messages_only(view)
     checkpoint = CheckpointIndex(view.checkpoints).latest()
     if checkpoint is None:
-        return L4Source(messages=messages, tail_message_ids=tuple(message.id for message in messages))
+        return L3Source(messages=messages, tail_message_ids=tuple(message.id for message in messages))
 
     for index, message in enumerate(messages):
         if message.id == checkpoint.tail_start_message_id:
             tail = messages[index:]
-            return L4Source(
+            return L3Source(
                 messages=[_checkpoint_summary_message(view.session_id, checkpoint), *tail],
                 base_checkpoint_id=checkpoint.id,
                 tail_message_ids=tuple(message.id for message in tail),
@@ -274,7 +274,7 @@ def _checkpoint_summary_message(session_id: str, checkpoint: Checkpoint) -> Agen
 def _validate_summary_boundary(
     summary: LlmCompactSummary,
     *,
-    source: L4Source,
+    source: L3Source,
     consumed_tool_result_part_ids: frozenset[str],
 ) -> None:
     if source.base_checkpoint_id is None:
@@ -284,11 +284,11 @@ def _validate_summary_boundary(
 
     if summary.tail_start_message_id not in valid_ids:
         raise InvalidLlmCheckpointBoundaryError(
-            "tail_start_message_id must stay within current L4 input tail",
+            "tail_start_message_id must stay within current L3 input tail",
         )
     if summary.covered_until_message_id not in valid_ids:
         raise InvalidLlmCheckpointBoundaryError(
-            "covered_until_message_id must stay within current L4 input tail",
+            "covered_until_message_id must stay within current L3 input tail",
         )
 
     tail_order = {message_id: index for index, message_id in enumerate(source.tail_message_ids)}
@@ -340,14 +340,14 @@ def _earliest_unconsumed_transaction_index(
     return earliest
 
 
-def _source_tail_messages(source: L4Source) -> list[AgentMessage]:
+def _source_tail_messages(source: L3Source) -> list[AgentMessage]:
     if source.base_checkpoint_id is None:
         return source.messages
     tail_ids = set(source.tail_message_ids)
     return [message for message in source.messages if message.id in tail_ids]
 
 
-def _source_fingerprint(session_id: str, source: L4Source) -> str:
+def _source_fingerprint(session_id: str, source: L3Source) -> str:
     return stable_json_hash(
         {
             "session_id": session_id,
@@ -364,7 +364,7 @@ def _candidate_checkpoint(
     view: SessionView,
     *,
     summary: LlmCompactSummary,
-    source: L4Source,
+    source: L3Source,
     source_fingerprint: str,
     retry_count: int,
 ) -> Checkpoint:
@@ -377,7 +377,7 @@ def _candidate_checkpoint(
         source_fingerprint=source_fingerprint,
         sequence=max((checkpoint.sequence for checkpoint in view.checkpoints), default=0) + 1,
         metadata={
-            "created_by": "l4_llm_compact",
+            "created_by": "l3_llm_compact",
             "summary_prompt_scope": "conversation_history_only",
             "retry_count": retry_count,
             "base_checkpoint_id": source.base_checkpoint_id,
@@ -424,7 +424,7 @@ def _summarize(
 
 
 def normalize_coding_handoff(summary: str, headings: tuple[str, ...] = CODING_HANDOFF_HEADINGS) -> str:
-    """Normalize provider output into a stable L4 summary contract.
+    """Normalize provider output into a stable L3 summary contract.
 
     The model supplies only prose; local code owns the public checkpoint
     structure.  Matching sections retain their supplied body (including a

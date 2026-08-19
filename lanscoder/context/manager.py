@@ -40,7 +40,7 @@ class ProgrammaticCompactor(Protocol):
     def compact(self, request: CompactionRequest): ...
 
 
-class L4Compactor(Protocol):
+class L3Compactor(Protocol):
     def generate_candidate(self, request: LlmCompactRequest) -> LlmCompactCandidate: ...
 
     def commit_candidate(
@@ -71,7 +71,7 @@ class ContextCompactResult:
     before_tokens: int
     after_tokens: int
     programmatic_event: CompactionEvent | None = None
-    l4_event: LlmCompactEvent | None = None
+    l3_event: LlmCompactEvent | None = None
     fallback_steps: list[dict[str, object]] | None = None
     final_failure_reason: str | None = None
 
@@ -86,11 +86,11 @@ class _CandidateOutcome:
 
 @dataclass(slots=True)
 class ContextWindowManager:
-    """用一次 provider-facing budget 编排 L1-L4。"""
+    """用一次 provider-facing budget 编排 L1-L3。"""
 
     store: JsonlSessionStore
     pipeline: ProgrammaticCompactor | None = None
-    l4_service: L4Compactor | None = None
+    l3_service: L3Compactor | None = None
     config: ContextCompactionConfig | None = None
     fallback_policy: CompactFallbackPolicy = CompactFallbackPolicy()
 
@@ -182,8 +182,8 @@ class ContextWindowManager:
                 programmatic_event=programmatic.event,
             )
 
-        if self.l4_service is None:
-            return self._final_l4_failure(
+        if self.l3_service is None:
+            return self._final_l3_failure(
                 request=request,
                 trigger=trigger,
                 mode=mode,
@@ -195,14 +195,14 @@ class ContextWindowManager:
                 event=LlmCompactEvent(
                     status="failed",
                     source_fingerprint=programmatic.event.input_fingerprint,
-                    failure_reason="l4_service_missing",
+                    failure_reason="l3_service_missing",
                 ),
-                reason="l4_service_missing",
+                reason="l3_service_missing",
             )
 
         outcome = self._generate_validate_commit(
             request=request,
-            l4_request=LlmCompactRequest(
+            l3_request=LlmCompactRequest(
                 view=programmatic.view,
                 runtime_state=request.runtime_state,
                 consumed_tool_result_part_ids=frozenset(request.runtime_state.consumed_tool_result_part_ids),
@@ -223,7 +223,7 @@ class ContextWindowManager:
                 before_failure_count=auto_failure_count_before,
             )
 
-        self._record_l4_event(
+        self._record_l3_event(
             session_id=request.view.session_id,
             trigger=trigger,
             target_tokens=target_tokens,
@@ -237,17 +237,17 @@ class ContextWindowManager:
             before_tokens=before_tokens,
             after_tokens=outcome.input_tokens,
             programmatic_event=programmatic.event,
-            l4_event=outcome.event,
+            l3_event=outcome.event,
         )
 
     def _generate_validate_commit(
         self,
         *,
         request: ContextCompactRequest,
-        l4_request: LlmCompactRequest,
+        l3_request: LlmCompactRequest,
         target_tokens: int,
     ) -> _CandidateOutcome:
-        candidate = self.l4_service.generate_candidate(l4_request)
+        candidate = self.l3_service.generate_candidate(l3_request)
         event = candidate.event
         if event.status != "success" or candidate.checkpoint is None:
             reason = event.failure_reason or event.status
@@ -257,11 +257,11 @@ class ContextWindowManager:
             return _CandidateOutcome(
                 candidate=candidate,
                 event=failed,
-                view=l4_request.view,
-                input_tokens=request.estimate_budget(l4_request.view).input_tokens,
+                view=l3_request.view,
+                input_tokens=request.estimate_budget(l3_request.view).input_tokens,
             )
 
-        candidate_view = _view_with_checkpoint(l4_request.view, candidate.checkpoint)
+        candidate_view = _view_with_checkpoint(l3_request.view, candidate.checkpoint)
         try:
             candidate_budget = request.estimate_budget(candidate_view)
         except (InvalidCheckpointBoundaryError, InvalidToolCallSequenceError):
@@ -275,8 +275,8 @@ class ContextWindowManager:
             return _CandidateOutcome(
                 candidate=candidate,
                 event=failed,
-                view=l4_request.view,
-                input_tokens=request.estimate_budget(l4_request.view).input_tokens,
+                view=l3_request.view,
+                input_tokens=request.estimate_budget(l3_request.view).input_tokens,
             )
         if candidate_budget.input_tokens >= target_tokens:
             failed = replace(
@@ -289,11 +289,11 @@ class ContextWindowManager:
             return _CandidateOutcome(
                 candidate=candidate,
                 event=failed,
-                view=l4_request.view,
+                view=l3_request.view,
                 input_tokens=candidate_budget.input_tokens,
             )
 
-        self.l4_service.commit_candidate(candidate, runtime_state=request.runtime_state)
+        self.l3_service.commit_candidate(candidate, runtime_state=request.runtime_state)
         rebuilt_view = self.store.rebuild_session_view(request.view.session_id)
         rebuilt_budget = request.estimate_budget(rebuilt_view)
         return _CandidateOutcome(
@@ -359,7 +359,7 @@ class ContextWindowManager:
                     fallback_steps=steps,
                     final_failure_reason=None,
                 )
-                self._record_l4_event(
+                self._record_l3_event(
                     session_id=request.view.session_id,
                     trigger=trigger,
                     target_tokens=target_tokens,
@@ -373,14 +373,14 @@ class ContextWindowManager:
                     before_tokens=before_tokens,
                     after_tokens=stronger_tokens,
                     programmatic_event=stronger.event,
-                    l4_event=event,
+                    l3_event=event,
                     fallback_steps=steps,
                 )
 
-        if action in {"stronger_programmatic", "retry_l4_stronger_summary"}:
+        if action in {"stronger_programmatic", "retry_l3_stronger_summary"}:
             retry = self._generate_validate_commit(
                 request=request,
-                l4_request=LlmCompactRequest(
+                l3_request=LlmCompactRequest(
                     view=current_programmatic.view,
                     runtime_state=request.runtime_state,
                     consumed_tool_result_part_ids=frozenset(request.runtime_state.consumed_tool_result_part_ids),
@@ -395,7 +395,7 @@ class ContextWindowManager:
                 FallbackStep(
                     step=len(steps) + 1,
                     reason=retry.event.failure_reason or retry.event.status,
-                    action="retry_l4_stronger_summary",
+                    action="retry_l3_stronger_summary",
                     before_tokens=request.estimate_budget(current_programmatic.view).input_tokens,
                     after_tokens=retry.input_tokens,
                     status="success" if retry.event.status == "success" else "failed",
@@ -404,7 +404,7 @@ class ContextWindowManager:
             )
             final_reason = None if retry.event.status == "success" else retry.event.failure_reason
             event = _with_fallback(retry.event, fallback_steps=steps, final_failure_reason=final_reason)
-            self._record_l4_event(
+            self._record_l3_event(
                 session_id=request.view.session_id,
                 trigger=trigger,
                 target_tokens=target_tokens,
@@ -426,7 +426,7 @@ class ContextWindowManager:
                 before_tokens=before_tokens,
                 after_tokens=retry.input_tokens,
                 programmatic_event=current_programmatic.event,
-                l4_event=event,
+                l3_event=event,
                 fallback_steps=steps,
                 final_failure_reason=final_reason,
             )
@@ -442,7 +442,7 @@ class ContextWindowManager:
                 error=reason,
             ).to_dict()
         )
-        return self._final_l4_failure(
+        return self._final_l3_failure(
             request=request,
             trigger=trigger,
             mode=mode,
@@ -456,7 +456,7 @@ class ContextWindowManager:
             fallback_steps=steps,
         )
 
-    def _final_l4_failure(
+    def _final_l3_failure(
         self,
         *,
         request: ContextCompactRequest,
@@ -472,7 +472,7 @@ class ContextWindowManager:
         fallback_steps: list[dict[str, object]] | None = None,
     ) -> ContextCompactResult:
         event = replace(event, final_failure_reason=reason)
-        self._record_l4_event(
+        self._record_l3_event(
             session_id=request.view.session_id,
             trigger=trigger,
             target_tokens=target_tokens,
@@ -491,7 +491,7 @@ class ContextWindowManager:
             before_tokens=before_tokens,
             after_tokens=after_tokens,
             programmatic_event=programmatic.event,
-            l4_event=event,
+            l3_event=event,
             fallback_steps=fallback_steps,
             final_failure_reason=reason,
         )
@@ -542,7 +542,7 @@ class ContextWindowManager:
             event=event,
         )
 
-    def _record_l4_event(
+    def _record_l3_event(
         self,
         *,
         session_id: str,

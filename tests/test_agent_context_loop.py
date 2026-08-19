@@ -1084,7 +1084,7 @@ def test_agent_loop_streaming_prompt_too_long_does_not_retry_when_compaction_fai
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_stream_retry_fail", agents_md="")
     provider = StreamingProvider([ProviderError(ProviderErrorKind.PROMPT_TOO_LONG, "too long")])
-    context_manager = RecordingContextManager(status="failed", reason="l4_service_missing")
+    context_manager = RecordingContextManager(status="failed", reason="l3_service_missing")
 
     with pytest.raises(ProviderError) as exc_info:
         _run_streaming(AgentLoop(session=session, provider=provider, context_manager=context_manager), "问题")
@@ -1452,7 +1452,7 @@ def test_agent_loop_prompt_too_long_does_not_retry_when_compaction_fails(tmp_pat
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_retry_fail", agents_md="")
     provider = FakeProvider([ProviderError(ProviderErrorKind.PROMPT_TOO_LONG, "too long")])
-    context_manager = RecordingContextManager(status="failed", reason="l4_service_missing")
+    context_manager = RecordingContextManager(status="failed", reason="l3_service_missing")
 
     with pytest.raises(ProviderError) as exc_info:
         AgentLoop(session=session, provider=provider, context_manager=context_manager)._run_user_turn_sync("问题")

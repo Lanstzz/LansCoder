@@ -153,4 +153,4 @@ def _manual_target_tokens(budget: ContextBudget) -> int | None:
 
 
 def _is_noop_compact(result: ContextCompactResult) -> bool:
-    return result.programmatic_event is not None and result.programmatic_event.noop and result.l4_event is None and result.before_tokens == result.after_tokens
+    return result.programmatic_event is not None and result.programmatic_event.noop and result.l3_event is None and result.before_tokens == result.after_tokens

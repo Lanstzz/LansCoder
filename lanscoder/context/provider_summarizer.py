@@ -1,4 +1,4 @@
-"""用 provider 实现 L4 checkpoint 摘要的适配器。"""
+"""用 provider 实现 L3 checkpoint 摘要的适配器。"""
 
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ from lanscoder.providers.types import ChatMessage, ChatRequest
 
 
 class ProviderLlmCompactSummarizer(LlmCompactSummarizer):
-    """把上下文层的 L4 summarizer 协议适配到通用 `ChatProvider`。
+    """把上下文层的 L3 summarizer 协议适配到通用 `ChatProvider`。
 
-    L4 checkpoint 需要三个事实：摘要正文、被摘要覆盖到哪里、从哪里开始保留 tail。
+    L3 checkpoint 需要三个事实：摘要正文、被摘要覆盖到哪里、从哪里开始保留 tail。
     默认实现只让模型生成摘要正文，边界由本地根据当前消息序列选择并继续交给
     `LlmCompactService` 校验，避免把恢复边界完全交给模型决定。
     """
