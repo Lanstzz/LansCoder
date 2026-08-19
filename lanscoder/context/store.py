@@ -75,6 +75,28 @@ class JsonlSessionStore:
             self._apply_event(view, event, sequence=sequence)
         return view
 
+    def original_user_message_texts(self, session_id: str) -> dict[str, str]:
+        """Return original text per user_message event, untouched by compaction.
+
+        压缩只追加 compaction_completed 替换事件、从不改写原始 user_message
+        事件，所以这里总能读到当初真正的话。transcript 已按同样原则从
+        list_events 派生内容。
+        """
+
+        texts: dict[str, str] = {}
+        for event in self.list_events(session_id):
+            if event.type != "user_message":
+                continue
+            message_id = str(event.payload.get("message_id") or "")
+            if not message_id:
+                continue
+            texts[message_id] = "\n".join(
+                str(part.get("content") or "")
+                for part in event.payload.get("parts") or []
+                if isinstance(part, dict) and part.get("kind") == "text" and part.get("content")
+            )
+        return texts
+
     def _session_path(self, session_id: str) -> Path:
         return self.sessions_dir / f"{session_id}.jsonl"
 
