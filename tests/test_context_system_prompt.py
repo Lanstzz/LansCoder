@@ -133,8 +133,6 @@ def test_system_prompt_loads_one_unified_agent_prompt() -> None:
     assert "# Verification and completion" in content
     assert "assume they want you to act" in content
     assert "Persist until the user's task is handled end-to-end" in content
-    assert "The runtime classifies every real user turn before this request" in content
-    assert "Never invent, guess, or display task hashes" in content
     assert "Use a TaskPlan for multi-step coding tasks" in content
     assert "Use the Current TaskPlan snapshot attached to each main request" in content
     assert "Call task_list only when that snapshot is missing or a write reports a revision conflict" in content
@@ -163,7 +161,7 @@ def test_benchmark_task_content_does_not_change_system_prompt_fingerprint() -> N
     assert builder.fingerprint(_inputs(benchmark_task="Fix A.")) == builder.fingerprint(_inputs(benchmark_task="Fix B."))
 
 
-def test_system_prompt_version_is_v18() -> None:
+def test_system_prompt_version_is_v19() -> None:
     entry = SystemPromptBuilder().build(_inputs())
 
-    assert "prompt_version=v18" in entry.messages[0].content
+    assert "prompt_version=v19" in entry.messages[0].content
