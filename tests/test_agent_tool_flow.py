@@ -19,6 +19,8 @@ from lanscoder.tools.apply_patch import create_apply_patch_tool
 from lanscoder.tools.python_exec import create_python_exec_tool
 from lanscoder.tools.write import create_write_tool
 from lanscoder.tools.types import ToolResult
+from lanscoder.utils.execution_sandbox import ExecutionSandbox
+from lanscoder.utils.subprocess import CommandResult
 
 
 def test_agent_reexports_context_tool_call_conversion() -> None:
@@ -174,16 +176,21 @@ def test_project_session_permissioned_apply_patch_pauses_without_writing(tmp_pat
 
 
 def test_project_session_permissioned_python_exec_pauses_without_executing(tmp_path, monkeypatch) -> None:
-    from lanscoder.tools import python_exec as python_exec_module
-
     called = False
 
     def fake_run(command, **kwargs):
         nonlocal called
         called = True
-        return python_exec_module.subprocess.CompletedProcess(command, 0, "42\n", "")
+        return CommandResult(
+            exit_code=0,
+            stdout="42\n",
+            stderr="",
+            stdout_truncated=False,
+            stderr_truncated=False,
+            ok=True,
+        )
 
-    monkeypatch.setattr(python_exec_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(ExecutionSandbox, "run", fake_run)
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
