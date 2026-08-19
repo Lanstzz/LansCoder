@@ -13,6 +13,7 @@ from lanscoder.context.content.html import HtmlRouteCompressor
 from lanscoder.context.content.json import JsonRouteCompressor
 from lanscoder.context.content.search import SearchResultsRouteCompressor
 from lanscoder.context.models import MessagePart
+from lanscoder.context.versions import COMPACTION_STRATEGY_VERSION
 
 
 class StaticCompressor:
@@ -87,7 +88,7 @@ def test_route_compact_adds_metadata() -> None:
     assert result.metadata["route_confidence"] > 0
     assert result.metadata["original_tokens"] > result.metadata["replacement_tokens"]
     assert result.metadata["content_fingerprint"]
-    assert result.metadata["compaction_strategy_version"] == "v2"
+    assert result.metadata["compaction_strategy_version"] == COMPACTION_STRATEGY_VERSION
 
 
 def test_route_compact_skips_when_no_compressor_is_registered() -> None:

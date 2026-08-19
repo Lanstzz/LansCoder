@@ -7,6 +7,7 @@ from lanscoder.context.identity import session_view_fingerprint
 from lanscoder.context.models import AgentMessage, MessagePart, SessionView
 from lanscoder.context.token_budget import estimate_text_tokens
 from lanscoder.context.tool_sequence import validate_tool_call_sequence
+from lanscoder.context.versions import COMPACTION_STRATEGY_VERSION
 
 
 def _message(
@@ -224,7 +225,7 @@ def test_compaction_event_records_full_schema(tmp_path: Path) -> None:
     )
 
     assert result.event.event_version == "v2"
-    assert result.event.strategy_version == "v2"
+    assert result.event.strategy_version == COMPACTION_STRATEGY_VERSION
     assert result.event.reason in {"l1", "l2", "not_reached"}
     assert result.event.target_tokens == 1
     assert result.event.source_part_ids == [part.id]
