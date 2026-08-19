@@ -180,6 +180,32 @@
   .code-block .str { color: #7ec98c; }
   .code-block .cmt { color: #5a6a80; }
 
+  /* ── Install Tabs ── */
+  .install-tabs { margin-top: 0.5rem; }
+  .install-tabs input[type="radio"] { display: none; }
+  .install-tab-labels {
+    display: flex; gap: 0; margin-bottom: 0.75rem;
+    border: 1px solid rgba(0,0,0,0.1); border-radius: 8px;
+    overflow: hidden; width: fit-content;
+  }
+  .install-tab-labels label {
+    padding: 0.45rem 1rem; font-size: 0.82rem; font-weight: 600;
+    cursor: pointer; color: #777; background: #f5f5f5;
+    border-right: 1px solid rgba(0,0,0,0.08);
+    transition: all 0.15s; user-select: none;
+  }
+  .install-tab-labels label:last-child { border-right: none; }
+  .install-tab-labels label:hover { color: #333; background: #eee; }
+  .install-tabs input[type="radio"]:checked + label {
+    background: #6c8cff; color: #fff;
+  }
+  .install-tab-panel { display: none; }
+  .install-tabs input#tab-shell:checked ~ .install-tab-panels #panel-shell,
+  .install-tabs input#tab-brew:checked ~ .install-tab-panels #panel-brew,
+  .install-tabs input#tab-pipx:checked ~ .install-tab-panels #panel-pipx {
+    display: block;
+  }
+
   /* ── Footer ── */
   footer {
     text-align: center; padding: 3rem 2rem;
@@ -343,8 +369,29 @@
         <div class="qs-num">1</div>
         <div class="qs-body">
           <h3>Install</h3>
-          <p>Install LansCoder with pipx (recommended) or pip:</p>
-          <div class="code-block"><span class="prompt">$</span> <span class="cmd">pipx install lanscoder</span></div>
+          <p>Choose your preferred install method:</p>
+          <div class="install-tabs">
+            <input type="radio" name="install-method" id="tab-shell" checked>
+            <input type="radio" name="install-method" id="tab-brew">
+            <input type="radio" name="install-method" id="tab-pipx">
+            <div class="install-tab-labels">
+              <label for="tab-shell">Shell (macOS / Linux / Windows)</label>
+              <label for="tab-brew">Homebrew (macOS)</label>
+              <label for="tab-pipx">pipx (all platforms)</label>
+            </div>
+            <div class="install-tab-panels">
+              <div class="install-tab-panel" id="panel-shell">
+                <div class="code-block"><span class="prompt">$</span> <span class="cmd">curl -sSL https://raw.githubusercontent.com/Lanstzz/LansCoder/main/install.sh | bash</span></div>
+              </div>
+              <div class="install-tab-panel" id="panel-brew">
+                <div class="code-block"><span class="prompt">$</span> <span class="cmd">brew tap lanstzz/tap</span>
+<span class="prompt">$</span> <span class="cmd">brew install lanscoder</span></div>
+              </div>
+              <div class="install-tab-panel" id="panel-pipx">
+                <div class="code-block"><span class="prompt">$</span> <span class="cmd">pipx install lanscoder</span></div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="qs-step">
