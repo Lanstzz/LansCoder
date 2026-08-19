@@ -24,12 +24,28 @@ LansCoder is a locally-runnable Python coding agent. It understands your codebas
 
 ## Quick start
 
+Choose your preferred install method:
+
+**Shell (one-liner, all platforms):**
+
 ```sh
-pipx install lanscoder
-lanscoder config init
+curl -sSL https://raw.githubusercontent.com/Lanstzz/LansCoder/main/install.sh | bash
 ```
 
-Edit the config file with your API key:
+**Homebrew (macOS):**
+
+```sh
+brew tap lanstzz/tap
+brew install lanscoder
+```
+
+**pipx (all platforms):**
+
+```sh
+pipx install lanscoder
+```
+
+After installation, run `lanscoder config init` to generate a config file, then edit it with your API key:
 
 - **macOS / Linux**: `~/.config/lanscoder/config.toml`
 - **Windows**: `C:\Users\<username>\.config\lanscoder\config.toml`
