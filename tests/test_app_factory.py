@@ -162,9 +162,11 @@ def test_create_lanscoder_app_wires_session_commands_context_and_chat(tmp_path: 
 
 
 def test_create_lanscoder_app_wires_new_fork_and_skill_commands(tmp_path: Path) -> None:
-    skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
-    (skills_dir / "brief.md").write_text("# Brief\n", encoding="utf-8")
+    skills_dir = tmp_path / ".lanscoder" / "skills"
+    skills_dir.mkdir(parents=True)
+    brief_dir = skills_dir / "brief"
+    brief_dir.mkdir()
+    (brief_dir / "SKILL.md").write_text("# Brief\n", encoding="utf-8")
     app = create_lanscoder_app(
         project_root=tmp_path,
         data_root=tmp_path / ".lanscoder",
@@ -183,7 +185,7 @@ def test_create_lanscoder_app_wires_new_fork_and_skill_commands(tmp_path: Path) 
     assert app.current_session.session.session_id != new_session_id
 
     skills_result = app.command_handler.handle("/skills")
-    assert "brief project skills/brief.md" in skills_result.output
+    assert "brief project .lanscoder/skills/brief/SKILL.md" in skills_result.output
     skill_result = app.command_handler.handle("/skill brief")
     assert "Skill: brief" in skill_result.output
 

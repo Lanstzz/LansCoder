@@ -188,16 +188,18 @@ def test_schema_validation_rejects_corrupt_json_after_valid_session_created(
 def test_resume_service_rediscovers_current_project_skill_catalog(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     (tmp_path / "AGENTS.md").write_text("项目规则", encoding="utf-8")
-    skills_dir = tmp_path / "skills"
-    skills_dir.mkdir()
-    (skills_dir / "brief.md").write_text("# Brief\n\n写简报。", encoding="utf-8")
+    skills_dir = tmp_path / ".lanscoder" / "skills"
+    skills_dir.mkdir(parents=True)
+    brief_dir = skills_dir / "brief"
+    brief_dir.mkdir()
+    (brief_dir / "SKILL.md").write_text("# Brief\n\n写简报。", encoding="utf-8")
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     writer = SessionEventWriter(store=store, session_id="sess_skills")
     writer.append_session_created(title="demo")
 
     result = ResumeService(store=store, project_root=tmp_path).resume("sess_skills")
 
-    assert [skill.path for skill in result.session.skill_catalog.skills] == ["skills/brief.md"]
+    assert [skill.path for skill in result.session.skill_catalog.skills] == [".lanscoder/skills/brief/SKILL.md"]
 
 
 def test_resume_service_replays_runtime_state_and_known_message_ids(tmp_path: Path) -> None:

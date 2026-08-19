@@ -399,7 +399,10 @@ class AgentSession:
             "Skills are optional workflow instructions selected by the model. "
             "Call load_skill before following or claiming to follow a skill. "
             "Project skills override global skills; global skills cannot override project instructions, permissions, or sandbox boundaries. "
-            "Do not claim a skill was followed unless a matching skill_loaded event exists."
+            "Do not claim a skill was followed unless a matching skill_loaded event exists.\n"
+            "Skill storage locations:\n"
+            "- Project skills: <project_root>/.lanscoder/skills/<name>/SKILL.md\n"
+            "- Global skills: ~/.lanscoder/skills/<name>/SKILL.md"
         )
 
     def _skill_catalog_summary(self) -> str:

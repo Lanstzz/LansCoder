@@ -52,10 +52,8 @@ def _resolution_key(skill: SkillDefinition) -> tuple[int, str, str, str]:
 
 def _source_priority(source: SkillSource) -> int:
     priorities = {
-        SkillSource.PROJECT_AGENT_SKILL: 0,
-        SkillSource.PROJECT_MARKDOWN: 1,
-        SkillSource.GLOBAL_AGENT_SKILL: 2,
-        SkillSource.GLOBAL_MARKDOWN: 3,
+        SkillSource.PROJECT: 0,
+        SkillSource.GLOBAL: 1,
     }
     return priorities[source]
 

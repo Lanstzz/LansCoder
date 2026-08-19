@@ -11,16 +11,16 @@ from lanscoder.tools.load_skill import create_load_skill_tool
 
 
 def test_skill_loader_reads_complete_skill_and_required_files(tmp_path: Path) -> None:
-    skill_path = tmp_path / "skills" / "brief.md"
-    skill_path.parent.mkdir()
+    skill_path = tmp_path / ".lanscoder" / "skills" / "brief" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
     skill_path.write_text(
         "# Brief\n\n开始前必须读取：\n\n1. `AGENTS.md`\n2. `docs/evidence-policy.md`\n",
         encoding="utf-8",
     )
     skill = SkillDefinition(
         name="brief",
-        path="skills/brief.md",
-        source=SkillSource.PROJECT_MARKDOWN,
+        path=".lanscoder/skills/brief/SKILL.md",
+        source=SkillSource.PROJECT,
         root=str(tmp_path),
         description="简报",
     )
@@ -38,7 +38,7 @@ def test_skill_loader_extracts_required_file_from_marker_line(tmp_path: Path) ->
     skill = SkillDefinition(
         name="brief",
         path="skills/brief.md",
-        source=SkillSource.PROJECT_MARKDOWN,
+        source=SkillSource.PROJECT,
         root=str(tmp_path),
         description="简报",
     )
@@ -55,7 +55,7 @@ def test_skill_loader_extracts_required_files_from_common_chinese_headings(tmp_p
     skill = SkillDefinition(
         name="claim-review",
         path="skills/claim-review.md",
-        source=SkillSource.PROJECT_MARKDOWN,
+        source=SkillSource.PROJECT,
         root=str(tmp_path),
         description="复核",
     )
@@ -75,14 +75,14 @@ def test_skill_loader_rejects_missing_or_escaping_path(tmp_path: Path) -> None:
     loader = SkillLoader()
     missing = SkillDefinition(
         name="missing",
-        path="skills/missing.md",
-        source=SkillSource.PROJECT_MARKDOWN,
+        path=".lanscoder/skills/missing/SKILL.md",
+        source=SkillSource.PROJECT,
         root=str(tmp_path),
     )
     escaping = SkillDefinition(
         name="escape",
         path="../secret.md",
-        source=SkillSource.PROJECT_MARKDOWN,
+        source=SkillSource.PROJECT,
         root=str(tmp_path),
     )
 
@@ -98,7 +98,7 @@ def test_append_skill_loaded_writes_auditable_session_event(tmp_path: Path) -> N
     skill = SkillDefinition(
         name="fetch-tweet",
         path="fetch-tweet/SKILL.md",
-        source=SkillSource.GLOBAL_AGENT_SKILL,
+        source=SkillSource.GLOBAL,
         root="/Users/x/.agents/skills",
         description="Fetch tweets.",
     )
@@ -125,7 +125,7 @@ def test_load_skill_tool_returns_full_content_and_writes_audit_events(tmp_path: 
     skill = SkillDefinition(
         name="review",
         path="review/SKILL.md",
-        source=SkillSource.PROJECT_AGENT_SKILL,
+        source=SkillSource.PROJECT,
         root=str(tmp_path),
         description="Review code.",
     )
@@ -152,7 +152,7 @@ def test_load_skill_tool_rejects_unknown_or_missing_skill_without_audit_events(t
     skill = SkillDefinition(
         name="review",
         path="review/SKILL.md",
-        source=SkillSource.PROJECT_AGENT_SKILL,
+        source=SkillSource.PROJECT,
         root=str(tmp_path),
     )
     store = JsonlSessionStore(tmp_path / "events")
@@ -174,7 +174,7 @@ def test_load_skill_tool_turns_file_read_error_into_safe_failure(tmp_path: Path,
     skill = SkillDefinition(
         name="review",
         path="review/SKILL.md",
-        source=SkillSource.PROJECT_AGENT_SKILL,
+        source=SkillSource.PROJECT,
         root=str(tmp_path),
     )
     store = JsonlSessionStore(tmp_path / "events")
