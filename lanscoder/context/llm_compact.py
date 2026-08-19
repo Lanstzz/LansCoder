@@ -28,6 +28,13 @@ CODING_HANDOFF_HEADINGS: tuple[str, ...] = (
     "## 下一步（可立即执行）",
 )
 
+DIALOGUE_SUMMARY_HEADINGS: tuple[str, ...] = (
+    "## 用户请求要点",
+    "## 已给出的结论",
+    "## 未完成事项",
+    "## 关键约束与偏好",
+)
+
 
 class PromptTooLongError(RuntimeError):
     pass
@@ -410,24 +417,24 @@ def _summarize(
         recent_turn_window=recent_turn_window,
     )
     return LlmCompactSummary(
-        summary=normalize_coding_handoff(summary.summary),
+        summary=summary.summary,
         tail_start_message_id=summary.tail_start_message_id,
         covered_until_message_id=summary.covered_until_message_id,
     )
 
 
-def normalize_coding_handoff(summary: str) -> str:
-    """Normalize provider output into the stable L4 coding-handoff contract.
+def normalize_coding_handoff(summary: str, headings: tuple[str, ...] = CODING_HANDOFF_HEADINGS) -> str:
+    """Normalize provider output into a stable L4 summary contract.
 
     The model supplies only prose; local code owns the public checkpoint
     structure.  Matching sections retain their supplied body (including a
     repeated section's later body), while missing sections are explicitly
     marked as `无`. Unknown Markdown headings are converted to ordinary
-    body text so the resulting handoff has exactly the seven supported
-    headings once each.
+    body text so the resulting summary has exactly the supported headings
+    once each.
     """
 
-    bodies: dict[str, list[str]] = {heading: [] for heading in CODING_HANDOFF_HEADINGS}
+    bodies: dict[str, list[str]] = {heading: [] for heading in headings}
     current: str | None = None
     preamble: list[str] = []
     for line in summary.strip().splitlines():
@@ -445,10 +452,10 @@ def normalize_coding_handoff(summary: str) -> str:
             bodies[current].append(line)
 
     if preamble:
-        bodies[CODING_HANDOFF_HEADINGS[0]].extend(preamble)
+        bodies[headings[0]].extend(preamble)
 
     sections: list[str] = []
-    for heading in CODING_HANDOFF_HEADINGS:
+    for heading in headings:
         body = "\n".join(bodies[heading]).strip()
         sections.append(f"{heading}\n{body or '无'}")
     return "\n\n".join(sections)

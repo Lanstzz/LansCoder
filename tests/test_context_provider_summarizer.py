@@ -6,25 +6,28 @@ import pytest
 
 from lanscoder.context.llm_compact import (
     CODING_HANDOFF_HEADINGS,
+    DIALOGUE_SUMMARY_HEADINGS,
     LlmCompactSummary,
     NoSummaryError,
     PromptTooLongError,
     normalize_coding_handoff,
 )
 from lanscoder.context.models import AgentMessage, MessagePart
-from lanscoder.context.provider_summarizer import ProviderLlmCompactSummarizer, _tail_boundary
+from lanscoder.context.provider_summarizer import (
+    ProviderLlmCompactSummarizer,
+    _build_dialogue_summary_prompt,
+    _message_text,
+    _tail_boundary,
+)
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.errors import ProviderError, ProviderErrorKind
 from lanscoder.providers.types import ChatRequest, ChatResponse
 
-EXPECTED_CODING_HANDOFF_HEADINGS = (
-    "## 当前目标",
-    "## 已知事实与硬约束",
-    "## 已确认的决定及理由",
-    "## 相关文件与当前实现状态",
-    "## 已运行命令及有效结果",
-    "## 当前错误与未解决事项",
-    "## 下一步（可立即执行）",
+EXPECTED_DIALOGUE_SUMMARY_HEADINGS = (
+    "## 用户请求要点",
+    "## 已给出的结论",
+    "## 未完成事项",
+    "## 关键约束与偏好",
 )
 
 
@@ -61,8 +64,8 @@ def test_provider_summarizer_requests_plain_summary_without_tools() -> None:
     )
 
     assert isinstance(summary, LlmCompactSummary)
-    assert "## 当前目标\n摘要" in summary.summary
-    assert summary.summary.count("## ") == 7
+    assert "## 用户请求要点\n摘要" in summary.summary
+    assert summary.summary.count("## ") == 4
     assert summary.covered_until_message_id == "msg_1"
     assert summary.tail_start_message_id == "msg_2"
     assert provider.requests[0].tools == []
@@ -107,15 +110,15 @@ def test_provider_summarizer_rejects_too_short_history() -> None:
         ProviderLlmCompactSummarizer(provider).summarize([_message("msg_1", "user", "目标")])
 
 
-def test_provider_summarizer_prompt_and_normalizer_enforce_exact_handoff_headings() -> None:
-    assert CODING_HANDOFF_HEADINGS == EXPECTED_CODING_HANDOFF_HEADINGS
+def test_provider_summarizer_prompt_and_normalizer_enforce_exact_dialogue_headings() -> None:
+    assert DIALOGUE_SUMMARY_HEADINGS == EXPECTED_DIALOGUE_SUMMARY_HEADINGS
     model_output = "\n".join(
         [
-            "## 当前目标",
+            "## 用户请求要点",
             "Implement L1.",
-            "## 当前目标",
+            "## 用户请求要点",
             "Keep the latest user message.",
-            "## 当前错误与未解决事项",
+            "## 未完成事项",
             "A failing test remains.",
             "## Extra model heading",
             "Keep this as body text.",
@@ -132,13 +135,13 @@ def test_provider_summarizer_prompt_and_normalizer_enforce_exact_handoff_heading
         recent_turn_window=1,
     )
 
-    assert all(summary.summary.count(heading) == 1 for heading in CODING_HANDOFF_HEADINGS)
+    assert all(summary.summary.count(heading) == 1 for heading in DIALOGUE_SUMMARY_HEADINGS)
     assert "Implement L1.\nKeep the latest user message." in summary.summary
     assert "A failing test remains.\nExtra model heading\nKeep this as body text." in summary.summary
-    assert "## 已知事实与硬约束\n无" in summary.summary
+    assert "## 已给出的结论\n无" in summary.summary
     prompt = provider.requests[0].messages[1].content
-    assert all(prompt.count(heading) == 1 for heading in CODING_HANDOFF_HEADINGS)
-    assert "恰好出现一次" in prompt
+    assert all(prompt.count(heading) == 1 for heading in DIALOGUE_SUMMARY_HEADINGS)
+    assert "只输出一次" in prompt
 
 
 def test_normalize_coding_handoff_preserves_body_under_matching_heading() -> None:
@@ -146,6 +149,37 @@ def test_normalize_coding_handoff_preserves_body_under_matching_heading() -> Non
 
     assert normalized.endswith("## 下一步（可立即执行）\nRun focused tests.")
     assert all(normalized.count(heading) == 1 for heading in CODING_HANDOFF_HEADINGS)
+
+
+def test_dialogue_prompt_emits_message_text_but_omits_tool_call_argument_dumps() -> None:
+    tool_call = _assistant_tool_call("msg_2", "call_1", created_turn=2)
+    tool_call.parts[0].metadata["arguments"] = {"command": "pytest -q", "secret_value": "s3cr3t"}
+    tool_call.parts[0].content = "tool call body"
+    messages = [
+        _message("msg_1", "user", "目标", created_turn=1),
+        tool_call,
+    ]
+
+    prompt = _build_dialogue_summary_prompt(messages, summary_mode="default")
+
+    assert "[msg_1] role=user\n目标" in prompt
+    assert "[msg_2] role=assistant\ntool call body" in prompt
+    assert "s3cr3t" not in prompt
+    assert '"command"' not in prompt
+    assert all(_message_text(message) in prompt for message in messages)
+
+
+def test_tail_boundary_skips_messages_without_created_turn() -> None:
+    messages = [
+        _message("msg_0", "user", "旧消息"),
+        _user_message_with_turn("msg_1", created_turn=1),
+        _user_message_with_turn("msg_2", created_turn=2),
+        _user_message_with_turn("msg_3", created_turn=3),
+    ]
+    boundary = _tail_boundary(messages, current_turn=3, recent_turn_window=1)
+
+    assert boundary.covered_until_message_id == "msg_2"
+    assert boundary.tail_start_message_id == "msg_3"
 
 
 def test_tail_boundary_keeps_recent_turn_window() -> None:
