@@ -66,6 +66,44 @@ class SessionIndex:
             data["sessions"][session_id] = _record_to_dict(record)
             self._write_data(data)
 
+    def prune_empty(self, exclude: set[str] | None = None) -> int:
+        """Remove JSONL files and index entries for sessions with zero user turns.
+
+        *exclude* is a set of session IDs to skip (e.g. the currently active session).
+
+        Returns the number of sessions pruned.
+        """
+        import os
+
+        sessions_dir = self.root / "sessions"
+        if not sessions_dir.exists():
+            return 0
+
+        skip = exclude or set()
+
+        with _INDEX_LOCK:
+            data = self._load_data()
+            sessions = data["sessions"]
+            to_prune: list[str] = []
+            for sid, item in sessions.items():
+                if sid in skip:
+                    continue
+                if isinstance(item, dict) and item.get("user_turn_count", 0) == 0:
+                    to_prune.append(sid)
+
+            for sid in to_prune:
+                sessions.pop(sid, None)
+                path = sessions_dir / f"{sid}.jsonl"
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+
+            if to_prune:
+                self._write_data(data)
+
+            return len(to_prune)
+
     def rebuild(self) -> None:
         from lanscoder.session.catalog import record_from_path
 

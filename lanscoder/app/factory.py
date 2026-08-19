@@ -255,6 +255,8 @@ def create_lanscoder_app(
         ),
     )
     catalog = SessionCatalog(resolved_data_root)
+    from lanscoder.session.index import SessionIndex
+    SessionIndex(resolved_data_root).prune_empty(exclude={session.session_id})
     resume_service = ResumeService(
         store=store,
         project_root=project_path,
