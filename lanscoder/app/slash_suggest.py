@@ -43,17 +43,9 @@ class SlashSuggest(OptionList):
 
         # Filter matching commands
         self.clear_options()
-        matching = [
-            (cmd, desc)
-            for cmd, desc in self._all_commands
-            if cmd.startswith(prefix) or prefix.startswith(cmd)
-        ]
+        matching = [(cmd, desc) for cmd, desc in self._all_commands if cmd.startswith(prefix) or prefix.startswith(cmd)]
         # Also match if the command contains the prefix (partial match)
-        matching2 = [
-            (cmd, desc)
-            for cmd, desc in self._all_commands
-            if prefix in cmd and (cmd, desc) not in matching
-        ]
+        matching2 = [(cmd, desc) for cmd, desc in self._all_commands if prefix in cmd and (cmd, desc) not in matching]
         all_matching = matching + matching2
 
         if not all_matching:

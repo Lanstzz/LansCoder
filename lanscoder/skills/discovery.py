@@ -41,9 +41,7 @@ def discover_all_skills(project_root: str | Path, *, env: Mapping[str, str] | No
     global_root = _global_skill_root(env)
     global_skills: list[SkillDefinition] = []
     if global_root.exists():
-        global_skills.extend(
-            _discover_directory_skills(global_root, root=global_root, source=SkillSource.GLOBAL)
-        )
+        global_skills.extend(_discover_directory_skills(global_root, root=global_root, source=SkillSource.GLOBAL))
 
     return SkillCatalog(
         skills=_sort_and_dedupe([*project_catalog.skills, *global_skills]),

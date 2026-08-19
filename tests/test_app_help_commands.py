@@ -18,25 +18,27 @@ class _StubHandler:
 
 def test_help_command_lists_current_slash_commands() -> None:
     stub_handlers = [
-        _StubHandler([
-            ("/new [title]", "Start a new session."),
-            ("/fork [title]", "Copy the current session into a new branch."),
-            ("/sessions", "List saved sessions."),
-            ("/session <session_id>", "Show one session summary."),
-            ("/resume", "Pick a session to resume."),
-            ("/resume <session_id>", "Resume a session directly."),
-            ("/share [session_id] [--tool-results]", "Export a shareable transcript."),
-            ("/rename <title>", "Rename the current session."),
-            ("/model", "Pick a model to use."),
-            ("/model <model|provider/model>", "Switch the active model."),
-            ("/skills", "Pick a skill to reference."),
-            ("/skill <name>", "Show skill details."),
-            ("/context", "Inspect context state."),
-            ("/compact status", "Show compaction status."),
-            ("/compact", "Compact context now."),
-            ("/mode", "Show permission mode."),
-            ("/mode <standard|aggressive|bypass>", "Change permission mode."),
-        ]),
+        _StubHandler(
+            [
+                ("/new [title]", "Start a new session."),
+                ("/fork [title]", "Copy the current session into a new branch."),
+                ("/sessions", "List saved sessions."),
+                ("/session <session_id>", "Show one session summary."),
+                ("/resume", "Pick a session to resume."),
+                ("/resume <session_id>", "Resume a session directly."),
+                ("/share [session_id] [--tool-results]", "Export a shareable transcript."),
+                ("/rename <title>", "Rename the current session."),
+                ("/model", "Pick a model to use."),
+                ("/model <model|provider/model>", "Switch the active model."),
+                ("/skills", "Pick a skill to reference."),
+                ("/skill <name>", "Show skill details."),
+                ("/context", "Inspect context state."),
+                ("/compact status", "Show compaction status."),
+                ("/compact", "Compact context now."),
+                ("/mode", "Show permission mode."),
+                ("/mode <standard|aggressive|bypass>", "Change permission mode."),
+            ]
+        ),
     ]
     cmd_handler = CompositeCommandHandler(stub_handlers)
     result = HelpCommandHandler(command_handler=cmd_handler).handle("/help")

@@ -216,9 +216,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self.query_one("#output").can_focus = False
         self.set_focus(self.query_one("#input"))
         # Periodically update the subagent panel with progress.
-        self._subagent_progress_timer = self.set_interval(
-            0.5, self._refresh_subagent_progress
-        )
+        self._subagent_progress_timer = self.set_interval(0.5, self._refresh_subagent_progress)
         # Register for proactive subagent completion delivery.
         if self.chat_runner is not None:
             mgr = getattr(self.chat_runner, "background_manager", None)

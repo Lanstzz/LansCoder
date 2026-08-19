@@ -9,6 +9,13 @@ from lanscoder.context.writer import tool_call_to_part
 from lanscoder.providers.types import ChatResponse, ToolCall
 from lanscoder.tools.types import ToolResult
 
+__all__ = [
+    "assistant_response_to_parts",
+    "tool_result_to_part",
+    "InvalidToolCallSequenceError",
+    "validate_tool_call_sequence",
+]
+
 
 def assistant_response_to_parts(*, message_id: str, response: ChatResponse) -> list[MessagePart]:
     """把 provider assistant response 转成内部 parts。

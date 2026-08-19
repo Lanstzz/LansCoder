@@ -64,11 +64,7 @@ class RecallCommandHandler:
 
         # 压缩会把旧任务的文本 part 在有效视图里清空，但原始 user_message
         # 事件从未被改写；回退到原文，picker 才不会显示 (empty message)。
-        original_texts = (
-            self.store.original_user_message_texts(self.session.session_id)
-            if self.store is not None
-            else {}
-        )
+        original_texts = self.store.original_user_message_texts(self.session.session_id) if self.store is not None else {}
         turns = []
         for msg in user_messages:
             text_content = ""
@@ -85,11 +81,13 @@ class RecallCommandHandler:
                     turn_number = tn
                     break
             summary = text_content[:80] if text_content else "(empty message)"
-            turns.append({
-                "turn_number": turn_number,
-                "message_id": msg.id,
-                "summary": summary,
-            })
+            turns.append(
+                {
+                    "turn_number": turn_number,
+                    "message_id": msg.id,
+                    "summary": summary,
+                }
+            )
 
         return CommandResult(
             handled=True,
@@ -127,6 +125,7 @@ class RecallCommandHandler:
         self.store.truncate_before_message(session_id, message_id)
 
         from lanscoder.session.index import SessionIndex
+
         SessionIndex(self.store.root).rebuild_session(session_id)
 
         new_session = self._resume_session(session_id)
@@ -173,12 +172,8 @@ class RecallCommandHandler:
         for msg in self.session.rebuild_view().messages:
             if msg.id != message_id or msg.role != "user":
                 continue
-            text = "\n".join(
-                part.content for part in msg.parts if part.kind == "text" and part.content
-            )
+            text = "\n".join(part.content for part in msg.parts if part.kind == "text" and part.content)
             if text or self.store is None:
                 return text
-            return self.store.original_user_message_texts(self.session.session_id).get(
-                message_id, ""
-            )
+            return self.store.original_user_message_texts(self.session.session_id).get(message_id, "")
         return ""
