@@ -439,5 +439,5 @@ def test_manual_compact_command_e2e_writes_l4_handoff_when_only_current_plain_di
     assert event["replacements"] == []
     checkpoints = _checkpoint_events(store, "sess_manual_compact")
     assert len(checkpoints) == 1
-    assert checkpoints[0].payload["summary"].count("## ") == 7
+    assert checkpoints[0].payload["summary"].count("## ") == 4
     assert _llm_compact_events(store, "sess_manual_compact")[-1].payload["status"] == "success"

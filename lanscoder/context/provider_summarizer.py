@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from lanscoder.context.llm_compact import (
-    CODING_HANDOFF_HEADINGS,
+    DIALOGUE_SUMMARY_HEADINGS,
     CompactTimeoutError,
     LlmCompactSummarizer,
     LlmCompactSummary,
@@ -41,7 +41,7 @@ class ProviderLlmCompactSummarizer(LlmCompactSummarizer):
         recent_turn_window: int = 10,
     ) -> LlmCompactSummary:
         tail = _tail_boundary(messages, current_turn=current_turn, recent_turn_window=recent_turn_window)
-        prompt = _build_summary_prompt(messages, summary_mode=summary_mode)
+        prompt = _build_dialogue_summary_prompt(messages, summary_mode=summary_mode)
         try:
             response = self.provider.complete(
                 ChatRequest(
@@ -49,8 +49,8 @@ class ProviderLlmCompactSummarizer(LlmCompactSummarizer):
                         ChatMessage(
                             role="system",
                             content=(
-                                "你是 LansCoder 的上下文压缩器。输出简洁的 coding handoff；"
-                                "必须且只能使用指定的七个 Markdown 标题，每个恰好一次；"
+                                "你是 LansCoder 的上下文压缩器。输出简洁的多轮对话摘要；"
+                                "必须且只能使用指定的四个 Markdown 标题，每个恰好一次；"
                                 "只在标题下写有证据支持的事实。不要选择 checkpoint 边界。"
                             ),
                         ),
@@ -71,7 +71,7 @@ class ProviderLlmCompactSummarizer(LlmCompactSummarizer):
         if not summary:
             raise NoSummaryError("empty summary")
         return LlmCompactSummary(
-            summary=normalize_coding_handoff(summary),
+            summary=normalize_coding_handoff(summary, headings=DIALOGUE_SUMMARY_HEADINGS),
             tail_start_message_id=tail.tail_start_message_id,
             covered_until_message_id=tail.covered_until_message_id,
         )
@@ -132,7 +132,10 @@ def _recent_turn_max_tail_start_index(
     if min_created_turn <= 1:
         return 0
     for index, message in enumerate(candidates):
-        if _message_created_turn(message) >= min_created_turn:
+        turn = _message_created_turn(message)
+        if turn is None:
+            continue
+        if turn >= min_created_turn:
             return index
     return 0
 
@@ -149,16 +152,18 @@ def _boundary_candidates(messages: list[AgentMessage]) -> list[AgentMessage]:
     return [message for message in messages if not any(part.kind == "checkpoint_summary" for part in message.parts)]
 
 
-def _build_summary_prompt(messages: list[AgentMessage], *, summary_mode: str) -> str:
-    mode_hint = "更强压缩，优先保留可恢复事实。" if summary_mode == "stronger" else "常规压缩。"
-    headings = "\n".join(CODING_HANDOFF_HEADINGS)
+def _build_dialogue_summary_prompt(messages: list[AgentMessage], *, summary_mode: str) -> str:
+    mode_hint = "更强压缩，优先保留事实与约束。" if summary_mode == "stronger" else "常规压缩。"
+    headings = "\n".join(DIALOGUE_SUMMARY_HEADINGS)
     sections = [
         f"摘要模式：{mode_hint}",
         "",
-        "只能按以下 coding handoff 格式输出。每个标题必须恰好出现一次；" "若历史中没有某项的证据，写“无”：",
+        "以下会话的多轮对话需要压缩。只输出一次下面的每个标题；若该项没有证据，写“无”：",
         headings,
         "",
-        "需要压缩的会话历史：",
+        "要求：保留用户请求的要点、已经给出的结论、尚未完成或悬而未决的事项、以及影响后续工作的关键约束与偏好。丢弃：工具调用细节、中间推理、重复信息。",
+        "",
+        "需要压缩的对话历史：",
     ]
     for message in messages:
         content = _message_text(message)
