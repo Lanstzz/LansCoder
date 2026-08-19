@@ -18,7 +18,6 @@ def create_delegate_tool(
     runner: SubagentRunner,
     *,
     parent_session_id: str,
-    parent_task_hash: str | None = None,
 ) -> Tool:
     """Create the parent-facing delegate tool.
 
@@ -51,7 +50,6 @@ def create_delegate_tool(
             role=normalized_role,  # type: ignore[arg-type]
             task=normalized_task,
             parent_session_id=parent_session_id,
-            parent_task_hash=parent_task_hash,
             parent_summary=parent_summary,
             path_hints=hints,
             run_in_background=False,

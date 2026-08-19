@@ -9,7 +9,6 @@ from typing import Collection, Protocol
 from lanscoder.context.runtime_state import SessionRuntimeState
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.writer import SessionEventWriter
-from lanscoder.context.task_boundary import TaskBoundaryPolicy, TaskBoundaryService
 from lanscoder.memory.manager import MemoryManager
 from lanscoder.permissions.manager import PermissionManager
 from lanscoder.planning.service import TaskPlanService
@@ -19,7 +18,6 @@ from lanscoder.tools.memory_tools import create_memory_tools
 from lanscoder.tools.permission_registry import PermissionAwareToolRegistry
 from lanscoder.tools.retrieve_archive import create_retrieve_archive_tool
 from lanscoder.tools.registry import ToolRegistry
-from lanscoder.tools.task_boundary import create_task_boundary_tool
 from lanscoder.tools.task_create import create_task_create_tool
 from lanscoder.tools.task_list import create_task_list_tool
 from lanscoder.tools.task_revise import create_task_revise_tool
@@ -47,8 +45,6 @@ def create_session_tool_registry(
     runtime_state: SessionRuntimeState | None = None,
     tools: list[Tool] | None = None,
     known_message_ids: Collection[str] | None = None,
-    single_observation_basis_message_ids: Collection[str] = (),
-    task_boundary_required_stable_count: int = 2,
     permission_manager: PermissionManager | None = None,
     archive_root: str | Path | None = None,
     current_turn: Callable[[], int] | None = None,
@@ -60,16 +56,9 @@ def create_session_tool_registry(
 ) -> ToolRegistryLike:
     """创建单个会话专用的工具注册表。
 
-    `task_boundary` 依赖当前会话的 `SessionRuntimeState`，不能放进无状态默认工具集。
     这个工厂集中处理会话级注入，后续权限、确认策略也可以在这里包一层。
     """
 
-    state = runtime_state or SessionRuntimeState(session_id=session_id)
-    boundary_service = TaskBoundaryService(
-        required_stable_count=task_boundary_required_stable_count,
-        known_message_ids=known_message_ids,
-        policy=TaskBoundaryPolicy(single_observation_basis_message_ids=single_observation_basis_message_ids),
-    )
     supplied_tools = tools or []
     reserved_names = {
         "retrieve_archive",
@@ -83,8 +72,6 @@ def create_session_tool_registry(
     if conflicting is not None:
         raise ValueError(f"{conflicting} is a reserved session-scoped tool name")
     registry = ToolRegistry(supplied_tools)
-    if "task_boundary" not in registry.names():
-        registry.register(create_task_boundary_tool(state, service=boundary_service))
     if (store is None) != (writer is None):
         raise ValueError("store and writer must be provided together")
     if store is not None and writer is not None:

@@ -120,8 +120,6 @@ def _render_context_report(report: ContextInspectionReport) -> str:
         f"Latest checkpoint: {display_value(report.latest_checkpoint_id)}",
         f"Checkpoint boundary: {report.checkpoint_boundary_status}",
         f"Archives: {report.archive_count}",
-        f"Active task hash: {display_value(report.active_task_hash)}",
-        f"Candidate task hash: {display_value(report.candidate_task_hash)}",
         f"System prompt fingerprint: {display_value(report.system_prompt_fingerprint)}",
     ]
     return "\n".join(lines)

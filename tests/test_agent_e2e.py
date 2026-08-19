@@ -124,7 +124,7 @@ def test_agent_resume_e2e_replays_history_and_continues_turn(tmp_path) -> None:
     response = AgentLoop(session=resumed, provider=second_provider)._run_user_turn_sync("第二轮")
 
     assert response.content == "第二轮回复"
-    assert len(second_provider.requests) == 4
+    assert len(second_provider.requests) == 1
     provider_roles = [message.role for message in second_provider.requests[0].messages]
     assert provider_roles == ["system", "user", "assistant", "user"]
     assert second_provider.requests[0].messages[1].content.endswith("第一轮")

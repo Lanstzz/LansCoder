@@ -221,7 +221,7 @@ def test_context_builder_accepts_stable_system_prefix_from_builder() -> None:
 def test_context_builder_projects_one_trim_marker_and_preserves_latest_user_and_tool_chain() -> None:
     """L1's empty parts never make an orphan or blank provider message."""
 
-    trimmed_metadata = {"task_hash": "old", "compaction_state": "trimmed"}
+    trimmed_metadata = {"custom_key": "old", "compaction_state": "trimmed"}
     view = SessionView(
         session_id="sess_test",
         messages=[

@@ -1122,7 +1122,7 @@ def test_agent_loop_registers_background_control_tools_for_custom_tool_sets(tmp_
 
 
 def test_default_background_tool_names_exclude_control_and_mutation() -> None:
-    for excluded in ("task_boundary", "ask_user", "write", "edit", "delete", "apply_patch"):
+    for excluded in ("ask_user", "write", "edit", "delete", "apply_patch"):
         assert excluded not in DEFAULT_BACKGROUND_TOOL_NAMES
     for included in ("shell", "grep", "view", "diagnostics"):
         assert included in DEFAULT_BACKGROUND_TOOL_NAMES

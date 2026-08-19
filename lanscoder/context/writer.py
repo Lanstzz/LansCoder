@@ -17,7 +17,6 @@ from lanscoder.context.llm_compact import LlmCompactEvent
 from lanscoder.context.metadata import metadata_without_reserved_keys
 from lanscoder.context.models import MessagePart, utc_now_iso
 from lanscoder.context.store import JsonlSessionStore
-from lanscoder.context.task_boundary import TaskBoundaryObservation, TaskBoundaryService
 from lanscoder.context.versions import CONTEXT_EVENT_SCHEMA_VERSION
 from lanscoder.input.attachments import PreparedAttachment
 from lanscoder.planning.models import TaskPlan
@@ -281,10 +280,6 @@ class SessionEventWriter:
                 "created_at": utc_now_iso(),
             },
         )
-
-    def append_task_boundary_observation(self, observation: TaskBoundaryObservation) -> None:
-        event = TaskBoundaryService().to_event(session_id=self.session_id, observation=observation)
-        self.store.append_event(event)
 
     def append_task_plan_updated(
         self,

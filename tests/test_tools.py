@@ -19,7 +19,6 @@ from lanscoder.tools.apply_patch import create_apply_patch_tool
 from lanscoder.tools.diagnostics import create_diagnostics_tool
 from lanscoder.tools.python_exec import create_python_exec_tool
 from lanscoder.tools.shell import create_shell_tool
-from lanscoder.tools.task_boundary import create_task_boundary_tool
 from lanscoder.tools.think import create_think_tool
 from lanscoder.tools.read_multi import create_read_multi_tool
 from lanscoder.tools.ask_user import create_ask_user_tool
@@ -93,7 +92,6 @@ def test_each_tool_has_its_own_module():
     assert create_diagnostics_tool.__module__ == "lanscoder.tools.diagnostics"
     assert create_python_exec_tool.__module__ == "lanscoder.tools.python_exec"
     assert create_shell_tool.__module__ == "lanscoder.tools.shell"
-    assert create_task_boundary_tool.__module__ == "lanscoder.tools.task_boundary"
     assert create_think_tool.__module__ == "lanscoder.tools.think"
     assert create_read_multi_tool.__module__ == "lanscoder.tools.read_multi"
     assert create_ask_user_tool.__module__ == "lanscoder.tools.ask_user"

@@ -1,9 +1,7 @@
 import pytest
 
 from lanscoder.agent.session import AgentSession
-from lanscoder.context.runtime_state import SessionRuntimeState
 from lanscoder.context.store import JsonlSessionStore
-from lanscoder.context.task_boundary import TaskBoundaryDecision, TaskBoundaryService
 from lanscoder.context.versions import CONTEXT_EVENT_SCHEMA_VERSION
 from lanscoder.context.writer import SessionEventWriter
 from lanscoder.planning.models import Task, TaskPlan, TaskPlanError
@@ -67,10 +65,10 @@ def test_writer_can_patch_message_part_metadata(tmp_path) -> None:
     message_id = writer.append_user_message("第一任务")
     part_id = store.rebuild_session_view("sess_test").messages[0].parts[0].id
 
-    writer.append_message_part_metadata_updated(message_id=message_id, part_id=part_id, metadata={"task_hash": "task_a"})
+    writer.append_message_part_metadata_updated(message_id=message_id, part_id=part_id, metadata={"custom_key": "custom_value"})
 
     view = store.rebuild_session_view("sess_test")
-    assert view.messages[0].parts[0].metadata["task_hash"] == "task_a"
+    assert view.messages[0].parts[0].metadata["custom_key"] == "custom_value"
     assert view.messages[0].parts[0].metadata["created_turn"] == 1
 
 
@@ -156,21 +154,6 @@ def test_session_records_only_new_consumed_part_ids(tmp_path) -> None:
     events = [event for event in session.store.list_events("sess_test") if event.type == "provider_projection_consumed"]
     assert len(events) == 1
     assert session.runtime_state.consumed_tool_result_part_ids == {"part_a", "part_b"}
-
-
-def test_writer_appends_task_boundary_observation_event(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    writer = SessionEventWriter(store=store, session_id="sess_test")
-    state = SessionRuntimeState(session_id="sess_test", active_task_hash="task_previous")
-    service = TaskBoundaryService(required_stable_count=1)
-    observation = service.observe(state, decision=TaskBoundaryDecision.NEW, basis_message_id="msg_new")
-
-    writer.append_task_boundary_observation(observation)
-
-    event = store.list_events("sess_test")[0]
-    assert event.type == "task_boundary_observed"
-    assert event.payload["active_task_hash"] == observation.candidate_hash
-    assert event.payload["triggered_compaction"] is True
 
 
 def test_writer_appends_task_plan_event_and_store_replays_latest_snapshot(tmp_path) -> None:

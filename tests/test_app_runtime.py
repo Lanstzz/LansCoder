@@ -4,13 +4,12 @@ import time
 
 import pytest
 
-from lanscoder.app.runtime import AgentChatRunner, CurrentSessionState, _display_lines_from_messages
+from lanscoder.app.runtime import AgentChatRunner, CurrentSessionState
 from lanscoder.agent.loop import ToolExecutionEvent
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.session import AgentSession
 from lanscoder.agent.user_input import AgentTurnStatus
 from lanscoder.context.store import JsonlSessionStore
-from lanscoder.context.models import AgentMessage, MessagePart
 from lanscoder.permissions.types import PermissionMode
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import ChatRequest, ChatResponse, ChatStreamEvent, ProviderDiagnostics, ToolCall
@@ -300,49 +299,6 @@ def test_agent_chat_runner_forwards_tool_execution_events(tmp_path) -> None:
     assert [event.tool_call.name for event in events] == ["echo_path", "echo_path"]
     assert events[1].result is not None
     assert events[1].result.content == "read README.md"
-
-
-def test_display_lines_hide_internal_task_boundary_tool() -> None:
-    messages = [
-        AgentMessage(
-            id="msg_assistant",
-            session_id="sess_test",
-            role="assistant",
-            parts=[
-                MessagePart(
-                    id="part_call",
-                    message_id="msg_assistant",
-                    kind="tool_call",
-                    content="",
-                    metadata={
-                        "tool_call_id": "call_boundary",
-                        "tool_name": "task_boundary",
-                        "arguments": {"decision": "new", "basis_message_id": "msg_user"},
-                    },
-                )
-            ],
-        ),
-        AgentMessage(
-            id="msg_tool",
-            session_id="sess_test",
-            role="tool",
-            parts=[
-                MessagePart(
-                    id="part_result",
-                    message_id="msg_tool",
-                    kind="tool_result",
-                    content="任务边界观察已记录，暂不触发压缩。",
-                    metadata={
-                        "tool_call_id": "call_boundary",
-                        "tool_name": "task_boundary",
-                        "ok": True,
-                    },
-                )
-            ],
-        ),
-    ]
-
-    assert _display_lines_from_messages(messages) == []
 
 
 def test_agent_chat_runner_exposes_pending_user_input(tmp_path) -> None:

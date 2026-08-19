@@ -125,7 +125,6 @@ def test_system_prompt_loads_one_unified_agent_prompt() -> None:
     assert "# Few-shot examples" not in content
     assert "planning reminder" not in content
     assert "progress reminder" not in content
-    assert "task_boundary" not in content
     assert "successful verification" not in content.lower()
 
     assert "# Role and instruction priority" in content
@@ -162,15 +161,6 @@ def test_benchmark_task_content_does_not_change_system_prompt_fingerprint() -> N
     builder = SystemPromptBuilder()
 
     assert builder.fingerprint(_inputs(benchmark_task="Fix A.")) == builder.fingerprint(_inputs(benchmark_task="Fix B."))
-
-
-def test_system_prompt_delegates_task_boundary_to_runtime() -> None:
-    entry = SystemPromptBuilder().build(_inputs())
-    content = entry.messages[0].content
-
-    assert "The runtime classifies every real user turn before this request" in content
-    assert "Task boundaries are internal runtime state, not an agent tool" in content
-    assert "task_boundary" not in content
 
 
 def test_system_prompt_version_is_v18() -> None:

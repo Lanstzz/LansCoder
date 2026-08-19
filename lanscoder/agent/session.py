@@ -23,7 +23,6 @@ from lanscoder.context.runtime_replay import replay_runtime_state
 from lanscoder.context.runtime_state import SessionRuntimeState
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.system_prompt import PromptPrefixCache, SystemPromptBuilder
-from lanscoder.context.task_boundary import observation_from_tool_result_data
 from lanscoder.context.writer import SessionEventWriter
 from lanscoder.permissions.grants import FilePermissionGrantStore, PermissionGrantStore
 from lanscoder.permissions.manager import PermissionManager
@@ -158,7 +157,6 @@ class AgentSession:
             runtime_state=runtime_state,
             tools=tools,
             known_message_ids=known_message_ids,
-            task_boundary_required_stable_count=_task_boundary_required_stable_count(permission_manager),
             permission_manager=permission_manager,
             archive_root=store.root,
             current_turn=lambda: writer.current_turn,
@@ -223,8 +221,8 @@ class AgentSession:
         """从 JSONL 会话日志恢复运行期 session。
 
         `rebuild_session_view()` 恢复可投影的消息和 checkpoint；`replay_runtime_state()`
-        恢复 task hash、compact 熔断和最近压缩事实。这里还要把历史 message id 注入
-        `known_message_ids`，否则恢复后的 task_boundary 工具会拒绝模型引用旧消息。
+        恢复 compact 熔断和最近压缩事实。这里还要把历史 message id 注入
+        `known_message_ids`，方便工具引用旧消息。
         """
 
         runtime_state = replay_runtime_state(store, session_id)
@@ -254,7 +252,6 @@ class AgentSession:
             runtime_state=runtime_state,
             tools=tools,
             known_message_ids=known_message_ids,
-            task_boundary_required_stable_count=_task_boundary_required_stable_count(permission_manager),
             permission_manager=permission_manager,
             archive_root=store.root,
             current_turn=lambda: writer.current_turn,
@@ -436,7 +433,6 @@ class AgentSession:
         message_id = self.writer.append_user_message(
             content,
             attachments=prepared_attachments,
-            part_metadata=self._current_context_metadata(),
         )
         self.turn_counter = self.writer.current_turn
         self.known_message_ids.add(message_id)
@@ -451,7 +447,6 @@ class AgentSession:
 
         message_id = new_message_id()
         parts = assistant_response_to_parts(message_id=message_id, response=response)
-        self._attach_current_context_metadata(parts)
         assistant_message_id = self.writer.append_assistant_parts(
             parts,
             message_id=message_id,
@@ -561,14 +556,12 @@ class AgentSession:
 
             message_id = new_message_id()
             part = tool_result_to_part(message_id=message_id, tool_call=tool_call, result=result)
-            self._attach_current_context_metadata([part])
             tool_message_id = self.writer.append_tool_result_part(
                 part,
                 message_id=message_id,
             )
             self._tool_result_message_ids[tool_call.id] = tool_message_id
             self.known_message_ids.add(tool_message_id)
-            self._append_task_boundary_observation_if_present(tool_call=tool_call, result=result)
             return tool_message_id
 
     def append_interrupted_tool_results(self) -> list[ToolCall]:
@@ -624,26 +617,6 @@ class AgentSession:
         """从 append-only JSONL 重建当前 SessionView。"""
 
         return self.store.rebuild_session_view(self.session_id)
-
-    def _append_task_boundary_observation_if_present(self, *, tool_call: ToolCall, result: ToolResult) -> None:
-        if tool_call.name != "task_boundary" or not result.ok:
-            return
-        observation = observation_from_tool_result_data(result.data)
-        if observation is not None:
-            self.writer.append_task_boundary_observation(observation)
-
-    def _current_context_metadata(self) -> dict[str, object]:
-        metadata: dict[str, object] = {}
-        if self.runtime_state.active_task_hash:
-            metadata["task_hash"] = self.runtime_state.active_task_hash
-        return metadata
-
-    def _attach_current_context_metadata(self, parts: list[MessagePart]) -> None:
-        """给本轮新写入的 parts 附加当前任务上下文元数据。"""
-
-        metadata = self._current_context_metadata()
-        for part in parts:
-            part.metadata.update(metadata)
 
     def _pending_tool_calls_from_tail(self) -> list[tuple[ToolCall, list[ToolCall], bool | None]]:
         messages = self.rebuild_view().messages
@@ -748,9 +721,3 @@ def create_project_permission_manager(
     mode: PermissionMode = PermissionMode.STANDARD,
 ) -> PermissionManager:
     return PermissionManager(policy=DefaultPermissionPolicy(project_root), grants=grants, mode=mode)
-
-
-def _task_boundary_required_stable_count(permission_manager: PermissionManager | None) -> int:
-    if permission_manager is not None and permission_manager.mode == PermissionMode.BYPASS:
-        return 1
-    return 2
