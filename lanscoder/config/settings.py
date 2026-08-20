@@ -1,9 +1,3 @@
-"""应用配置加载。
-
-配置层是 LansCoder 的统一入口：CLI、provider factory、TUI 都应该通过这里拿到
-运行配置，而不是在各处直接读取文件或环境变量。
-"""
-
 from __future__ import annotations
 
 import os
@@ -20,11 +14,6 @@ PROJECT_CONFIG_NAME = "lanscoder.toml"
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
-    """LansCoder 的应用级配置。
-
-    `env` 保留 LANSCODER_* 和厂商环境变量；`project_config` / `global_config`
-    承载 TOML 配置。provider factory 只依赖这个对象的方法，不需要知道配置来自哪里。
-    """
 
     env: dict[str, str]
     project_config: dict[str, Any] | None = None
@@ -33,10 +22,6 @@ class AppConfig:
     global_config_path: Path | None = None
 
     def get_env(self, name: str, default: str | None = None) -> str | None:
-        """读取配置中的环境变量值。
-
-        Provider secrets are resolved by an explicit Catalog profile.
-        """
 
         return self.env.get(name, default)
 
@@ -48,7 +33,6 @@ class AppConfig:
         default: bool | None = None,
         provider_name: str,
     ) -> bool | None:
-        """按配置优先级读取 provider 布尔字段。"""
 
         if env:
             env_value = self.get_env(env)
@@ -60,7 +44,6 @@ class AppConfig:
         return default
 
     def get_config_value(self, name: str, *, default: str | None = None) -> str | None:
-        """读取顶层配置字段，项目配置覆盖全局配置。"""
 
         for config in (self.project_config, self.global_config):
             value = _string_value(config, name)
@@ -69,7 +52,6 @@ class AppConfig:
         return default
 
     def mcp_config(self) -> dict[str, Any]:
-        """返回按服务器名合并的原始 MCP 配置，项目配置完整覆盖同名全局配置。"""
 
         merged: dict[str, Any] = {}
         for config in (self.global_config, self.project_config):
@@ -83,7 +65,6 @@ class AppConfig:
         return merged
 
     def model_catalog(self) -> ModelCatalog:
-        """返回合并后的多模型目录。"""
 
         return build_model_catalog(
             global_config=self.global_config,
@@ -92,7 +73,6 @@ class AppConfig:
 
     @property
     def loaded_config_paths(self) -> list[Path]:
-        """已经存在并被加载的配置文件路径。"""
 
         return [path for path in (self.global_config_path, self.project_config_path) if path is not None]
 
@@ -114,11 +94,6 @@ def load_config(
     project_root: Path | str | None = None,
     env: dict[str, str] | None = None,
 ) -> AppConfig:
-    """从配置文件和系统环境变量加载应用配置。
-
-    Provider 和模型选择只来自标准 Model Catalog；API key 直接从配置文件
-    的 api_key 字段读取，不再从环境变量或 .env 文件获取。
-    """
 
     env_snapshot = dict(os.environ if env is None else env)
     root = Path(project_root or os.getcwd()).resolve()
@@ -137,7 +112,6 @@ def load_config(
 
 
 def default_global_config_path() -> Path:
-    """返回当前平台的全局 LansCoder 配置路径。"""
 
     config_home = os.getenv("XDG_CONFIG_HOME")
     if config_home:
@@ -146,13 +120,11 @@ def default_global_config_path() -> Path:
 
 
 def project_config_path(project_root: Path | str | None = None) -> Path:
-    """返回项目级配置文件路径。"""
 
     return Path(project_root or os.getcwd()).resolve() / PROJECT_CONFIG_NAME
 
 
 def render_default_config() -> str:
-    """生成可直接写入全局配置的默认模板。"""
 
     return "\n".join(
         [

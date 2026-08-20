@@ -1,5 +1,3 @@
-"""`delete` 工具。"""
-
 from __future__ import annotations
 
 import shutil
@@ -13,7 +11,6 @@ from lanscoder.utils.sandbox_access import SandboxAccess
 
 
 def create_delete_tool(root: str | Path, *, access: SandboxAccess | None = None) -> Tool:
-    """创建删除文件或目录的工具。"""
 
     sandbox = PathSandbox(root, access=access)
 
@@ -47,7 +44,6 @@ def create_delete_tool(root: str | Path, *, access: SandboxAccess | None = None)
 
 
 def _resolve_delete_target(sandbox: PathSandbox, path: str | Path | None) -> Path:
-    """解析删除目标，但保留符号链接本身用于 unlink。"""
 
     lexical = sandbox.root if path in (None, "") else sandbox.root / Path(path)
     resolved = lexical.resolve()

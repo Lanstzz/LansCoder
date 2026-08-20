@@ -1,5 +1,3 @@
-"""多模型 Catalog 配置模型与 TOML 解析。"""
-
 from __future__ import annotations
 
 from copy import deepcopy
@@ -10,7 +8,7 @@ from lanscoder.context.budget_defaults import DEFAULT_CONTEXT_WINDOW, DEFAULT_OU
 
 
 class ModelCatalogError(ValueError):
-    """模型目录配置缺失或不合法。"""
+    pass
 
 
 _RESERVED_REQUEST_EXTRA_BODY_FIELDS = {
@@ -181,7 +179,6 @@ def build_model_catalog(
     global_config: Mapping[str, Any] | None = None,
     project_config: Mapping[str, Any] | None = None,
 ) -> ModelCatalog:
-    """合并全局/项目 TOML，并构造不可变模型目录。"""
     providers_raw = _merged_sections(global_config, project_config, "providers")
     models_raw = _merged_sections(global_config, project_config, "models")
     if not models_raw:

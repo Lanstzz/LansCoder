@@ -1,5 +1,3 @@
-"""OS clipboard helpers for multimodal paste."""
-
 from __future__ import annotations
 
 import platform
@@ -9,11 +7,6 @@ from pathlib import Path
 
 
 def read_clipboard_image_bytes() -> bytes | None:
-    """Return image bytes from the system clipboard when available.
-
-    Supports macOS, Linux clipboard tools, and Windows PowerShell.
-    Returns None when the clipboard has no image or the platform is unsupported.
-    """
 
     system = platform.system()
     if system == "Darwin":
@@ -72,7 +65,6 @@ def _read_windows_clipboard_image() -> bytes | None:
 def _read_macos_clipboard_image() -> bytes | None:
     with tempfile.TemporaryDirectory(prefix="lanscoder-clipboard-") as tmp:
         out_path = Path(tmp) / "clipboard.png"
-        # Prefer PNG; fall back to TIFF and convert via sips when needed.
         script = f"""
         set outPath to "{out_path.as_posix()}"
         try
@@ -132,6 +124,5 @@ def _read_macos_clipboard_image() -> bytes | None:
                 return None
             if convert.returncode == 0 and converted.exists() and converted.stat().st_size > 0:
                 return converted.read_bytes()
-            # Last resort: return raw TIFF bytes (providers usually reject TIFF).
             return None
         return None

@@ -1,5 +1,3 @@
-"""Resolve discovered skills and render the model-visible catalog."""
-
 from __future__ import annotations
 
 from lanscoder.skills.models import SkillCatalog, SkillDefinition, SkillSource
@@ -11,7 +9,6 @@ SKILL_CATALOG_TRUNCATED = "Skill catalog truncated: not every skill name fits th
 
 
 def resolve_skill_catalog(catalog: SkillCatalog) -> SkillCatalog:
-    """Return one deterministic effective definition for each skill name."""
 
     selected: dict[str, SkillDefinition] = {}
     for skill in sorted(catalog.skills, key=_resolution_key):
@@ -23,7 +20,6 @@ def resolve_skill_catalog(catalog: SkillCatalog) -> SkillCatalog:
 
 
 def render_skill_catalog(catalog: SkillCatalog) -> str:
-    """Render whole catalog lines within the fixed system-prompt budget."""
 
     skills = resolve_skill_catalog(catalog).skills
     if not skills:
@@ -31,8 +27,6 @@ def render_skill_catalog(catalog: SkillCatalog) -> str:
 
     footer = SKILL_LOAD_INSTRUCTION
     name_lines = [f"- {skill.name}:" for skill in skills]
-    # Reserve one separator space per skill because normal rows are rendered as
-    # ``- name: description``. This keeps the final string within the budget.
     fixed_cost = _joined_length([*name_lines, footer]) + len(skills)
     if fixed_cost > SKILL_CATALOG_MAX_CHARS:
         return _render_name_only_prefix(name_lines)

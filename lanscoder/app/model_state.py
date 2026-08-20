@@ -1,5 +1,3 @@
-"""项目级模型选择偏好持久化。"""
-
 from __future__ import annotations
 
 import json
@@ -11,17 +9,12 @@ from pathlib import Path
 
 @dataclass(frozen=True, slots=True)
 class ModelSelectionState:
-    """最近一次有效模型选择及其最近使用列表。"""
 
     last_selected: str | None = None
     recent: tuple[str, ...] = ()
 
 
 class ModelStateStore:
-    """以原子 JSON 文件保存项目级模型选择。
-
-    状态文件只是 UI 偏好，任何读取或写入异常都不应阻止应用启动。
-    """
 
     def __init__(self, path: Path, *, recent_limit: int = 10) -> None:
         if recent_limit <= 0:
@@ -92,7 +85,6 @@ class ModelStateStore:
                 os.fsync(handle.fileno())
             Path(temporary_path).replace(self.path)
         except OSError:
-            # A preference write failure should not break a model switch.
             return
         finally:
             if temporary_path is not None:

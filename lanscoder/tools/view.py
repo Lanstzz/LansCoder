@@ -1,5 +1,3 @@
-"""`view` 工具。"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,7 +11,6 @@ from lanscoder.utils.text import safe_read_text
 
 
 def create_view_tool(root: str | Path, *, access: SandboxAccess | None = None) -> Tool:
-    """创建读取文本文件的工具。"""
 
     sandbox = PathSandbox(root, access=access)
 

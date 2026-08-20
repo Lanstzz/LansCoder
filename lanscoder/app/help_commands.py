@@ -1,5 +1,3 @@
-"""Help slash command."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,9 +11,8 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class HelpCommandHandler:
-    """Render the current TUI slash command surface."""
 
-    command_handler: CompositeCommandHandler  # injected from factory
+    command_handler: CompositeCommandHandler
 
     def handle(self, text: str) -> CommandResult:
         command = " ".join(text.strip().split())

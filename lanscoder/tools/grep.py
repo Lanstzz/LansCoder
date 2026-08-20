@@ -1,5 +1,3 @@
-"""`grep` 工具。"""
-
 from __future__ import annotations
 
 import fnmatch
@@ -19,7 +17,6 @@ DEFAULT_MAX_SEARCH_RESULTS = 50
 
 
 def create_grep_tool(root: str | Path, *, access: SandboxAccess | None = None) -> Tool:
-    """创建文本搜索工具。"""
 
     sandbox = PathSandbox(root, access=access)
     execution_sandbox = ExecutionSandbox(root, access=access)
@@ -79,7 +76,6 @@ def _grep_with_rg(
     case_sensitive: bool,
     max_results: int,
 ) -> ToolResult:
-    """使用 ripgrep 搜索，并把输出解析成结构化结果。"""
 
     command = [
         rg_path,
@@ -145,7 +141,6 @@ def _grep_with_python(
     max_results: int,
     fallback_error: str | None = None,
 ) -> ToolResult:
-    """使用 Python 实现的正则搜索后备路径。"""
 
     flags = 0 if case_sensitive else re.IGNORECASE
     try:
@@ -181,7 +176,6 @@ def _grep_with_python(
 
 
 def _parse_rg_output(sandbox: PathSandbox, output: str, max_results: int) -> list[dict[str, object]]:
-    """解析 `rg --line-number --with-filename` 的输出。"""
 
     results: list[dict[str, object]] = []
     for line in output.splitlines():
@@ -201,7 +195,6 @@ def _parse_rg_output(sandbox: PathSandbox, output: str, max_results: int) -> lis
 
 
 def _split_rg_line(line: str) -> tuple[str, str, str]:
-    """按 Windows 盘符兼容方式拆分 rg 输出行。"""
 
     first = line.find(":")
     if first == 1 and len(line) > 2 and line[2] in ("\\", "/"):
@@ -226,7 +219,6 @@ def _format_grep_result(
     engine: str,
     truncated: bool,
 ) -> ToolResult:
-    """把搜索结果格式化为工具统一结果。"""
 
     content = "\n".join(f"{result['path']}:{result['line']}: {result['text']}" for result in results)
     return make_text_result(
@@ -239,11 +231,6 @@ def _format_grep_result(
 
 
 def _matches_include(file_path: Path, relative: str, include: str) -> bool:
-    """让 Python fallback 的 include 行为尽量贴近 ripgrep。
-
-    简单文件名模式如 `*.py` 匹配任意目录下的 Python 文件；包含路径分隔符的模式
-    则按相对路径匹配，例如 `src/*.py`。
-    """
 
     if "/" in include or "\\" in include:
         return fnmatch.fnmatch(relative, include.replace("\\", "/"))

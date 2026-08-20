@@ -1,5 +1,3 @@
-"""Attachment discovery, staging, and provider-facing preparation."""
-
 from __future__ import annotations
 
 import base64
@@ -15,9 +13,7 @@ from lanscoder.input.clipboard import read_clipboard_image_bytes
 
 AttachmentKind = Literal["image", "file"]
 
-# Keep images within typical provider payload budgets.
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
-# Text-like files larger than this are attached as path references only.
 MAX_INLINE_TEXT_BYTES = 200 * 1024
 MAX_ATTACHMENTS_PER_MESSAGE = 16
 
@@ -39,19 +35,17 @@ _TEXT_MEDIA_TYPES = {
 
 @dataclass(slots=True)
 class UserAttachment:
-    """An attachment staged in the composer before send."""
 
     kind: AttachmentKind
     path: Path
     filename: str
     media_type: str
     size_bytes: int
-    source: str = "path"  # path | clipboard | paste
+    source: str = "path"
 
 
 @dataclass(slots=True)
 class PreparedAttachment:
-    """Attachment copied into the session attachment store and ready for persistence."""
 
     kind: AttachmentKind
     filename: str
@@ -143,14 +137,12 @@ def attach_path(path: str | Path, *, source: str = "path") -> UserAttachment:
 
 
 def parse_path_candidates(text: str) -> list[str]:
-    """Extract likely absolute/relative file paths from paste text."""
 
     if not text or not text.strip():
         return []
     candidates: list[str] = []
     for match in _FILE_URI_RE.findall(text):
         candidates.append(match)
-    # Prefer whole-line paths (common when Finder pastes one path per line).
     for line in text.splitlines():
         stripped = line.strip().strip('"').strip("'")
         if not stripped:
@@ -158,7 +150,6 @@ def parse_path_candidates(text: str) -> list[str]:
         if stripped.startswith("file://") or stripped.startswith(("/", "~", "./", "../")) or re.match(r"^[A-Za-z]:[\\/]", stripped):
             candidates.append(stripped)
             continue
-        # Single-token relative path without spaces.
         if " " not in stripped and ("/" in stripped or "\\" in stripped) and Path(stripped).suffix:
             candidates.append(stripped)
     for match in _PATH_CANDIDATE_RE.findall(text):
@@ -180,7 +171,6 @@ def _path_from_candidate(candidate: str) -> Path | None:
     if not text:
         return None
     if text.startswith("file://"):
-        # Handle file:///Users/... and file://localhost/Users/...
         without_scheme = text[7:]
         if without_scheme.startswith("localhost"):
             without_scheme = without_scheme[len("localhost") :]
@@ -203,7 +193,6 @@ def resolve_paste_attachments(
     *,
     include_clipboard_image: bool = True,
 ) -> list[UserAttachment]:
-    """Resolve attachments from paste text and/or the OS clipboard image."""
 
     attachments: list[UserAttachment] = []
     seen_paths: set[Path] = set()
@@ -220,8 +209,6 @@ def resolve_paste_attachments(
             attachments.append(attachment)
             seen_paths.add(path)
 
-    # If the paste is only path(s), we still may also have an image on the clipboard.
-    # Prefer path attachments when both exist to avoid duplicate noise.
     if include_clipboard_image and not attachments:
         image_bytes = read_clipboard_image_bytes()
         if image_bytes:
@@ -254,7 +241,6 @@ def prepare_attachments_for_session(
     store_root: Path,
     session_id: str,
 ) -> list[PreparedAttachment]:
-    """Copy attachments under the session attachment directory."""
 
     if not attachments:
         return []

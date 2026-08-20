@@ -1,5 +1,3 @@
-"""agent 主循环与会话编排层。"""
-
 __all__ = ["AgentLoop", "AgentSession"]
 
 

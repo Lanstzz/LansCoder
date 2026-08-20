@@ -1,5 +1,3 @@
-"""Rendering, activity, and streaming helpers for the Textual TUI."""
-
 from __future__ import annotations
 
 import asyncio
@@ -89,9 +87,6 @@ class LansCoderViewMixin:
         if session_id is None and self.current_session is not None:
             session_id = self.current_session.session_id
         brand = f"[{theme.ACCENT}]LansCoder[/]"
-        # 顶栏 status 独立于下栏：thinking 时只显示 "thinking ⠋" 动画头（_topbar_status），
-        # reasoning 全文只进下栏 #activity。非 thinking 状态 _topbar_status 镜像
-        # _activity_text；兜底 _activity_text（测试/直接赋值路径）。
         status_text = self._topbar_status if self._topbar_status else self._activity_text
         status = activity_markup(single_line_activity(status_text))
         metadata_values: list[tuple[str | None, str, int | None]] = []
@@ -216,8 +211,6 @@ class LansCoderViewMixin:
                     self._call_ui_thread(self._write_review_payload, review)
                 return
             if event_kind == "permission_requested":
-                # Permission prompts are displayed by _write_pending_input() after
-                # the response is received, so skip them here to avoid duplication.
                 return
             line = tool_status_text(event)
             if not line:
@@ -308,9 +301,6 @@ class LansCoderViewMixin:
             self._pending_reasoning_text.clear()
 
     def _is_output_pinned_to_bottom(self, output) -> bool:
-        # 必须在内容变更之前调用：否则新增内容会让 max_scroll_y 立即增长，
-        # 而 scroll_y 仍停留在旧位置，检查会错误地认为用户已经向上滚走，
-        # 从而漏掉 auto-scroll。
         if not hasattr(output, "scroll_y"):
             return False
         scroll_y = float(getattr(output, "scroll_y", 0) or 0)
@@ -525,8 +515,6 @@ class LansCoderViewMixin:
         pending = getattr(self.chat_runner, "last_pending_input", None)
         if pending is None:
             return
-        # 进入"等待用户输入"暂停态：working/activity 动画必须停，否则下一帧
-        # 动画回调会把 activity 覆盖回 "thinking ..."（ask_user 假 busy 的根源）。
         self._stop_working_animation()
         self._stop_activity_animation()
         if getattr(pending, "kind", None) == "permission_confirmation":
@@ -581,7 +569,6 @@ class LansCoderViewMixin:
         self._start_working_animation()
 
     def _working_head(self) -> str:
-        """顶栏 thinking 状态只显示动画头（不含 reasoning 文本）。"""
         frame = self.WORKING_FRAMES[self._working_frame_index % len(self.WORKING_FRAMES)]
         return f"thinking {frame}"
 
@@ -653,8 +640,6 @@ class LansCoderViewMixin:
 
     def _set_activity(self, text: str, *, topbar_status: str | None = None) -> None:
         self._activity_text = text
-        # 顶栏短状态默认镜像 activity 全文；working-indicator 单独传 thinking 动画头，
-        # 使顶栏只显示动画、reasoning 全文只进下栏。
         self._topbar_status = text if topbar_status is None else topbar_status
         activity = self._query_mounted("#activity")
         if activity is None:
@@ -673,7 +658,6 @@ class LansCoderViewMixin:
         return Text(text, style=theme.ACCENT_DARK)
 
     def tool_activity_line_text(self, text: str, activity) -> str:
-        # 与顶栏一致：activity 行也是单行 widget，先折叠 reasoning 内容里的换行。
         text = single_line_activity(text)
         metrics = turn_metrics_text(self._turn_elapsed_seconds(), self._turn_tool_count)
         width = getattr(getattr(activity, "size", None), "width", None)
@@ -719,7 +703,6 @@ class LansCoderViewMixin:
         self._stream_segment_closed_for_tool = True
 
     def _finalize_stream_widget(self) -> None:
-        """Finish a closed stream segment before allowing its Markdown selection."""
 
         widget = self._stream_text_widget
         if widget is None:
@@ -754,8 +737,6 @@ class LansCoderViewMixin:
                 if pending_update is not None:
                     await pending_update
                 output = self.query_one("#output")
-                # 在 widget.update() 之前捕获 pinned 状态：更新会增大 max_scroll_y，
-                # 之后检查会误判用户已向上滚动，从而漏掉 auto-scroll。
                 was_pinned = self._is_output_pinned_to_bottom(output)
                 await widget.update(final_markdown)
                 widget.set_selectable(True)
@@ -776,7 +757,6 @@ class LansCoderViewMixin:
         )
 
     async def wait_for_stream_finalization(self, widget: LansCoderMarkdown) -> None:
-        """Wait until a closed stream widget has its final Markdown and selection state."""
 
         completion = self._stream_finalizations.get(widget)
         if completion is not None:

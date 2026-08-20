@@ -1,5 +1,3 @@
-"""Cooperative cancellation primitives for agent turns and tool execution."""
-
 from __future__ import annotations
 
 import threading
@@ -8,7 +6,6 @@ from dataclasses import dataclass, field
 
 @dataclass(slots=True)
 class CancellationToken:
-    """Small thread-safe cancellation flag shared by UI, loop, and tools."""
 
     _event: threading.Event = field(default_factory=threading.Event)
 
@@ -25,7 +22,6 @@ class CancellationToken:
 
 
 class AgentCancelledError(RuntimeError):
-    """Raised when an agent turn is interrupted by the user."""
 
     def __init__(self, message: str = "Agent turn was interrupted.") -> None:
         super().__init__(message)
@@ -39,7 +35,6 @@ def current_cancellation_token() -> CancellationToken | None:
 
 
 class cancellation_context:
-    """Temporarily expose a cancellation token to synchronous tool executors."""
 
     def __init__(self, token: CancellationToken | None) -> None:
         self.token = token

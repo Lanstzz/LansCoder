@@ -1,5 +1,3 @@
-"""Agent-turn result types."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,7 +13,6 @@ __all__ = [
 
 
 class AgentTurnStatus(StrEnum):
-    """一轮 agent 执行后的状态。"""
 
     COMPLETED = "completed"
     WAITING_FOR_USER_INPUT = "waiting_for_user_input"
@@ -23,7 +20,6 @@ class AgentTurnStatus(StrEnum):
 
 @dataclass(slots=True)
 class AgentTurnResult:
-    """交互式 agent turn 的返回值。"""
 
     status: AgentTurnStatus
     response: ChatResponse | None = None

@@ -1,5 +1,3 @@
-"""Textual widgets used by the LansCoder TUI."""
-
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +11,6 @@ from textual.widgets import Markdown, Static, TextArea
 
 
 class LansCoderMarkdown(Markdown):
-    """Markdown output with selection gated by its render lifecycle."""
 
     ALLOW_SELECT = True
 
@@ -26,7 +23,6 @@ class LansCoderMarkdown(Markdown):
         return self._selectable
 
     def set_selectable(self, selectable: bool) -> None:
-        """Toggle selection once no more Markdown updates will replace blocks."""
 
         self._selectable = selectable
         self.refresh()
@@ -43,11 +39,7 @@ LansCoderMarkdown.BLOCKS = {
 
 
 class ComposerTextArea(TextArea):
-    """Multiline composer where Enter submits and Shift+Enter inserts a newline."""
 
-    # TextArea owns Ctrl+V, so an App binding is not invoked while the composer
-    # has focus. Route the key through this widget to stage clipboard images;
-    # terminal Paste events remain responsible for inserting plain text.
     BINDINGS = [
         Binding("ctrl+v", "paste", show=False, priority=True),
         Binding("super+v", "paste", show=False, priority=True),
@@ -60,21 +52,17 @@ class ComposerTextArea(TextArea):
     _suppress_suggest = False
 
     def _get_slash_suggest(self):
-        """Return the SlashSuggest widget, or None if not found."""
         try:
             return self.app.query_one("#slash-suggest")
         except Exception:
             return None
 
     def _update_slash_suggest(self) -> None:
-        """Update slash-command suggestions based on current input text."""
         suggest = self._get_slash_suggest()
         if suggest is not None:
             suggest.update_suggestions(self.text)
 
     def _on_text_area_changed(self, _event: TextArea.Changed) -> None:
-        """React to every text change so bindings (backspace, delete, …) also
-        update the slash-command dropdown — not just keys routed through _on_key."""
         if self._suppress_suggest:
             return
         self._update_slash_suggest()
@@ -83,7 +71,6 @@ class ComposerTextArea(TextArea):
         self._suppress_suggest = False
 
     async def _on_key(self, event: events.Key) -> None:
-        # ── slash-command autocomplete ──────────────────────────────
         suggest = self._get_slash_suggest()
         if suggest is not None and suggest.has_class("--visible"):
             if event.key == "enter":
@@ -120,7 +107,6 @@ class ComposerTextArea(TextArea):
                 if suggest.highlighted is not None and suggest.highlighted < suggest.option_count - 1:
                     suggest.action_cursor_down()
                 return
-        # ── existing key handling ───────────────────────────────────
         if event.key == "enter":
             event.stop()
             event.prevent_default()
@@ -134,7 +120,6 @@ class ComposerTextArea(TextArea):
         await super()._on_key(event)
 
     async def _on_paste(self, event: events.Paste) -> None:
-        """Stage pasted files before TextArea inserts their paths as text."""
 
         stage_attachments = getattr(self.app, "_stage_paste_attachments", None)
         if callable(stage_attachments) and stage_attachments(event.text):
@@ -144,14 +129,12 @@ class ComposerTextArea(TextArea):
         await super()._on_paste(event)
 
     def action_paste(self) -> None:
-        """Attach an OS clipboard image before the terminal emits its Paste event."""
 
         paste_attachment = getattr(self.app, "_paste_composer_clipboard_image", None)
         if callable(paste_attachment) and paste_attachment():
             return
 
     def action_paste_image(self) -> None:
-        """Attach an OS clipboard image and report when no image is available."""
 
         paste_attachment = getattr(self.app, "_paste_composer_clipboard_image", None)
         if callable(paste_attachment) and paste_attachment():
@@ -193,11 +176,9 @@ class LansCoderTuiConfig:
 
 
 class LansCoderScreen(Screen[None]):
-    """Notify the app after Textual has committed a new terminal size."""
 
     @staticmethod
     def _selection_is_blocked_by_streaming_markdown(widget) -> bool:
-        """Reject a leaf while any owning Markdown document is still updating."""
 
         parent = widget
         while parent is not None:

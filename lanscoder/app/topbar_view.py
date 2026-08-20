@@ -1,5 +1,3 @@
-"""Topbar markup helpers for the LansCoder TUI."""
-
 from __future__ import annotations
 
 from rich.markup import escape
@@ -15,12 +13,10 @@ PERMISSION_MODE_COLORS = {
 
 
 def _markup_width(markup: str) -> int:
-    # 用渲染列宽而非字符数：中文按 2 列计，换行符不计横向宽度。
     return Text.from_markup(markup).cell_len
 
 
 def _truncate_markup(markup: str, width: int) -> str:
-    """Return styled markup constrained to one terminal row."""
     text = Text.from_markup(markup)
     text.truncate(max(0, width), overflow="ellipsis", pad=False)
     return text.markup
@@ -31,12 +27,10 @@ def _metadata_markup(values: list[tuple[str | None, str, int | None]], *, separa
 
 
 def _provider_name_markup(provider: str, *, glow_frame: int = 0) -> str:
-    """Render the provider-only part for ordinary, non-easter-egg labels."""
     return f"[{theme.ACCENT}]{escape(provider)}[/]"
 
 
 def _provider_model_markup(provider: str, model: str, *, glow_frame: int = 0) -> str:
-    """Render provider/model labels, applying the optional model-glow easter egg."""
     themed = model_topbar_themes.provider_model_markup(
         provider,
         model,

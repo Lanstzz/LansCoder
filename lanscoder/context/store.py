@@ -1,5 +1,3 @@
-"""基于 JSONL 的会话事件存储。"""
-
 from __future__ import annotations
 
 import json
@@ -26,24 +24,15 @@ EVENT_ROLE_MAP = {
 
 
 class SessionStoreCorruptError(ValueError):
-    """A persisted event cannot be replayed into a trustworthy session view."""
+    pass
 
 
 class JsonlSessionStore:
-    """append-only JSONL store。
-
-    当前阶段选择 JSONL 是为了让 resume、压缩事件和调试记录都能被人工阅读。后续迁移
-    SQLite 时，外部仍应保留 `append_event/list_events/rebuild_session_view` 这组边界。
-    """
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
         self.sessions_dir = self.root / "sessions"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
-        # Guards the session JSONL files against concurrent read/write/truncate
-        # from different threads (e.g. the TUI event-loop thread running /recall
-        # while a worker thread appends an agent event). Reentrant so that
-        # truncate_before_message can call list_events while already holding it.
         self._lock = threading.RLock()
 
     def append_event(self, event: SessionEvent) -> None:
@@ -76,12 +65,6 @@ class JsonlSessionStore:
         return view
 
     def original_user_message_texts(self, session_id: str) -> dict[str, str]:
-        """Return original text per user_message event, untouched by compaction.
-
-        压缩只追加 compaction_completed 替换事件、从不改写原始 user_message
-        事件，所以这里总能读到当初真正的话。transcript 已按同样原则从
-        list_events 派生内容。
-        """
 
         texts: dict[str, str] = {}
         for event in self.list_events(session_id):
@@ -97,19 +80,6 @@ class JsonlSessionStore:
         return self.sessions_dir / f"{session_id}.jsonl"
 
     def truncate_before_message(self, session_id: str, message_id: str) -> int:
-        """Truncate the session JSONL to exclude the given message and everything after it.
-
-        The target message_id must belong to a user_message event. The file is
-        truncated to the line immediately before that event. The session_created
-        event (first line) is always preserved.
-
-        Returns:
-            The number of lines retained after truncation.
-
-        Raises:
-            FileNotFoundError: if the session file does not exist.
-            ValueError: if message_id is not found or does not belong to a user_message.
-        """
         with self._lock:
             path = self._session_path(session_id)
             if not path.exists():
@@ -119,7 +89,6 @@ class JsonlSessionStore:
             if not events:
                 raise ValueError(f"Session {session_id} has no events")
 
-            # Find the target line index (0-based)
             target_line: int | None = None
             for index, event in enumerate(events):
                 if event.type == "user_message" and str(event.payload.get("message_id") or "") == message_id:
@@ -127,22 +96,18 @@ class JsonlSessionStore:
                     break
 
             if target_line is None:
-                # Check if the message_id exists at all (but with wrong type)
                 for index, event in enumerate(events):
                     if str(event.payload.get("message_id") or "") == message_id:
                         raise ValueError(f"message_id {message_id} is not a user_message event (type={event.type}); " f"can only recall to user message boundaries")
                 raise ValueError(f"message_id not found: {message_id} in session {session_id}")
 
-            # Read all lines from the file
             lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
 
-            # Validate: first line must be session_created
             if target_line == 0:
                 raise ValueError("Cannot truncate before the session_created event")
 
             retained_lines = lines[:target_line]
 
-            # Atomic write via temp file
             tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=f".{session_id}.", suffix=".tmp")
             try:
                 with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
@@ -158,12 +123,6 @@ class JsonlSessionStore:
             return len(retained_lines)
 
     def delete_session(self, session_id: str) -> bool:
-        """Delete a session's persisted artifacts (JSONL, index entry, archives).
-
-        Idempotent and best-effort: deleting an unknown session returns ``False``
-        without raising. Child (subagent) sessions call this after finishing so
-        their ephemeral transcripts never surface in ``/resume``.
-        """
         with self._lock:
             path = self._session_path(session_id)
             if not path.exists():

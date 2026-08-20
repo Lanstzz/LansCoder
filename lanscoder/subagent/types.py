@@ -1,12 +1,3 @@
-"""Subagent domain types shared across layers.
-
-These are pure data and capability queries for the delegate tool. They live
-below both ``lanscoder.agent`` and ``lanscoder.tools`` so neither layer needs
-to import the other: the agent layer implements the runner that consumes them,
-and the tools layer builds the delegate tool against them. The module has no
-``lanscoder`` imports of its own — it is a leaf.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -128,15 +119,6 @@ def role_requires_worktree(role: str) -> bool:
 
 @runtime_checkable
 class SubagentRunner(Protocol):
-    """The runner surface the delegate tool depends on.
-
-    The concrete implementation lives in ``lanscoder.agent.subagent_engine``
-    and is injected into the delegate tool at construction time. The delegate
-    only relies on this protocol, so the tools layer never imports the agent
-    layer. ``foreground_progress`` is the live progress dict of a foreground
-    subagent (``None`` when none is running); the TUI reads it to render an
-    activity line under the input bar.
-    """
 
     foreground_progress: dict[str, Any] | None
 

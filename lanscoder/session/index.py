@@ -1,5 +1,3 @@
-"""Lightweight session list index."""
-
 from __future__ import annotations
 
 import json
@@ -18,7 +16,6 @@ _INDEX_LOCK = threading.RLock()
 
 
 class SessionIndex:
-    """Cache user-visible session summaries for fast `/sessions` and `/resume`."""
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
@@ -49,7 +46,6 @@ class SessionIndex:
         return sorted(records, key=session_sort_key, reverse=True)
 
     def rebuild_session(self, session_id: str) -> None:
-        """Rebuild the index entry for a single session from its JSONL file."""
         from lanscoder.session.catalog import record_from_path
 
         path = self.root / "sessions" / f"{session_id}.jsonl"
@@ -67,12 +63,6 @@ class SessionIndex:
             self._write_data(data)
 
     def prune_empty(self, exclude: set[str] | None = None) -> int:
-        """Remove JSONL files and index entries for sessions with zero user turns.
-
-        *exclude* is a set of session IDs to skip (e.g. the currently active session).
-
-        Returns the number of sessions pruned.
-        """
         import os
 
         sessions_dir = self.root / "sessions"

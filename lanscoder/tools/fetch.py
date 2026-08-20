@@ -1,5 +1,3 @@
-"""`fetch` 工具。"""
-
 from __future__ import annotations
 
 import ipaddress
@@ -15,7 +13,6 @@ DEFAULT_MAX_CHARS = 20000
 
 
 def create_fetch_tool() -> Tool:
-    """创建 HTTP GET 工具。"""
 
     def fetch(url: str, timeout_seconds: int = DEFAULT_FETCH_TIMEOUT_SECONDS, max_chars: int = DEFAULT_MAX_CHARS) -> ToolResult:
         """读取单个 http/https URL 的文本响应；不做网页搜索。"""

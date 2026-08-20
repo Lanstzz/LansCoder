@@ -1,10 +1,3 @@
-"""会话事件写入 helper。
-
-JSONL store 的底层接口故意保持简单，只负责 append/list/rebuild。上层如果到处手写
-payload，tool_call/tool_result 这类 provider 协议边界很容易漂移；writer 把常见事件写入
-集中起来，后续正式事件 schema 也优先在这里演进。
-"""
-
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -26,12 +19,6 @@ from lanscoder.tools.types import ToolResult
 
 
 class SessionEventWriter:
-    """为单个 session 追加结构化事件。
-
-    writer 是所有消息事件落库前的最后一层公共入口，因此 turn 元数据在这里统一补齐。
-    上层 session 可以继续维护自己的运行期状态，但不需要在每条消息写入前重复拼
-    `created_turn` / `turn_id`，避免直接调用 writer 的路径漏掉上下文窗口判断需要的字段。
-    """
 
     def __init__(self, *, store: JsonlSessionStore, session_id: str, current_turn: int = 0) -> None:
         self.store = store
@@ -55,11 +42,6 @@ class SessionEventWriter:
         self.append_event("session_created", payload)
 
     def append_session_metadata_updated(self, **metadata: Any) -> None:
-        """追加用户可见 session metadata patch。
-
-        这个事件只影响 session catalog/share 等用户入口，不生成普通消息，也不进入
-        provider context。
-        """
 
         self.append_event("session_metadata_updated", metadata_without_reserved_keys(metadata))
 
@@ -179,7 +161,6 @@ class SessionEventWriter:
         metadata: dict[str, Any] | None = None,
         message_id: str | None = None,
     ) -> str:
-        """写入已经由 agent 层转换好的 assistant parts。"""
 
         message_id = message_id or new_message_id()
         self._attach_turn_metadata(parts)
@@ -211,7 +192,6 @@ class SessionEventWriter:
         return message_id
 
     def append_tool_result_part(self, part: MessagePart, *, message_id: str | None = None) -> str:
-        """写入已经由 agent 层转换好的 tool_result part。"""
 
         message_id = message_id or part.message_id
         self._attach_turn_metadata([part])
@@ -289,7 +269,6 @@ class SessionEventWriter:
         changes: Sequence[Mapping[str, object]],
         snapshot: TaskPlan | Mapping[str, object],
     ) -> None:
-        """追加一次规划操作及其完整、已验证快照。"""
 
         if isinstance(previous_revision, bool) or not isinstance(previous_revision, int) or previous_revision < 0:
             raise ValueError("previous_revision must be a non-negative integer")
@@ -322,12 +301,6 @@ class SessionEventWriter:
         task_id: str | None = None,
         observed_revision: int | None = None,
     ) -> str:
-        """追加一条后台任务完成通知，投影成普通 user 消息。
-
-        通知不是某个 tool_call 的第二条结果：它以独立 user 文本进入历史，因此不会破坏
-        provider 的 tool_call/tool_result 配对。这里刻意不递增 turn 计数，避免把后台完成
-        误当成一次新的用户输入。
-        """
 
         message_id = new_message_id()
         metadata = {

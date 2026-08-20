@@ -1,5 +1,3 @@
-"""L1-L2 程序化上下文压缩 pipeline。"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -251,8 +249,6 @@ class CompactionPipeline:
                 if compacted is None:
                     continue
                 try:
-                    # This is backing, not L2 eviction: archive the exact raw
-                    # bytes before the route result becomes visible in the view.
                     record = archive.store_original(view.session_id, part)
                 except (ArchiveIntegrityError, OSError, ValueError):
                     continue
@@ -299,8 +295,6 @@ class CompactionPipeline:
                 break
 
             part = candidate.message.parts[candidate.part_index]
-            # A preceding candidate may have transformed this part in future
-            # refactors.  Re-check before touching durable backing.
             if not _can_archive_l2_part(
                 part,
                 lifecycle=candidate.lifecycle,
@@ -318,8 +312,6 @@ class CompactionPipeline:
                     key_errors=_lifecycle_key_errors(part),
                 )
             except (ArchiveIntegrityError, OSError, ValueError):
-                # Archive backing is an all-or-nothing safety boundary: if
-                # persistence or validation fails, retain the current part.
                 continue
             compacted.metadata.update(
                 {
@@ -349,11 +341,6 @@ def _clone_view(view: SessionView) -> SessionView:
 
 
 def _effective_tail_messages(view: SessionView) -> list[AgentMessage]:
-    """只让程序化压缩处理 latest checkpoint 之后的真实 tail。
-
-    checkpoint 覆盖过的旧历史已经由 summary 表达；L1-L2 如果继续扫描旧 raw message，
-    会和 ContextBuilder/L3 的 effective context 边界不一致。
-    """
 
     checkpoint = CheckpointIndex(view.checkpoints).latest()
     if checkpoint is None:
@@ -423,11 +410,6 @@ def _make_route_router(*, preview_chars: int) -> RouteCompactRouter:
 
 
 def _l1_compacted_by(value: object) -> str:
-    """Translate the archive level's legacy labels at the L1 ownership boundary.
-
-    Content compressors deliberately remain independently usable.  The
-    pipeline is where their output acquires its L1 semantic label.
-    """
 
     label = str(value or "l1_route")
     if label.startswith("l2_"):
@@ -517,7 +499,6 @@ def _has_l2_per_result_pressure(
     per_result_target: int | None,
     consumed_tool_result_part_ids: frozenset[str],
 ) -> bool:
-    """Whether an eligible derived result needs an L2 pass below budget."""
 
     if per_result_target is None:
         return False
@@ -540,7 +521,6 @@ def _has_l2_per_result_pressure(
 
 
 def _per_result_target(value: object, *, fallback: int) -> int | None:
-    """Resolve a positive per-result budget without treating bool as int."""
 
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
@@ -558,15 +538,8 @@ def _l2_candidates(
     per_result_target: int | None,
     consumed_tool_result_part_ids: frozenset[str],
 ) -> list[_L2Candidate]:
-    """Return deterministic tool-result-only L2 candidates.
 
-    Mandatory lifecycle cleanup is selected regardless of the overall target.
-    Derived output is optional: it is selected when an individual result still
-    exceeds its per-result budget or when the current context remains above
-    target.
-    """
-
-    del target_tokens  # Selection below-budget is decided during application.
+    del target_tokens
     candidates: list[_L2Candidate] = []
     tail_index = 0
     for message in messages:
@@ -635,9 +608,6 @@ def _can_archive_l2_part(
         return False
     if lifecycle is None:
         return False
-    # L2 may turn a raw result or its L1 projection into a placeholder.  It
-    # must not consume a pinned/retrieved result or replay a legacy/terminal
-    # compaction projection whose backing is not this L2 flow's raw record.
     state = str(part.metadata.get("compaction_state") or "raw")
     if state not in {"raw", "l1_route_compacted"}:
         return False
@@ -684,12 +654,6 @@ def _l2_backing_record(
     session_id: str,
     part: MessagePart,
 ):
-    """Return raw backing for a candidate without archiving L1 text as raw.
-
-    L1 retains its original archive id and payload.  A later L2 projection
-    must use exactly that backing so `retrieve_archive` always returns the
-    pre-route result rather than a compact derivative.
-    """
 
     archive_id = part.metadata.get("archive_id")
     if isinstance(archive_id, str) and archive_id:

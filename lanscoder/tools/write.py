@@ -1,5 +1,3 @@
-"""`write` 工具。"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,7 +10,6 @@ from lanscoder.utils.sandbox_access import SandboxAccess
 
 
 def create_write_tool(root: str | Path, *, access: SandboxAccess | None = None) -> Tool:
-    """创建写入文本文件的工具。"""
 
     sandbox = PathSandbox(root, access=access)
 

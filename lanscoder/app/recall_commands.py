@@ -1,5 +1,3 @@
-"""Recall slash command — rewind conversation to a previous turn."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -23,15 +21,14 @@ class SessionLike(Protocol):
 
 @dataclass(slots=True)
 class RecallCommandHandler:
-    """Handle /recall — interactive conversation rewind."""
 
     session: SessionLike
     store: JsonlSessionStore
-    bootstrap: object  # SessionBootstrap, imported lazily to avoid circular imports
-    on_recall: Callable[[object], None]  # callback to swap session in runner
-    busy_check: Callable[[], bool] = lambda: False  # True while a turn is in-flight / paused
-    resume_service: ResumeService | None = None  # preferred resume path (B4)
-    background_manager: BackgroundJobManager | None = None  # orphaned-job cancel (B3)
+    bootstrap: object
+    on_recall: Callable[[object], None]
+    busy_check: Callable[[], bool] = lambda: False
+    resume_service: ResumeService | None = None
+    background_manager: BackgroundJobManager | None = None
 
     def commands(self) -> list[tuple[str, str]]:
         return [("/recall", "Rewind conversation to a previous turn.")]
@@ -55,15 +52,12 @@ class RecallCommandHandler:
         )
 
     def _handle_list(self) -> CommandResult:
-        """Handle bare /recall — show the turn picker."""
         view = self.session.rebuild_view()
         user_messages = [m for m in view.messages if m.role == "user"]
 
         if not user_messages:
             return CommandResult(handled=True, output="No messages to recall")
 
-        # 压缩会把旧任务的文本 part 在有效视图里清空，但原始 user_message
-        # 事件从未被改写；回退到原文，picker 才不会显示 (empty message)。
         original_texts = self.store.original_user_message_texts(self.session.session_id) if self.store is not None else {}
         turns = []
         for msg in user_messages:
@@ -99,7 +93,6 @@ class RecallCommandHandler:
         )
 
     def _handle_recall_to(self, command: str) -> CommandResult:
-        """Handle /recall <message_id> — delegate to recall_to."""
         parts = command.split()
         if len(parts) != 2:
             return CommandResult(
@@ -119,7 +112,6 @@ class RecallCommandHandler:
         )
 
     def recall_to(self, message_id: str) -> str:
-        """Truncate, rebuild, and swap session. Returns status message."""
         session_id = self.session.session_id
         target_turn = self._turn_for_message(message_id)
         self.store.truncate_before_message(session_id, message_id)
@@ -138,19 +130,12 @@ class RecallCommandHandler:
         return f"Recalled to before message {message_id}"
 
     def _resume_session(self, session_id: str):
-        """Resume the truncated session through ResumeService when available.
-
-        Reusing ResumeService keeps /recall consistent with /resume (schema
-        validation + pending-permission restore). Falls back to raw bootstrap
-        resume for callers that only wire bootstrap (e.g. tests).
-        """
 
         if self.resume_service is not None:
             return self.resume_service.resume(session_id).session
         return self.bootstrap.resume(session_id)
 
     def _turn_for_message(self, message_id: str) -> int | None:
-        """Return the turn number of a user message, or None if not found."""
 
         for msg in self.session.rebuild_view().messages:
             if msg.id != message_id or msg.role != "user":
@@ -163,11 +148,6 @@ class RecallCommandHandler:
         return None
 
     def _text_for_message(self, message_id: str) -> str:
-        """Return the text content of a user message, or "" if not found.
-
-        Falls back to the store's original event text so recalling a turn whose
-        text was compacted away still backfills what was actually said.
-        """
 
         for msg in self.session.rebuild_view().messages:
             if msg.id != message_id or msg.role != "user":

@@ -1,8 +1,3 @@
-"""`read_multi` 工具。
-
-批量读取多个文件，减少模型反复调用 view 的往返开销。
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,7 +11,6 @@ from lanscoder.utils.text import safe_read_text
 
 
 def create_read_multi_tool(root: str | Path, *, access: SandboxAccess | None = None) -> Tool:
-    """创建批量文件读取工具。"""
 
     sandbox = PathSandbox(root, access=access)
 
@@ -58,7 +52,6 @@ def create_read_multi_tool(root: str | Path, *, access: SandboxAccess | None = N
             file_header = f"=== {relative} ===\n"
             file_text = file_header + text + "\n"
 
-            # 检查总长度限制
             if total_chars + len(file_text) > max_total_chars:
                 remaining = max_total_chars - total_chars
                 if remaining > len(file_header):
@@ -76,7 +69,6 @@ def create_read_multi_tool(root: str | Path, *, access: SandboxAccess | None = N
         content = "".join(contents).rstrip("\n")
 
         if errors:
-            # 如果有错误，整体标记为失败，但成功读取的文件内容也保留
             error_summary = "\n".join(f"- {error}" for error in errors)
             full_content = f"{content}\n\n[读取错误]\n{error_summary}".lstrip("\n")
             return make_error_result(

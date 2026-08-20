@@ -1,5 +1,3 @@
-"""`diagnostics` 工具。"""
-
 from __future__ import annotations
 
 import sys
@@ -13,7 +11,6 @@ from lanscoder.utils.sandbox_access import SandboxAccess
 
 
 def create_diagnostics_tool(root: str | Path, *, access: SandboxAccess | None = None) -> Tool:
-    """创建项目诊断工具。"""
 
     sandbox = ExecutionSandbox(root, access=access)
 

@@ -1,5 +1,3 @@
-"""OpenAI-compatible provider 实现。"""
-
 from __future__ import annotations
 
 import asyncio
@@ -39,7 +37,6 @@ from lanscoder.providers.types import (
 
 
 def _read_reasoning_delta(delta: Any) -> str:
-    """读取 OpenAI-compatible 厂商常见的 reasoning 增量字段。"""
 
     for name in ("reasoning_content", "reasoning"):
         value = _read_field(delta, name)
@@ -54,12 +51,6 @@ def _read_reasoning_delta(delta: Any) -> str:
 
 
 class OpenAICompatibleProvider(ChatProvider):
-    """使用 OpenAI Chat Completions 协议的 provider。
-
-    OpenAI、DeepSeek、Qwen、Moonshot、Zhipu、OpenRouter、Ollama 等都可以通过
-    `base_url + api_key + model` 的方式接入这一层。不同厂商的高级参数可以通过
-    `ChatRequest.extra_body` 继续透传。
-    """
 
     def __init__(
         self,
@@ -80,7 +71,6 @@ class OpenAICompatibleProvider(ChatProvider):
         self._extra_headers = dict(extra_headers or {})
         self._extra_body = dict(extra_body or {})
 
-        # 允许测试或上层代码注入 client；没有注入时才创建真实 SDK client。
         if client is not None:
             self._client = client
         else:
@@ -118,7 +108,6 @@ class OpenAICompatibleProvider(ChatProvider):
         return dict(self._extra_body)
 
     def complete(self, request: ChatRequest) -> ChatResponse:
-        """调用 Chat Completions，并转换成项目内部统一响应。"""
 
         params = self._build_completion_params(request)
         try:
@@ -134,8 +123,6 @@ class OpenAICompatibleProvider(ChatProvider):
         diagnostics.reasoning = _read_reasoning_delta(message) or None
         tool_calls = self._parse_tool_calls(_read_field(message, "tool_calls", []) or [], diagnostics=diagnostics)
         if finish_reason == "length" and tool_calls:
-            # length 表示模型输出被截断。此时即使 SDK 对象里出现了 tool_calls，也可能只是
-            # 半截 JSON 参数；为了避免执行危险的半截工具调用，整组丢弃并写 diagnostics。
             diagnostics.warnings.append("finish_reason=length，丢弃可能不完整的 tool_calls，避免执行半截工具调用。")
             tool_calls = []
 
@@ -151,11 +138,6 @@ class OpenAICompatibleProvider(ChatProvider):
         )
 
     async def astream(self, request: ChatRequest) -> AsyncIterator[ChatStreamEvent]:
-        """调用 Chat Completions streaming，并转换成内部流式事件。
-
-        OpenAI-compatible 原始 chunk 只在这里解析。工具调用 delta 会先按 index
-        累积，直到 stream 完成后才产出完整 `tool_call_completed` 事件。
-        """
 
         if not self._capabilities.supports_streaming:
             raise ProviderError(
@@ -180,8 +162,6 @@ class OpenAICompatibleProvider(ChatProvider):
 
         yield ChatStreamEvent(kind="message_started")
 
-        # OpenAI Python SDK 的 stream iterator 是同步对象；Agent/UI 这边是 async 消费。
-        # 用后台线程顺序读取 chunk，再通过 Queue 桥接到 async loop，避免阻塞 Textual。
         stream_queue, stop_stream = start_sync_stream_worker(
             stream,
             thread_name="lanscoder-openai-stream",
@@ -223,8 +203,6 @@ class OpenAICompatibleProvider(ChatProvider):
                     reasoning_parts.append(reasoning)
                     yield ChatStreamEvent(kind="reasoning_delta", text=reasoning)
 
-                # tool_calls 在 streaming 中不是一次性完整返回，而是按 index 分片到达。
-                # 这里只累计和展示 delta，不解析执行；真正执行要等 finish_reason=tool_calls。
                 for event in _accumulate_stream_tool_call_deltas(
                     _read_field(delta, "tool_calls", []) or [],
                     accumulators=tool_accumulators,
@@ -241,8 +219,6 @@ class OpenAICompatibleProvider(ChatProvider):
 
         tool_calls: list[ToolCall] = []
         if tool_accumulators and finish_reason != "tool_calls":
-            # 如果 stream 结束原因不是 tool_calls，说明这些工具片段没有完整结束语义。
-            # 保守做法是不给 agent 任何可执行 tool_call。
             diagnostics.warnings.append(f"finish_reason={finish_reason}，丢弃 streaming 中未以 tool_calls 完成的 tool_calls。")
         elif tool_accumulators:
             tool_calls = complete_stream_tool_calls(
@@ -272,11 +248,8 @@ class OpenAICompatibleProvider(ChatProvider):
         yield ChatStreamEvent(kind="message_completed", response=response, diagnostics=diagnostics)
 
     def _build_completion_params(self, request: ChatRequest) -> dict[str, Any]:
-        """构造 OpenAI-compatible Chat Completions 请求参数。"""
 
         if request.tools and not self._capabilities.supports_tools:
-            # 这里显式报错，而不是静默忽略 tools。否则 agent 以为模型看到了工具 schema，
-            # 实际请求却没有工具能力，后续行为会很难排查。
             raise ProviderError(
                 ProviderErrorKind.CONFIG_ERROR,
                 f"provider {self._name} 不支持 tool calling，不能发送 tools",
@@ -291,8 +264,6 @@ class OpenAICompatibleProvider(ChatProvider):
             params["tools"] = [to_openai_tool(tool) for tool in request.tools]
             params["tool_choice"] = _to_openai_tool_choice(request.tool_choice)
             if self._capabilities.supports_parallel_tool_calls:
-                # 只有 preset 明确声明支持时才发送 parallel_tool_calls，兼容一些中转站
-                # 对 OpenAI 新字段支持不完整的情况。
                 params["parallel_tool_calls"] = True
         if request.temperature is not None:
             params["temperature"] = request.temperature
@@ -301,14 +272,11 @@ class OpenAICompatibleProvider(ChatProvider):
 
         extra_body = {**self._extra_body, **request.extra_body}
         if extra_body:
-            # 不同 OpenAI-compatible 厂商常把私有参数放到 extra_body。provider 层统一透传，
-            # agent loop 不需要为每个厂商写分支。
             params["extra_body"] = extra_body
         return params
 
     @staticmethod
     def _to_openai_message(message: ChatMessage) -> dict[str, Any]:
-        """把内部消息转换为 OpenAI-compatible 消息。"""
 
         content: str | list[dict[str, Any]] = message.content
         if message.content_parts is not None:
@@ -349,7 +317,6 @@ class OpenAICompatibleProvider(ChatProvider):
 
     @staticmethod
     def _parse_tool_calls(tool_calls: list[Any], *, diagnostics: ProviderDiagnostics) -> list[ToolCall]:
-        """解析 OpenAI-compatible 返回的 tool_calls。"""
 
         parsed: list[ToolCall] = []
         for call in tool_calls:
@@ -357,8 +324,6 @@ class OpenAICompatibleProvider(ChatProvider):
             raw_arguments = _read_field(function, "arguments", "")
             arguments = loads_json_object(raw_arguments)
             if not isinstance(arguments, dict):
-                # OpenAI function calling 约定 arguments 是 JSON object 字符串。参数坏了时不尝试
-                # “修复”或执行其中一部分，因为工具调用一旦有副作用就不能靠猜。
                 call_id = _read_field(call, "id", "")
                 name = _read_field(function, "name", "")
                 diagnostics.warnings.append(f"tool_call 参数不是合法 JSON object，已丢弃整组不可执行调用：id={call_id}, name={name}")
@@ -375,7 +340,6 @@ class OpenAICompatibleProvider(ChatProvider):
 
 
 def _normalize_finish_reason(reason: Any) -> FinishReason:
-    """把 OpenAI-compatible finish_reason 收敛成内部受控值。"""
 
     if reason in {"stop", "tool_calls", "length", "content_filter"}:
         return reason
@@ -385,7 +349,6 @@ def _normalize_finish_reason(reason: Any) -> FinishReason:
 
 
 def _parse_usage(usage: Any):
-    """解析 OpenAI-compatible usage 字段，缺字段时保留 None。"""
 
     if usage is None:
         return None
@@ -396,7 +359,6 @@ def _parse_usage(usage: Any):
 
 
 def _to_openai_tool_choice(tool_choice: ToolChoice | None) -> str | dict[str, Any] | None:
-    """把内部 tool_choice 转成 OpenAI function calling wire format。"""
 
     if tool_choice is None:
         return None
@@ -435,8 +397,6 @@ def _accumulate_stream_tool_call_deltas(
 
         is_new = index not in accumulators
         accumulator = accumulators.setdefault(index, StreamToolCallAccumulator(index=index))
-        # 同一个 tool_call 的 id/name/arguments 可能分散在多个 chunk。按 index 聚合能支持
-        # 一个 assistant message 中同时出现多个并行工具调用。
         call_id = _read_field(delta, "id")
         if call_id:
             accumulator.id = call_id

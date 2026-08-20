@@ -1,5 +1,3 @@
-"""`glob` 工具。"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,7 +10,6 @@ from lanscoder.utils.sandbox_access import SandboxAccess
 
 
 def create_glob_tool(root: str | Path, *, access: SandboxAccess | None = None) -> Tool:
-    """创建路径匹配工具。"""
 
     sandbox = PathSandbox(root, access=access)
 

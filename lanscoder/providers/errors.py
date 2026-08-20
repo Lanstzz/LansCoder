@@ -1,9 +1,3 @@
-"""provider 错误分类。
-
-agent 主循环后续只应该依赖这些分类决定重试、压缩或提示用户，不应该到处解析各家
-provider 的错误字符串。
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -32,7 +26,6 @@ class ProviderError(Exception):
 
     @property
     def retryable(self) -> bool:
-        """是否适合按普通瞬时错误策略直接重试。"""
 
         return self.kind in {
             ProviderErrorKind.TIMEOUT,
@@ -43,17 +36,11 @@ class ProviderError(Exception):
 
     @property
     def requires_compaction(self) -> bool:
-        """是否需要先触发上下文压缩，再尝试恢复。"""
 
         return self.kind == ProviderErrorKind.PROMPT_TOO_LONG
 
 
 def classify_provider_exception(exc: BaseException) -> ProviderErrorKind:
-    """把 SDK/HTTP 异常归类成 provider 内部错误。
-
-    OpenAI SDK 和兼容厂商 SDK 常见做法是把 HTTP 状态码挂在异常对象或 response
-    对象上。这里集中读取这些约定，避免 agent loop 依赖某个 SDK 的异常类型。
-    """
 
     return classify_provider_error(str(exc), status_code=_read_status_code(exc))
 

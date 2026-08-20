@@ -1,5 +1,3 @@
-"""L3 compact 的有限重试策略。"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,11 +15,6 @@ class CompactRetryDecision:
 
 @dataclass(frozen=True, slots=True)
 class CompactRetryPolicy:
-    """把 provider/summary 错误映射成可控的重试动作。
-
-    这里不直接 sleep，也不调用 provider。策略层只回答“还要不要再试”和“为什么再试”，
-    方便后续 agent runtime 决定是否先跑更强的程序化压缩、是否退避等待。
-    """
 
     max_prompt_too_long_retries: int = 1
     max_timeout_retries: int = 2

@@ -1,9 +1,3 @@
-"""Agent 会话运行时。
-
-这一层连接 context store、runtime state、system prompt cache 和 session scoped tools。
-它不负责调用模型，也不执行压缩；这些动作由更外层的 agent loop 或 context manager 编排。
-"""
-
 from __future__ import annotations
 
 from copy import deepcopy
@@ -52,18 +46,6 @@ DEFAULT_BASE_RULES = "你是 LansCoder，一个本地 AI coding agent。请遵�
 
 @dataclass(slots=True)
 class PendingPermissionExecution:
-    """等待用户确认后才能继续的工具调用（权限确认或 ask_user 统一槽）。
-
-    这类状态不能相信 UI 回传的 payload。agent 只接受 request id 和用户选择，
-    原始 tool_call 与规范化后的 permission request 都保存在本地运行时对象里。
-
-    - ``kind == "permission_confirmation"``：权限/写前预览确认，permission_request 非空。
-    - ``kind == "ask_user"``：模型主动提问，permission_request 为 None，
-      问题与选项存在 ``ask_user_request``。
-
-    ``deferred_tool_calls`` 是暂停时同批次里尚未执行的剩余工具；用户回答后由
-    AgentLoop 把它们当作新一批继续执行，需要输入则链式再暂停。
-    """
 
     request_id: str
     tool_call: ToolCall
@@ -77,7 +59,6 @@ class PendingPermissionExecution:
 
 @dataclass(slots=True)
 class ToolPermissionPreflight:
-    """工具权限预检结果。"""
 
     request: PermissionRequest
     decision: PermissionDecision
@@ -85,11 +66,6 @@ class ToolPermissionPreflight:
 
 @dataclass(slots=True)
 class AgentSession:
-    """单个会话的运行时容器。
-
-    `SessionRuntimeState` 和 `PromptPrefixCache` 都是运行期对象，不写成自然语言消息。
-    真正可 resume 的会话事实通过 `JsonlSessionStore` 追加事件保存。
-    """
 
     session_id: str
     store: JsonlSessionStore
@@ -125,11 +101,6 @@ class AgentSession:
         sandbox_access: SandboxAccess | None = None,
         memory_manager: MemoryManager | None = None,
     ) -> "AgentSession":
-        """创建全新 session，并初始化 session-scoped 工具。
-
-        这里会立即写入 `session_created` 事件。后续所有可恢复事实都追加到同一个
-        JSONL 日志中；运行时对象只是方便当前进程快速访问这些事实。
-        """
 
         runtime_state = SessionRuntimeState(session_id=session_id)
         known_message_ids: set[str] = set()
@@ -183,11 +154,6 @@ class AgentSession:
         sandbox_access: SandboxAccess | None = None,
         memory_manager: MemoryManager | None = None,
     ) -> "AgentSession":
-        """从项目根目录创建 session。
-
-        这一层负责读取项目级 `AGENTS.md`，并创建默认权限管理器。这样 app/UI 不需要知道
-        AGENTS.md、permission grant 文件放在哪里，也不会把这些初始化细节散落到 widget。
-        """
 
         agents_md = read_agents_md(project_root)
         skill_catalog = discover_all_skills(project_root)
@@ -219,12 +185,6 @@ class AgentSession:
         sandbox_access: SandboxAccess | None = None,
         memory_manager: MemoryManager | None = None,
     ) -> "AgentSession":
-        """从 JSONL 会话日志恢复运行期 session。
-
-        `rebuild_session_view()` 恢复可投影的消息和 checkpoint；`replay_runtime_state()`
-        恢复 compact 熔断和最近压缩事实。这里还要把历史 message id 注入
-        `known_message_ids`，方便工具引用旧消息。
-        """
 
         runtime_state = replay_runtime_state(store, session_id)
         view = store.rebuild_session_view(session_id)
@@ -269,15 +229,6 @@ class AgentSession:
         return session
 
     def restore_pending_permission_execution(self) -> PendingPermissionExecution | None:
-        """从 append-only 历史中重建未完成的权限确认或 ask_user 暂停。
-
-        只有最后一个 assistant tool_call 批次仍缺少 tool_result 时才尝试重建。
-        即使 grant 已经存在，也只恢复 pending，不自动执行工具，避免 resume 阶段
-        产生隐式副作用或留下悬空 tool_call。
-
-        ask_user 走同样的槽：暂停时整批 tool_call 都未闭合，尾部第一个未闭合的
-        若是 ask_user 工具，就从它的 arguments 重建提问请求。
-        """
 
         pending = self._pending_tool_calls_from_tail()
         if len(pending) != 1:
@@ -370,12 +321,6 @@ class AgentSession:
         provider_model: str = "",
         provider_capabilities: ProviderCapabilities | None = None,
     ) -> list:
-        """构造 provider 请求前面的稳定 system prefix。
-
-        system prompt 不写入普通会话消息，因为它不是用户/模型之间发生过的事实；它是每次
-        请求根据 AGENTS.md、provider 能力和权限策略动态生成的高优先级前缀。工具
-        schema 仅通过 provider 的原生 tools 字段发送，避免与 system prompt 重复。
-        """
 
         inputs = build_system_prompt_inputs(
             base_rules=self.base_rules,
@@ -396,7 +341,6 @@ class AgentSession:
         return entry.messages
 
     def set_benchmark_task(self, task: str) -> None:
-        """Attach the current isolated benchmark task to the system prompt."""
 
         self.benchmark_task = task.strip()
 
@@ -419,17 +363,11 @@ class AgentSession:
         return render_skill_catalog(self.skill_catalog)
 
     def refresh_skills(self, project_root: str | Path) -> SkillCatalog:
-        """Re-discover skills from disk and update the catalog.
-
-        Returns the new catalog. The load_skill tool picks up changes automatically
-        because it reads from this catalog via a callable.
-        """
         new_catalog = discover_all_skills(project_root).resolved()
         self.skill_catalog = new_catalog
         return new_catalog
 
     def append_user_message(self, content: str, *, attachments: list[UserAttachment] | None = None) -> str:
-        """把用户输入写成可恢复的 user_message 事件。"""
 
         prepared_attachments = prepare_attachments_for_session(
             attachments or [],
@@ -445,11 +383,6 @@ class AgentSession:
         return message_id
 
     def append_assistant_response(self, response: ChatResponse) -> str:
-        """把 provider 返回的 assistant response 写入事件日志。
-
-        assistant response 可能同时包含可见文本和 tool_calls。这里统一转成 MessagePart，
-        确保后续 ContextBuilder 能重新投影出合法的 provider assistant message。
-        """
 
         message_id = new_message_id()
         parts = assistant_response_to_parts(message_id=message_id, response=response)
@@ -489,12 +422,10 @@ class AgentSession:
         self.runtime_state.consumed_tool_result_part_ids.update(new_ids)
 
     def execute_tool_call(self, tool_call: ToolCall) -> ToolResult:
-        """通过当前 session 的工具注册表执行一次模型请求的工具调用。"""
 
         return self.tool_registry.execute(tool_call.name, tool_call.arguments)
 
     def execute_tool_call_after_permission_confirmation(self, tool_call: ToolCall) -> ToolResult:
-        """执行已经通过用户确认的 pending tool_call。"""
 
         if isinstance(self.tool_registry, PermissionAwareToolRegistry):
             return self.tool_registry.execute_without_permission_check(
@@ -504,11 +435,6 @@ class AgentSession:
         return self.tool_registry.execute(tool_call.name, tool_call.arguments)
 
     def append_tool_result(self, *, tool_call: ToolCall, result: ToolResult) -> str:
-        """把工具执行结果写成 role=tool 事实。
-
-        这一步是 tool calling 闭环的关键：模型下一次调用时会看到这个 tool_result，并基于
-        工具输出生成后续回答。工具结果不直接替代 assistant 回复。
-        """
 
         with self._tool_result_lock:
             existing_message_id = self._tool_result_message_ids.get(tool_call.id)
@@ -526,7 +452,6 @@ class AgentSession:
             return tool_message_id
 
     def append_interrupted_tool_results(self) -> list[ToolCall]:
-        """为会话尾部尚未闭合的工具调用写入中断结果。"""
 
         with self._tool_result_lock:
             pending = self._pending_tool_calls_from_tail()
@@ -557,7 +482,6 @@ class AgentSession:
         task_id: str | None = None,
         observed_revision: int | None = None,
     ) -> str:
-        """把一条后台完成通知写成可 resume 的独立事件。"""
 
         message_id = self.writer.append_background_notification(
             content=content,
@@ -576,14 +500,12 @@ class AgentSession:
 
     @property
     def permission_mode(self) -> str:
-        """当前权限模式的字符串值，供 TUI / system prompt 读取。"""
 
         if self.permission_coordinator is None:
             return "default"
         return self.permission_coordinator.mode.value
 
     def rebuild_view(self):
-        """从 append-only JSONL 重建当前 SessionView。"""
 
         return self.store.rebuild_session_view(self.session_id)
 
@@ -639,11 +561,6 @@ def _tool_call_from_part(part: MessagePart) -> ToolCall:
 
 
 def _ask_user_request_from_tool_call(tool_call: ToolCall) -> UserInputRequest | None:
-    """从 ask_user 工具调用的 arguments 重建待回答的请求（跨重启恢复用）。
-
-    暂停时 ask_user 的 tool_result 尚未写入，恢复阶段只能从原始 tool_call 的
-    arguments（question/options）重建提问请求，作为 pending 状态的 ask_user_request。
-    """
 
     if tool_call.name != "ask_user":
         return None
@@ -662,7 +579,6 @@ def _ask_user_request_from_tool_call(tool_call: ToolCall) -> UserInputRequest | 
 
 
 def _tool_result_message_ids_from_view(view: SessionView) -> dict[str, str]:
-    """Index existing tool results so resumed sessions preserve idempotent settlement."""
 
     result: dict[str, str] = {}
     for message in view.messages:
@@ -678,7 +594,6 @@ def _tool_result_message_ids_from_view(view: SessionView) -> dict[str, str]:
 
 
 def _infer_turn_counter(messages: list[AgentMessage]) -> int:
-    """从已恢复的消息里推断下一轮 turn 编号。"""
 
     return sum(1 for message in messages if message.role == "user")
 

@@ -1,20 +1,3 @@
-"""Phase 4 git worktree isolation for mutation-capable background subagents.
-
-The manager owns the git plumbing needed to run a mutation-capable subagent
-(role ``coder``) without ever touching the parent working tree.  Each isolated
-job gets its own git worktree plus a dedicated branch under the repository's
-common git dir (``<git-common-dir>/fc-worktrees/<name>``).  Storing worktrees
-under the git dir keeps them out of the parent's ``git status`` and out of the
-sandbox path space that ordinary tools can see.
-
-Safety rules encoded here (see docs/async-subagents-dag-plan.md, Phase 4):
-
-- A worktree can only be created for a real git repository.
-- The parent working tree is never modified by creation or diffing.
-- Removal refuses to discard uncommitted work unless ``force=True``.
-- Nothing here auto-merges or applies the isolated diff back to the parent.
-"""
-
 from __future__ import annotations
 
 import subprocess
@@ -28,12 +11,11 @@ _DIFF_STAT_LIMIT = 8000
 
 
 class WorktreeError(RuntimeError):
-    """Raised when a git worktree operation cannot be completed safely."""
+    pass
 
 
 @dataclass(slots=True)
 class Worktree:
-    """A single isolated worktree owned by the manager."""
 
     name: str
     path: Path
@@ -43,7 +25,6 @@ class Worktree:
 
 @dataclass(slots=True)
 class WorktreeDiff:
-    """Summary of the uncommitted changes inside an isolated worktree."""
 
     stat: str
     files_changed: list[str]
@@ -56,11 +37,6 @@ class WorktreeDiff:
 
 
 def _run_git(cwd: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
-    """Run a git command with a sanitized environment.
-
-    Reuses ``ExecutionSandbox.build_env`` so secret-bearing environment
-    variables never leak into subprocesses, matching the rest of the codebase.
-    """
 
     env = ExecutionSandbox(cwd).build_env()
     try:
@@ -79,7 +55,6 @@ def _run_git(cwd: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def is_git_repo(path: str | Path) -> bool:
-    """Return True when ``path`` lives inside a real git work tree."""
 
     root = Path(path)
     if not root.exists():
@@ -89,22 +64,11 @@ def is_git_repo(path: str | Path) -> bool:
 
 
 class WorktreeManager:
-    """Create and tear down isolated git worktrees for background mutation jobs."""
 
     def __init__(self, project_root: str | Path) -> None:
         self.project_root = Path(project_root).resolve()
 
-    # -- discovery --------------------------------------------------------
-
     def available(self, *, base_ref: str = "HEAD") -> bool:
-        """Whether isolated worktrees can be created for this project root.
-
-        A freshly initialized repository with no commits is technically a git
-        work tree, but ``git worktree add ... HEAD`` cannot succeed until the
-        requested base ref resolves to a commit.  Treat that as unavailable so
-        background coder dispatch can reject up front instead of starting a job
-        that will only fail later.
-        """
 
         if not is_git_repo(self.project_root):
             return False
@@ -124,15 +88,7 @@ class WorktreeManager:
     def worktrees_root(self) -> Path:
         return self._common_git_dir() / WORKTREE_DIRNAME
 
-    # -- lifecycle --------------------------------------------------------
-
     def create(self, name: str, *, base_ref: str = "HEAD") -> Worktree:
-        """Create a fresh worktree + branch for the given job/session name.
-
-        Raises ``WorktreeError`` when the project is not a git repo, when the
-        target path already exists, or when git refuses the operation.  Creation
-        never mutates the parent working tree, so a dirty parent is fine.
-        """
 
         safe_name = _sanitize_name(name)
         if not safe_name:
@@ -157,12 +113,6 @@ class WorktreeManager:
         return Worktree(name=safe_name, path=target.resolve(), branch=branch, base_ref=base_ref)
 
     def diff(self, worktree: Worktree) -> WorktreeDiff:
-        """Summarize uncommitted changes (including untracked files).
-
-        Uses ``git add -A -N`` so newly created files appear in the stat output,
-        then reads ``--stat`` and ``--name-status`` against ``HEAD``.  This only
-        touches the isolated worktree's index, never the parent.
-        """
 
         add_result = _run_git(worktree.path, ["add", "-A", "-N"])
         if add_result.returncode != 0:
@@ -185,11 +135,6 @@ class WorktreeManager:
         return bool(result.stdout.strip())
 
     def remove(self, worktree: Worktree, *, force: bool = False) -> None:
-        """Remove the worktree.
-
-        Refuses to discard uncommitted work unless ``force=True``; this mirrors
-        git's own default and prevents silent loss of an isolated coder's output.
-        """
 
         if not force and self.is_dirty(worktree):
             raise WorktreeError("worktree 有未提交改动；请先审查/保存，或用 force=True 显式丢弃。")
@@ -217,6 +162,5 @@ def _parse_name_status(output: str) -> list[str]:
         parts = line.split("\t")
         if len(parts) < 2:
             continue
-        # For renames/copies (R100 old new) the destination path is last.
         files.append(parts[-1])
     return files

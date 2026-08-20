@@ -1,5 +1,3 @@
-"""User-facing multimodal input helpers (attachments, clipboard, paste parsing)."""
-
 from lanscoder.input.attachments import (
     PreparedAttachment,
     UserAttachment,

@@ -1,9 +1,3 @@
-"""LansCoder 最小 Textual TUI。
-
-这一版只提供命令入口外壳：输出区展示状态文本，输入框接收普通文本或 slash command。
-普通聊天通过注入的 chat runner 处理，避免 Textual widget 直接依赖 provider/agent 细节。
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -93,13 +87,10 @@ __all__ = [
 
 _PROGRESS_INDICATORS = ("[    ]", "[>   ]", "[->  ]", "[--> ]", "[--->]", "[ ---]", "[  --]", "[   -]")
 
-# 子 agent 活动区最多同时显示的行数，超出以一行 "…还有 N 个子agent在跑" 汇总，
-# 避免大量后台任务把输入框顶高。
 _MAX_VISIBLE_SUBAGENT_LINES = 3
 
 
 def _progress_indicator(frame: int) -> str:
-    """搜索时的进度条指示：`[>   ]` → `[--->]` → `[   -]` → 回到空条循环。"""
     return _PROGRESS_INDICATORS[frame % len(_PROGRESS_INDICATORS)]
 
 
@@ -122,7 +113,6 @@ class _ActiveChatTurn:
 
 
 class LansCoderApp(LansCoderViewMixin, App[None]):
-    """最小 TUI 外壳。"""
 
     CSS_PATH = "tui.tcss"
     ALLOW_SELECT = True
@@ -251,26 +241,21 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if commands is not None:
             suggest = self.query_one("#slash-suggest", SlashSuggest)
             suggest.set_commands(commands)
-        # Keep focus on the input — clicking elsewhere should not steal it.
         self.query_one("#output").can_focus = False
         self.set_focus(self.query_one("#input"))
-        # Periodically update the subagent panel with progress.
         self._subagent_progress_timer = self.set_interval(0.5, self._refresh_subagent_progress)
-        # Register for proactive subagent completion delivery.
         if self.chat_runner is not None:
             mgr = getattr(self.chat_runner, "background_manager", None)
             if mgr is not None and hasattr(mgr, "set_on_job_completed"):
                 mgr.set_on_job_completed(self._on_subagent_completed)
 
     def on_app_focus(self) -> None:
-        """When the terminal window regains focus, put it back on the input."""
         try:
             self.set_focus(self.query_one("#input"))
         except Exception:
             pass
 
     def _refresh_subagent_progress(self) -> None:
-        """Periodic timer: render running sub-agents (foreground first, then background)."""
         manager = None
         foreground = None
         if self.chat_runner is not None:
@@ -322,9 +307,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         row_ids = [row.id for row in rows[:_MAX_VISIBLE_SUBAGENT_LINES]]
         keep_ids = {f"subagent-row-{row_id}" for row_id in row_ids}
         children_by_id = {child.id: child for child in panel.children if isinstance(child.id, str)}
-        # Textual's remove() prunes asynchronously, so remounting a same-id row
-        # in the same turn would raise DuplicateIds before the old one detaches.
-        # Update matching rows in place and only mount genuinely new ones.
         for child in list(panel.children):
             if isinstance(child.id, str) and child.id not in keep_ids and child.id not in {"subagent-hint", "subagent-footer"}:
                 child.remove()
@@ -366,25 +348,15 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
 
     def _sync_subagent_selection(self, rows: list[SubagentRow]) -> None:
         if not any(row.id == FG_ID for row in rows):
-            # 前台子 agent 已结束：停止标记不再有意义。
             self._foreground_cancel_requested = False
         if self._subagent_selected is not None and not any(row.id == self._subagent_selected for row in rows):
             self._subagent_selected = None
             self._subagent_select_mode = False
 
     def _on_subagent_completed(self, job) -> None:
-        """Called from background thread when a job finishes."""
         self.call_from_thread(self._handle_subagent_completed, job)
 
     def _handle_subagent_completed(self, job) -> None:
-        """Deliver a subagent completion to the main conversation.
-
-        The full result is delivered separately by the agent loop's background
-        notification drain on its next provider request, so here we only write
-        a short human-readable line to the UI and wake the main agent when it
-        is idle.  When a turn is already running, that turn consumes the result
-        itself — no redundant session write or extra reporting turn is needed.
-        """
         if not getattr(self, "is_mounted", False):
             return
         label = job.label or job.tool_name
@@ -395,21 +367,12 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         else:
             ui_msg = f"⚠️ 子agent [{label}] {job.status}"
 
-        # Write to UI output only; the loop delivers the full result to the model.
         self._write_line(ui_msg, kind=TuiEntryKind.SYSTEM)
 
-        # If idle, start a new turn so the model can report immediately.
         if not self._chat_busy and self.chat_runner is not None:
             self._submit_nudge_turn()
 
     def _has_pending_background_completions(self) -> bool:
-        """Whether completed background jobs are still awaiting delivery.
-
-        Peeks the background manager's completion queue without consuming it,
-        so the loop's own drain remains the single consumer.  Used by
-        ``_finish_chat_turn`` to wake the main agent only when a subagent
-        finished after the running turn's final provider call.
-        """
 
         if self.chat_runner is None:
             return False
@@ -424,16 +387,14 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return bool(peek(session_id=session_id))
 
     def set_slash_commands(self, commands: list[tuple[str, str]]) -> None:
-        """Set the full command list for the slash-command autocomplete dropdown."""
         self._slash_commands = commands
         try:
             suggest = self.query_one("#slash-suggest", SlashSuggest)
             suggest.set_commands(commands)
         except Exception:
-            pass  # DOM not composed yet; on_mount will apply
+            pass
 
     def _on_terminal_resized(self) -> None:
-        """Refresh chrome after Textual has applied a terminal-size change."""
         self._refresh_session_subtitle()
         self._refresh_welcome_layout()
 
@@ -526,9 +487,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         await self._submit_composer()
 
     async def on_event(self, event: events.Event) -> None:
-        # Printable keys are consumed by the focused TextArea before they would
-        # bubble up to on_key, so intercept selection-mode keys here, before the
-        # App forwards them to the focused widget.
         if isinstance(event, Key) and not event.is_forwarded and self._subagent_select_mode:
             if self._handle_subagent_select_key(event):
                 event.stop()
@@ -571,7 +529,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         input_widget.cursor_location = input_widget.document.end
 
     async def action_copy_output_or_quit(self) -> None:
-        """Copy a selection first; retain Ctrl+C as quit when nothing is selected."""
 
         focused = self.focused
         if isinstance(focused, TextArea) and focused.selected_text:
@@ -599,7 +556,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             event.stop()
 
     def on_paste(self, event: Paste) -> None:
-        """Turn pasted file paths or clipboard images into pending attachments."""
 
         focused = getattr(self, "focused", None)
         if getattr(focused, "id", None) != "input":
@@ -609,7 +565,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             event.prevent_default()
 
     def _paste_composer_clipboard_image(self) -> bool:
-        """Attach a clipboard image when the focused TextArea handles Ctrl/Cmd+V."""
 
         focused = getattr(self, "focused", None)
         if getattr(focused, "id", None) != "input":
@@ -617,7 +572,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return self._stage_paste_attachments(None)
 
     def _notify_clipboard_image_unavailable(self) -> None:
-        """Confirm that the paste shortcut ran when its clipboard image lookup failed."""
 
         self._write_line(
             "No clipboard image found. Copy an image first, or paste an image file path instead.",
@@ -667,13 +621,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return token == self._chat_turn_token
 
     def is_turn_active(self) -> bool:
-        """True while a chat turn is running or paused for user input.
-
-        Used by command handlers to refuse session-swap/rewind operations that
-        would race an in-flight loop. ``_active_chat_turn`` is cleared only when
-        a turn ends cleanly (no pending permission/ask_user), so it also covers
-        the paused-for-input state where ``_chat_busy`` is already False.
-        """
 
         return self._active_chat_turn is not None
 
@@ -686,7 +633,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if getattr(self.chat_runner, "last_pending_input", None) is None:
             self._active_chat_turn = None
 
-        # 1. Process queued user input first.
         pending_input = self._pending_user_input
         if pending_input is not None:
             self._pending_user_input = None
@@ -695,10 +641,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             self._submit_chat_text(pending_input, attachments=pending_attachments)
             return
 
-        # 2. Then wake the main agent for background results that completed
-        #    while no turn was around to drain them.  A running turn already
-        #    drains completions on its next provider request, so this only
-        #    fires when something is genuinely still undelivered.
         if self._has_pending_background_completions():
             self._submit_nudge_turn()
             return
@@ -740,13 +682,11 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._input_history_index = None
 
     def _handle_subagent_select_key(self, event: Key) -> bool:
-        """选择模式下的按键：↑/↓ 移动、x 停止、Esc 返回；其它键退出选择并交由原逻辑。"""
         if event.key == "escape":
             self._exit_subagent_selection()
             return True
         if event.key in {"up", "down"}:
             rows = self._subagent_rows()
-            # 顶部按上 = 输入栏按下的镜像：退出选择回输入栏。
             if event.key == "up" and self._subagent_selected == (rows[0].id if rows else None):
                 self._exit_subagent_selection()
                 return True
@@ -765,7 +705,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._refresh_subagent_progress()
 
     def _exit_subagent_selection(self) -> None:
-        """退出选择模式：清 mode 与选中项并重渲染，避免高亮残留。"""
         self._subagent_select_mode = False
         self._subagent_selected = None
         self._refresh_subagent_progress()
@@ -848,8 +787,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             self._chat_worker = self.run_worker(self._resume_permission_turn(pending.id, choice, token))
             return
         if getattr(pending, "kind", None) == "ask_user":
-            # ask_user 与权限统一走 resume 协议：回答后 loop 继续执行同批次剩余工具
-            # （deferred batch continuation）。输入若匹配某选项则规范化为其 label。
             choice = ask_user_choice_for_text(text, pending)
             if choice is not None:
                 text = choice
@@ -863,7 +800,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._chat_worker = self.run_worker(self._run_chat_turn(text, token, attachments=attachments))
 
     def _submit_nudge_turn(self) -> None:
-        """开始一个不带用户输入的唤醒轮次，投递后台子 agent 完成通知。"""
 
         if self.chat_runner is None or self._chat_busy:
             return

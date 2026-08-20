@@ -1,9 +1,3 @@
-"""上下文调试视图。
-
-这一层给 TUI 的 `/context`、`/compact status` 之类入口提供结构化数据。它只读取
-`SessionView` 和 `SessionRuntimeState`，不从自然语言消息里反向解析状态，也不触发压缩。
-"""
-
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -52,7 +46,6 @@ class TailInspection:
 
 
 class ContextInspector:
-    """生成上下文状态报告，供调试视图和手动 compact 入口复用。"""
 
     def inspect(
         self,

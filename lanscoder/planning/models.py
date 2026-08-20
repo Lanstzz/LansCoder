@@ -1,5 +1,3 @@
-"""Canonical task-plan domain models and stable JSON serialization."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,7 +11,7 @@ _TASK_PLAN_MODES: frozenset[str] = frozenset({"linear", "dag"})
 
 
 class TaskPlanError(ValueError):
-    """Raised when a serialized task plan is structurally invalid."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)

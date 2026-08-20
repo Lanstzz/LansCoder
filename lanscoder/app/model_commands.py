@@ -1,5 +1,3 @@
-"""Model switching slash command."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -24,7 +22,6 @@ class ModelSwitcherLike(Protocol):
 
 @dataclass(slots=True)
 class ModelCommandHandler:
-    """Handle `/model` commands for quick provider/model switching."""
 
     switcher: ModelSwitcherLike
 

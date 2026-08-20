@@ -1,5 +1,3 @@
-"""模型 provider 抽象和实现入口。"""
-
 from lanscoder.providers.anthropic_provider import AnthropicProvider
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.factory import ProviderConfigError, create_provider_for_model

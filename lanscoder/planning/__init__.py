@@ -1,9 +1,3 @@
-"""Unified task-plan domain types and pure derived views.
-
-The package deliberately contains no agent/runtime imports: TaskPlan structure,
-validation, and projections remain deterministic and independently testable.
-"""
-
 from __future__ import annotations
 
 from lanscoder.planning.models import (

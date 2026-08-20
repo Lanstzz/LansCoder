@@ -1,5 +1,3 @@
-"""Unified creation and final-reconciliation prompts for task plans."""
-
 from __future__ import annotations
 
 from lanscoder.agent.session import AgentSession
@@ -10,7 +8,6 @@ _TERMINAL_STATUSES = frozenset({"completed", "cancelled"})
 
 
 def render_current_task_plan_snapshot(plan: TaskPlan) -> str:
-    """Render the latest plan as ephemeral provider context."""
 
     projection = project_plan(plan)
     lines = [
@@ -41,7 +38,6 @@ def _format_task_ids(value: object) -> str:
 
 
 class TaskPlanPolicy:
-    """Read the persisted task plan and return optional loop instructions."""
 
     def __init__(self, session: AgentSession) -> None:
         self.session = session

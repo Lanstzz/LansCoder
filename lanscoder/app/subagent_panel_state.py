@@ -1,12 +1,3 @@
-"""Subagent panel selection state machine (pure, TUI-agnostic).
-
-Selection logic lives here so it is unit-testable without a running Textual
-app.  Stable ids: the foreground subagent is ``FG_ID``; each background job
-uses its own job id.  Stopping a foreground subagent ends the parent turn
-(the two share a thread and cancellation token) — that is an architectural
-constraint, not a bug.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -71,8 +62,6 @@ def move_selection(rows: list[SubagentRow], selected: str | None, direction: str
 
 
 def can_enter_selection(rows: list[SubagentRow], down_recall: str | None) -> bool:
-    """Down arrow may enter selection mode when the input history has nothing
-    newer to recall (``down_recall`` is None or empty) and a subagent is running."""
     return not down_recall and has_running(rows)
 
 

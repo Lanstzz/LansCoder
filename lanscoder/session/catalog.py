@@ -1,9 +1,3 @@
-"""只读 session catalog。
-
-catalog 从 `.lanscoder/sessions/*.jsonl` 派生用户可见的 resume 列表。它不修复
-JSONL、不触发压缩、不构造 provider messages；这些边界分别属于 context 和 agent。
-"""
-
 from __future__ import annotations
 
 import json
@@ -36,11 +30,6 @@ def require_usable_record(record: SessionRecord) -> SessionRecord:
 
 
 class SessionCatalog:
-    """用户可见 session 列表服务。
-
-    `root` 是 `.lanscoder` 数据根目录，也就是 `JsonlSessionStore(root)` 使用的同一个
-    root。第一版按需扫描 JSONL；后续如果扫描变慢，可以在本层增加索引。
-    """
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
@@ -99,7 +88,6 @@ def _load_events(path: Path) -> list[SessionEvent]:
 
 
 def is_safe_session_id(session_id: str) -> bool:
-    """session_id 必须是单个安全文件名，不能携带路径语义。"""
 
     return bool(SAFE_SESSION_ID_PATTERN.fullmatch(session_id))
 

@@ -1,5 +1,3 @@
-"""Pure derived views for canonical task plans."""
-
 from __future__ import annotations
 
 from lanscoder.planning.models import Task, TaskPlan, TaskPlanError
@@ -8,14 +6,12 @@ _TERMINAL_STATUSES = frozenset({"completed", "cancelled"})
 
 
 def ordered_tasks(plan: TaskPlan) -> tuple[Task, ...]:
-    """Return tasks in stable display order."""
 
     indexed = enumerate(plan.tasks)
     return tuple(task for _, task in sorted(indexed, key=lambda item: (item[1].order, item[0])))
 
 
 def effective_dependencies(plan: TaskPlan) -> dict[str, tuple[str, ...]]:
-    """Return explicit DAG edges or implicit linear predecessor edges."""
 
     if plan.mode == "dag":
         return {task.id: task.depends_on for task in plan.tasks}

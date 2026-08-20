@@ -1,5 +1,3 @@
-"""Shared helpers for adapting synchronous provider streams to async consumers."""
-
 from __future__ import annotations
 
 import queue
@@ -13,7 +11,6 @@ from lanscoder.utils.json_utils import loads_json_object
 
 
 def read_field(value: Any, name: str, default: Any = None) -> Any:
-    """Read a field from either an SDK object or a test-friendly dictionary."""
 
     if isinstance(value, dict):
         return value.get(name, default)
@@ -87,8 +84,6 @@ def close_stream(stream: Any) -> None:
         try:
             close()
         except Exception:
-            # Closing a cancelled stream is best effort; it must not prevent
-            # the worker from publishing its terminal sentinel.
             pass
 
 
@@ -97,7 +92,6 @@ def start_sync_stream_worker(
     *,
     thread_name: str,
 ) -> tuple[queue.Queue[Any], Callable[[], None]]:
-    """Read one synchronous iterator in a dedicated thread and expose a queue."""
 
     stream_queue: queue.Queue[Any] = queue.Queue()
     stop_event = threading.Event()

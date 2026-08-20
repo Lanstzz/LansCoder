@@ -1,5 +1,3 @@
-"""上下文压缩的非窗口配置与动态触发判断。"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,11 +7,6 @@ from lanscoder.context.models import SessionView
 
 @dataclass(frozen=True, slots=True)
 class ContextCompactionConfig:
-    """L1-L2 内容策略配置。
-
-    窗口容量、高低水位和输出预留属于每次 provider 请求的 ``ContextBudget``，
-    不在这里维护第二套固定阈值。
-    """
 
     l2_result_target_tokens: int = 800
     large_tool_result_tokens: int = 1_200
@@ -39,11 +32,6 @@ def evaluate_context_triggers(
     high_watermark: int,
     low_watermark: int,
 ) -> ContextTriggerDecision:
-    """使用调用方已经计算好的 provider-facing 预算判断普通 AUTO。
-
-    ``view`` 和 ``config`` 保留在接口中，供调用方用同一个入口附带诊断信息；
-    普通 AUTO 的触发事实只有动态高水位，避免大结果或消息数形成旁路。
-    """
 
     del view, config
     if input_tokens >= high_watermark:

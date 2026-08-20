@@ -1,10 +1,3 @@
-"""Durable, content-addressed storage for compacted tool results.
-
-The archive intentionally owns only bytes-on-disk and the two placeholder
-formats.  It does not decide *when* a result should be compacted; the context
-pipeline remains responsible for that policy.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -24,12 +17,11 @@ _SAFE_COMPONENT = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 class ArchiveIntegrityError(RuntimeError):
-    """Raised when an archive's immutable content and digest disagree."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class ArchiveRecord:
-    """The public, path-free identity and size information for one archive."""
 
     archive_id: str
     session_id: str
@@ -42,7 +34,6 @@ class ArchiveRecord:
 
 @dataclass(slots=True)
 class ToolResultArchive:
-    """Persist full tool output and construct compact context projections."""
 
     root: str | Path
 
@@ -52,12 +43,6 @@ class ToolResultArchive:
         part: MessagePart,
         original_content: str | None = None,
     ) -> ArchiveRecord:
-        """Store immutable full text under a content-addressed archive id.
-
-        Re-storing identical content is a no-op.  A pre-existing file with a
-        different digest is corruption, never something this method repairs or
-        overwrites.
-        """
 
         self._validate_part(part)
         raw = part.content if original_content is None else original_content
@@ -70,11 +55,6 @@ class ToolResultArchive:
         )
 
     def read(self, session_id: str, archive_id: str) -> tuple[ArchiveRecord, str]:
-        """Return verified archive metadata and its full original content.
-
-        Callers receive no filesystem paths; all integrity validation remains
-        owned by this archive boundary before bytes leave it.
-        """
 
         text_path, metadata_path = self._archive_paths(session_id, archive_id)
         raw = text_path.read_text(encoding="utf-8")
@@ -113,7 +93,6 @@ class ToolResultArchive:
         summary: str | None = None,
         key_errors: tuple[str, ...] = (),
     ) -> MessagePart:
-        """Create the v2 projection, which never embeds source-output bytes."""
 
         self._validate_part(part)
         tool_name = _short(part.metadata.get("tool_name") or "tool", 64)
@@ -135,8 +114,6 @@ class ToolResultArchive:
         content = _fit_placeholder(lines, maximum=480)
 
         metadata: dict[str, Any] = dict(part.metadata)
-        # A caller can hand us an old projection; do not accidentally retain
-        # its preview in the v2 projection.
         metadata.pop("preview", None)
         metadata.pop("preview_tokens", None)
         metadata.update(
@@ -234,7 +211,6 @@ def _content_addressed_id(content_sha256: str) -> str:
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    """Atomically replace *path* with UTF-8 text in the same directory."""
 
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent, text=True)
     try:
@@ -289,9 +265,6 @@ def _fit_placeholder(lines: list[str], *, maximum: int) -> str:
     content = "\n".join(lines)
     if len(content) <= maximum:
         return content
-    # The summary is the only intentionally variable, user-facing field.  Trim
-    # it first, then drop optional error lines if unusual metadata still fills
-    # the envelope.  The retrieval instruction always remains present.
     required = [line for line in lines if not line.startswith(("summary=", "key_errors="))]
     optional = [line for line in lines if line.startswith("summary=")]
     candidate = "\n".join(required[:6] + optional + required[6:])

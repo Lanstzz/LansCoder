@@ -1,19 +1,3 @@
-"""权限确认 / ask_user 恢复子流程。
-
-Task 6 把原先 AgentLoop 里的 8 个 resume 方法抽到这里，loop 只保留入口 glue。
-``handle`` 把一次恢复判定成三种结果（三值判别式）：
-
-- ``continue``：整批（含延迟批次）跑完，loop 应重新进入工具循环。
-- ``wait_for_input``：延迟批次里又有工具需要用户输入，链式暂停，
-  ``result`` 携带 ``AgentTurnResult(WAITING_FOR_USER_INPUT)``。
-- ``finished``：没有匹配的 pending 请求（或没有权限管理器），
-  ``result`` 携带 ``AgentTurnResult(COMPLETED, finish_reason="error")``。
-
-pending 查找只经过注入的最小 ``PendingStore`` 协议；实现由
-``CoordinatorPendingStore`` 走 ``PermissionCoordinator`` 的 pending_get/pending_clear，
-handler 逻辑不感知 store 实现差异。
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -43,25 +27,18 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ResumeOutcome:
-    """一次权限恢复的判别结果。"""
 
     kind: Literal["continue", "wait_for_input", "finished"]
     result: AgentTurnResult | None = None
 
 
 class PendingStore(Protocol):
-    """handler 访问 pending 状态的最小协议（经 coordinator-backed 实现）。"""
 
     def get(self, request_id: str) -> PendingPermissionExecution | None: ...
     def clear(self) -> None: ...
 
 
 class CoordinatorPendingStore:
-    """把 coordinator 的 pending 状态薄适配成最小 PendingStore 协议。
-
-    ``get`` 走 ``coordinator.pending_get``，``clear`` 走 ``coordinator.pending_clear``；
-    handler 逻辑不感知 store 实现差异。
-    """
 
     def __init__(self, coordinator: PermissionCoordinator) -> None:
         self._coordinator = coordinator
@@ -74,12 +51,6 @@ class CoordinatorPendingStore:
 
 
 class PermissionResumeHandler:
-    """用用户的回答恢复一个暂停的权限确认或 ask_user。
-
-    恢复成功后按需续跑同批次剩余工具（deferred batch continuation）：剩余工具
-    作为新一批交给 ToolExecutor，全部跑完返回 ``continue``；若又有工具需要用户
-    输入，链式暂停并返回 ``wait_for_input``。
-    """
 
     def __init__(
         self,
@@ -101,7 +72,6 @@ class PermissionResumeHandler:
         self._on_tool_round_completed = on_tool_round_completed
 
     def set_tool_round_callback(self, callback: Callable[[], None]) -> None:
-        """组装根在 loop 构造完成后把工具轮次计数回调绑到 loop。"""
 
         self._on_tool_round_completed = callback
 
@@ -147,9 +117,6 @@ class PermissionResumeHandler:
 
     def _prepare_permission_resume(self, pending: PendingPermissionExecution, answer: str) -> ToolResult | None:
         if pending.kind == "ask_user":
-            # ask_user 的回答就是最终 tool_result，无需执行工具（暂停时已 emit
-            # started/finished，这里不重复 emit）。问题保存在 ask_user_request 里，
-            # 供模型与转录参考。
             return make_text_result(
                 "ask_user",
                 answer,
@@ -173,7 +140,6 @@ class PermissionResumeHandler:
         return None
 
     def _execute_resumed_permission_tool_call(self, pending: PendingPermissionExecution) -> ToolResult:
-        # 用户同意后使用 session 保存的原始 tool_call，不能相信 UI 回传的参数。
         return self._tool_executor.execute_after_permission_with_cancellation_context(pending.tool_call)
 
     def _emit_finished_permission_resume(self, pending: PendingPermissionExecution, result: ToolResult) -> None:
@@ -185,12 +151,6 @@ class PermissionResumeHandler:
         )
 
     async def _finish_permission_resume(self, pending: PendingPermissionExecution, result: ToolResult) -> UserInputRequest | None:
-        """写回已恢复工具的 result，续跑同批次剩余工具。
-
-        剩余工具（``deferred_tool_calls``）作为新一批交给 ToolExecutor 继续执行：
-        - 全部跑完：返回 None，调用方进入工具循环回问模型。
-        - 又有工具需要用户输入：返回链式 pending，本轮立即暂停等下一次回答。
-        """
         self._pending_store.clear()
         self._session.append_tool_result(tool_call=pending.tool_call, result=result)
         self._on_tool_round_completed()

@@ -1,5 +1,3 @@
-"""search_results / grep 输出的确定性压缩器。"""
-
 from __future__ import annotations
 
 import re

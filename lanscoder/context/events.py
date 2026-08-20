@@ -1,5 +1,3 @@
-"""append-only 会话事件模型。"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -10,11 +8,6 @@ from lanscoder.context.models import utc_now_iso
 
 @dataclass(slots=True)
 class SessionEvent:
-    """写入 JSONL 的最小事件单位。
-
-    第一版让事件 payload 保持 dict，避免过早引入复杂事件继承树。事件类型决定
-    store 重放时如何把 payload 转成 `AgentMessage`。
-    """
 
     id: str
     session_id: str

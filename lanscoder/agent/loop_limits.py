@@ -1,5 +1,3 @@
-"""Agent loop budget and stop-reason types."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -14,7 +12,6 @@ class AgentLoopStopReason(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class AgentLoopLimits:
-    """Configurable guardrails for one user turn."""
 
     max_tool_rounds: int | None = 200
     max_provider_calls: int | None = 400
@@ -45,12 +42,6 @@ class AgentLoopLimits:
 
 
 class _AgentLoopLimitReached(Exception):
-    """Internal signal that a turn budget was hit.
-
-    Raised by guardrails when a limit is exceeded and caught at the turn exit,
-    carrying the stop reason so the loop never needs a reason parameter threaded
-    through deep call stacks.
-    """
 
     def __init__(self, reason: AgentLoopStopReason) -> None:
         super().__init__(reason.value)

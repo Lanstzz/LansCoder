@@ -1,5 +1,3 @@
-"""Slash-command suggestion dropdown for the composer input."""
-
 from __future__ import annotations
 
 from textual.widgets import OptionList
@@ -7,7 +5,6 @@ from textual.widgets.option_list import Option
 
 
 class SlashSuggest(OptionList):
-    """Dropdown list of slash-command suggestions that appears above the input."""
 
     can_focus = False
 
@@ -30,21 +27,17 @@ class SlashSuggest(OptionList):
         self._all_commands: list[tuple[str, str]] = []
 
     def set_commands(self, commands: list[tuple[str, str]]) -> None:
-        """Set the full command list used for filtering."""
         self._all_commands = commands
 
     def update_suggestions(self, text: str) -> None:
-        """Filter commands by the current input text and show/hide accordingly."""
         prefix = text.strip()
         if not prefix.startswith("/"):
             self.clear_options()
             self.remove_class("--visible")
             return
 
-        # Filter matching commands
         self.clear_options()
         matching = [(cmd, desc) for cmd, desc in self._all_commands if cmd.startswith(prefix) or prefix.startswith(cmd)]
-        # Also match if the command contains the prefix (partial match)
         matching2 = [(cmd, desc) for cmd, desc in self._all_commands if prefix in cmd and (cmd, desc) not in matching]
         all_matching = matching + matching2
 
@@ -59,7 +52,6 @@ class SlashSuggest(OptionList):
         self.add_class("--visible")
 
     def selected_command(self) -> str | None:
-        """Return the command string of the highlighted option, or None."""
         if self.highlighted is not None and self.option_count:
             opt = self.get_option_at_index(self.highlighted)
             return str(opt.id) if opt.id else None

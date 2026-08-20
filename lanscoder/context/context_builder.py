@@ -1,5 +1,3 @@
-"""把内部会话事实投影成 provider 请求消息。"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,20 +10,10 @@ from lanscoder.providers.types import ChatMessage, ContentPart, ToolCall
 
 
 class InvalidCheckpointBoundaryError(ValueError):
-    """checkpoint tail 边界会生成 provider 无法接受的消息序列。"""
+    pass
 
 
 class ContextBuilder:
-    """只负责投影，不负责压缩、总结、落盘或任务边界判断。
-
-    `SessionView` 是 LansCoder 自己的事实账本，不等于 provider 请求格式。ContextBuilder
-    的职责就是在每次调用模型前，把当前可见历史转换成 `ChatMessage` 列表：
-
-    - system prefix 由 AgentSession 传入。
-    - 如果有 checkpoint，先插入一条“旧历史摘要”。
-    - 再保留 checkpoint tail 之后的真实消息。
-    - 最后校验 tool_call/tool_result 序列，避免 provider 拒绝请求。
-    """
 
     def build_provider_messages(
         self,
@@ -38,20 +26,12 @@ class ContextBuilder:
         active_checkpoint = checkpoint or CheckpointIndex(view.checkpoints).latest()
         messages = list(system_prefix or [])
         if active_checkpoint is not None:
-            # checkpoint 不删除原始历史，只改变本次 provider 请求看到的上下文：旧历史用摘要
-            # 表示，tail 部分保留原文，便于模型继续当前任务。
             messages.append(ChatMessage(role="user", content=checkpoint_summary_content(active_checkpoint)))
 
         tail_messages = self._tail_messages(view, checkpoint=active_checkpoint)
         tail_messages = _collapse_identical_adjacent_duplicate_tool_calls(tail_messages)
-        # provider 对 tool calling 序列很严格：assistant tool_call 后必须紧跟对应 tool result。
-        # 压缩/checkpoint 不能把这个配对切断。
         validate_tool_call_sequence(tail_messages)
         if _has_trimmed_text(tail_messages):
-            # One aggregate marker keeps the provider informed without adding a
-            # synthetic message for each forgotten part or splitting a tool
-            # transaction.  It belongs after the checkpoint and before the
-            # real tail, therefore it cannot become an orphan tool result.
             messages.append(ChatMessage(role="user", content="[Earlier dialogue trimmed]"))
         latest_user_id = latest_user_message_id(tail_messages)
         for message in tail_messages:
@@ -64,7 +44,6 @@ class ContextBuilder:
         return messages
 
     def projected_tool_result_part_ids(self, view: SessionView) -> tuple[str, ...]:
-        """Return tool results that are visible in the effective provider tail."""
 
         checkpoint = CheckpointIndex(view.checkpoints).latest()
         tail = _collapse_identical_adjacent_duplicate_tool_calls(self._tail_messages(view, checkpoint=checkpoint))
@@ -83,8 +62,6 @@ class ContextBuilder:
         for index, message in enumerate(view.messages):
             if message.id == checkpoint.tail_start_message_id:
                 tail = view.messages[index:]
-                # tail 不能从 tool message 开始，否则 provider 会看到一个没有前置 assistant
-                # tool_call 的孤立 tool_result。
                 _validate_tail_boundary(tail)
                 return tail
         raise InvalidCheckpointBoundaryError(
@@ -99,12 +76,9 @@ class ContextBuilder:
         store_root: Path | None = None,
     ) -> list[ChatMessage]:
         if message.role == "system_meta":
-            # system_meta 是内部状态，不应该作为普通对话消息发给 provider。
             return []
 
         if message.role == "tool":
-            # tool message 可能包含普通工具结果，也可能是 archive placeholder。二者都要用
-            # role=tool 回给模型，并带上原始 tool_call_id。
             return [_project_tool_part(part) for part in message.parts if part.kind in {"tool_result", "archive_placeholder"}]
 
         if message.role == "assistant":
@@ -112,26 +86,17 @@ class ContextBuilder:
                 message,
                 preserve_trimmed_text=preserve_trimmed_text or any(part.kind == "tool_call" for part in message.parts),
             )
-            # A fully trimmed ordinary assistant turn must not become a blank
-            # provider message.  Assistant messages with tool calls are still
-            # emitted even when their visible text happens to be empty.
             return [projected] if projected.content or projected.tool_calls else []
 
         if message.role == "user":
             visible_content = _join_visible_text(message.parts, preserve_trimmed_text=preserve_trimmed_text)
-            # basis_message_id 是上下文锚点，让模型只能引用真实存在的 message id。
             content = _with_basis_message_id(message.id, visible_content)
             content_parts = _project_user_content_parts(message.parts, content=content, store_root=store_root)
-            # The internal context anchor alone must not turn a fully trimmed
-            # ordinary user turn into a blank provider message. Image-only
-            # messages remain meaningful through their rich content parts.
             if not visible_content and content_parts is None:
                 return []
             return [ChatMessage(role="user", content=content, content_parts=content_parts)]
 
         if message.role == "notification":
-            # 后台完成通知需要以 user 角色发给 provider，但它不是真正的用户轮次，因此不
-            # 带 basis_message_id 锚点。
             content = _join_visible_text(message.parts, preserve_trimmed_text=preserve_trimmed_text)
             if not content:
                 return []
@@ -145,7 +110,6 @@ def _project_assistant_message(
     *,
     preserve_trimmed_text: bool = False,
 ) -> ChatMessage:
-    """把内部 assistant parts 合并成 provider assistant message。"""
 
     text_parts = [part.content for part in message.parts if part.kind == "text" and (preserve_trimmed_text or _is_visible_text_part(part)) and part.content]
     tool_calls = [
@@ -161,7 +125,6 @@ def _project_assistant_message(
 
 
 def _project_tool_part(part: MessagePart) -> ChatMessage:
-    """把内部工具结果投影成 provider 需要的 role=tool 消息。"""
 
     return ChatMessage(
         role="tool",
@@ -194,14 +157,6 @@ def _is_visible_text_part(part: MessagePart) -> bool:
 
 
 def _collapse_identical_adjacent_duplicate_tool_calls(messages: list[AgentMessage]) -> list[AgentMessage]:
-    """Ignore a narrowly defined duplicate created while pausing for user input.
-
-    A historical bug could append the exact same assistant tool-call response twice
-    when TaskPlan reconciliation entered a permission pause. Keep the first durable fact
-    and drop only an immediately adjacent assistant message whose visible text and
-    complete tool-call identity are identical.  All other invalid sequences still
-    reach ``validate_tool_call_sequence`` and fail closed.
-    """
 
     collapsed: list[AgentMessage] = []
     for message in messages:
@@ -242,12 +197,6 @@ def _project_user_content_parts(
     content: str,
     store_root: Path | None,
 ) -> list[ContentPart] | None:
-    """Build provider-neutral rich content from persisted user attachments.
-
-    Text remains in ``ChatMessage.content`` for legacy callers.  Images are only
-    read from the session attachment store at request construction time, so the
-    JSONL event log contains paths and metadata rather than base64 payloads.
-    """
 
     content_parts = [ContentPart(type="text", text=content)]
     for part in parts:

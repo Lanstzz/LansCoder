@@ -1,5 +1,3 @@
-"""Shared model-facing formatting for task-plan mutation tools."""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -12,7 +10,6 @@ from lanscoder.tools.types import ToolResult, make_error_result, make_text_resul
 
 
 def format_task_plan_snapshot(plan: TaskPlan, projection: dict[str, object]) -> str:
-    """Render the concise authoritative task state that the model must see."""
 
     lines = [f"Task plan revision {plan.revision} ({plan.mode})", ""]
     for task in ordered_tasks(plan):

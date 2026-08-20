@@ -1,10 +1,3 @@
-"""权限领域协调器：mode / policy / sandbox / preflight / pending / review / bypass 一处归管。
-
-会话、工具执行、子代理和权限恢复不再各自维护权限状态，只经 ``PermissionCoordinator``
-交互。它拥有权限领域全套状态，并把 ``preflight -> pending 存储 -> bypass 评审`` 的
-编排收拢成单一入口，避免协调器退化成 session 旧方法的薄透传。
-"""
-
 from __future__ import annotations
 
 from copy import deepcopy
@@ -41,13 +34,6 @@ from lanscoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
 
 @dataclass(slots=True)
 class PreparedPermission:
-    """一次工具调用的权限准备结果（判别式数据类）。
-
-    - ``result`` 非空：直接返回给执行层（DENY / prewrite review 失败）。
-    - ``pending_input`` 非空：需要用户输入，本轮暂停（ASK / review-only）。
-    - 两者皆空：已放行（ALLOW），执行层可继续；``prewrite_review`` 非空时
-      由执行层把写前预览作为工具事件发出。
-    """
 
     result: ToolResult | None = None
     pending_input: UserInputRequest | None = None
@@ -56,12 +42,6 @@ class PreparedPermission:
 
 
 class PermissionCoordinator:
-    """权限领域单一归口。
-
-    四份状态（mode / permission_manager / sandbox_access / permission_policy）都在这里，
-    一次 ``set_mode`` 同步全部；``prepare`` 编排 preflight / review / pending / bypass，
-    供 ToolExecutor 直接消费。
-    """
 
     def __init__(
         self,
@@ -79,7 +59,6 @@ class PermissionCoordinator:
         self._sync_sandbox_access_with_mode()
 
     def set_mode(self, mode: PermissionMode | str) -> PermissionMode:
-        """切换当前会话的权限策略模式，并同步 sandbox 与 policy。"""
 
         resolved = PermissionMode(str(mode))
         self._mode = resolved
@@ -124,11 +103,6 @@ class PermissionCoordinator:
         self._permission_policy["network"] = DEFAULT_PERMISSION_POLICY["network"]
 
     def preflight(self, tool_call: ToolCall) -> ToolPermissionPreflight | None:
-        """对工具调用做权限预检，但不执行工具。
-
-        只有权限 wrapper 支持这个能力；无权限声明的工具返回 ``None``，由旧执行路径
-        直接处理。这样权限系统接入不会污染普通工具的执行模型。
-        """
 
         registry = self._session.tool_registry
         if not isinstance(registry, PermissionAwareToolRegistry):
@@ -140,13 +114,11 @@ class PermissionCoordinator:
         return ToolPermissionPreflight(request=request, decision=decision)
 
     def requires_review(self, tool_call: ToolCall) -> bool:
-        """非 BYPASS 模式下该工具是否需要在放行后仍暂停做写前预览。"""
 
         manager = self._permission_manager
         return self._session.require_prewrite_review and (manager is None or manager.mode != PermissionMode.BYPASS) and supports_prewrite_review(tool_call.name)
 
     def requires_bypass_review(self, tool_call: ToolCall) -> bool:
-        """BYPASS 模式下该工具是否仍需计算写前预览（不暂停，失败即拒绝）。"""
 
         manager = self._permission_manager
         return (
@@ -162,7 +134,6 @@ class PermissionCoordinator:
         tool_call: ToolCall,
         deferred_tool_calls: list[ToolCall],
     ) -> PreparedPermission:
-        """resolve preflight 结果，判定是否需要暂停或 bypass 评审。"""
 
         preflight = self.preflight(tool_call)
         if preflight is None:
@@ -208,7 +179,6 @@ class PermissionCoordinator:
         deferred_tool_calls: list[ToolCall],
         review_only: bool = False,
     ) -> UserInputRequest | ToolResult:
-        """为权限确认暂停建立统一 pending 状态，返回 UI 确认请求或失败结果。"""
 
         if self._permission_manager is None:
             raise RuntimeError("permission confirmation requires a permission manager")
@@ -228,8 +198,6 @@ class PermissionCoordinator:
                     error=prewrite_review.error or "未知错误",
                 )
             confirmation.payload["prewrite_review"] = prewrite_review.to_payload()
-        # UI 会看到 confirmation.payload，但恢复时不信任 UI 回传的 tool_call。真实 tool_call
-        # 保存在 session.pending_permission_execution 中，避免前端篡改参数后执行。
         trusted_tool_call = ToolCall(
             id=tool_call.id,
             name=tool_call.name,
@@ -260,7 +228,6 @@ class PermissionCoordinator:
         *,
         preflight,
     ) -> ToolResult | None:
-        """BYPASS 模式下对可写工具做写前预览；预览失败即拒绝，成功则放行。"""
 
         self._last_review_payload = None
         if not self.requires_bypass_review(tool_call):
@@ -288,11 +255,6 @@ class PermissionCoordinator:
         deferred_tool_calls: list[ToolCall],
         user_input_request: UserInputRequest,
     ) -> None:
-        """为 ask_user 暂停建立统一 pending 状态。
-
-        ask_user 工具本身不产生持久副作用，回答由 resume 阶段合成 tool_result 写入。
-        这里把提问请求与同批次剩余工具一起保存，回答后继续执行剩余工具。
-        """
 
         trusted_tool_call = ToolCall(
             id=tool_call.id,
@@ -323,15 +285,6 @@ class PermissionCoordinator:
         mutation: bool,
         background: bool,
     ) -> PermissionManager | None:
-        """按隔离模式产出一个 child 权限管理器（5c）。
-
-        - inline（``root is None``）：克隆父权限管理器并加 ``NETWORK_REQUEST`` grant，
-          保留父策略与模式。
-        - isolated（``root`` 为 worktree，``mutation=True``）：自治 AGGRESSIVE 管理器，
-          ``WRITE_PATH``/``DELETE_PATH`` 限定到 root。
-        - background-inline（``root`` 为项目根，``mutation=False``）：自治 AGGRESSIVE
-          管理器，无 mutation grant。
-        """
 
         if root is None:
             return self._child_permission_manager_for_inline()

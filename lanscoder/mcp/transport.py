@@ -1,5 +1,3 @@
-"""基于官方 MCP SDK 的传输适配层。"""
-
 from __future__ import annotations
 
 from contextlib import AsyncExitStack
@@ -15,7 +13,6 @@ from lanscoder.mcp.models import McpLocalServerConfig, McpRemoteServerConfig, Mc
 
 
 def _stdio_environment(config_environment: Mapping[str, str]) -> dict[str, str]:
-    """保留宿主进程环境，并用 MCP 服务端配置覆盖指定变量。"""
 
     environment = dict(os.environ)
     environment.update(config_environment)
@@ -23,7 +20,6 @@ def _stdio_environment(config_environment: Mapping[str, str]) -> dict[str, str]:
 
 
 class McpTransport(Protocol):
-    """管理器所需的最小异步 MCP 传输接口。"""
 
     async def connect(self) -> None: ...
 
@@ -35,13 +31,11 @@ class McpTransport(Protocol):
 
 
 class McpTransportFactory(Protocol):
-    """按服务器配置创建传输，便于在测试中注入替身。"""
 
     def create(self, config: McpLocalServerConfig | McpRemoteServerConfig) -> McpTransport: ...
 
 
 class SdkMcpTransportFactory:
-    """创建官方 SDK 支持的 stdio 或 Streamable HTTP 客户端。"""
 
     def create(self, config: McpLocalServerConfig | McpRemoteServerConfig) -> McpTransport:
         if isinstance(config, McpLocalServerConfig):
@@ -50,7 +44,6 @@ class SdkMcpTransportFactory:
 
 
 class _SdkMcpTransport:
-    """复用 SDK 会话生命周期的内部基类。"""
 
     def __init__(self) -> None:
         self._stack: AsyncExitStack | None = None
@@ -99,7 +92,6 @@ class _SdkMcpTransport:
 
 
 class _StdioMcpTransport(_SdkMcpTransport):
-    """本地 stdio 服务端传输；SDK 直接接收 argv，不经过 shell。"""
 
     def __init__(self, config: McpLocalServerConfig) -> None:
         super().__init__()
@@ -115,7 +107,6 @@ class _StdioMcpTransport(_SdkMcpTransport):
 
 
 class _StreamableHttpMcpTransport(_SdkMcpTransport):
-    """远程 Streamable HTTP 服务端传输。"""
 
     def __init__(self, config: McpRemoteServerConfig) -> None:
         super().__init__()

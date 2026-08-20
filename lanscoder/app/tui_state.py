@@ -1,5 +1,3 @@
-"""State model for the LansCoder Textual interface."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -49,7 +47,6 @@ class TuiToolActivity:
 
 @dataclass(slots=True)
 class TuiTaskPlanPanelState:
-    """Render bookkeeping for the canonical session task plan."""
 
     last_rendered_revision: int | None = None
 

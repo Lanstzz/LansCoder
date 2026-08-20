@@ -1,5 +1,3 @@
-"""Pure, atomic reducers for incremental task-plan commands."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -20,7 +18,7 @@ _VALID_MODES = frozenset({"linear", "dag"})
 
 @dataclass(frozen=True, slots=True)
 class Unset:
-    """Sentinel type used when a nullable field was not supplied."""
+    pass
 
 
 UNSET = Unset()
@@ -49,11 +47,10 @@ class ReductionResult:
 
 
 class TaskPlanCommandError(ValueError):
-    """Raised when an incremental task-plan command is invalid."""
+    pass
 
 
 class TaskPlanRevisionConflict(TaskPlanCommandError):
-    """Raised when a command was based on an outdated plan revision."""
 
     def __init__(self, expected: int, actual: int) -> None:
         self.expected = expected
@@ -69,7 +66,6 @@ def create_tasks(
     tasks: object,
     start_new_plan: bool = False,
 ) -> ReductionResult:
-    """Create the first plan or append new tasks to the current plan."""
 
     actual_revision = current_plan.revision if current_plan is not None else 0
     _require_revision(expected_revision, actual_revision)
@@ -120,7 +116,6 @@ def update_tasks(
     expected_revision: int,
     updates: object,
 ) -> ReductionResult:
-    """Atomically update task status, owner, and dependency edges by ID."""
 
     _require_revision(expected_revision, plan.revision)
     raw_updates = _require_list(updates, field="updates")
@@ -174,7 +169,6 @@ def revise_tasks(
     expected_revision: int,
     revisions: object,
 ) -> ReductionResult:
-    """Atomically revise task content by ID."""
 
     _require_revision(expected_revision, plan.revision)
     raw_revisions = _require_list(revisions, field="revisions")

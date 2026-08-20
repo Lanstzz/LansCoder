@@ -1,9 +1,3 @@
-"""后台任务控制面工具：background_status / background_cancel。
-
-这两个工具让模型可以查询或取消自己启动的后台任务。它们本身是同步、只读/控制类
-操作，不应该再被后台化，因此不进入 background 允许列表。
-"""
-
 from __future__ import annotations
 
 from typing import Any, Protocol
@@ -14,7 +8,6 @@ from lanscoder.utils.schema import object_schema, property_schema
 
 
 class BackgroundJob(Protocol):
-    """tools 层用到的最小后台任务表面（具体实现在 lanscoder.agent.background）。"""
 
     id: str
     status: str
@@ -24,7 +17,6 @@ class BackgroundJob(Protocol):
 
 
 class BackgroundJobManager(Protocol):
-    """tools 层用到的最小后台任务管理器表面。"""
 
     def get(self, job_id: str, *, session_id: str | None = None) -> BackgroundJob | None: ...
     def list(self, *, session_id: str | None = None) -> list[BackgroundJob]: ...
@@ -36,7 +28,6 @@ def create_background_status_tool(
     *,
     session_id: str | None = None,
 ) -> Tool:
-    """创建查询后台任务状态的工具。"""
 
     def background_status(job_id: str | None = None) -> ToolResult:
         if job_id:
@@ -77,7 +68,6 @@ def create_background_cancel_tool(
     *,
     session_id: str | None = None,
 ) -> Tool:
-    """创建取消后台任务的工具。"""
 
     def background_cancel(job_id: str) -> ToolResult:
         job = manager.cancel(job_id, session_id=session_id)

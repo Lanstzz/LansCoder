@@ -1,9 +1,3 @@
-"""只读 transcript 构造。
-
-transcript 从完整 event log 派生，默认不展开 archive 原文，也不导出 system prompt。
-它是分享和预览的中间结构，不是可 resume snapshot。
-"""
-
 from __future__ import annotations
 
 import json

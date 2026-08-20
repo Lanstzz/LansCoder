@@ -1,5 +1,3 @@
-"""Stable protocol ports for the app/TUI boundary."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol

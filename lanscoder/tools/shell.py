@@ -1,5 +1,3 @@
-"""`shell` 工具。"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -15,10 +13,6 @@ DEFAULT_MAX_OUTPUT_CHARS = 20000
 
 
 def create_shell_tool(root: str | Path, *, access: SandboxAccess | None = None) -> Tool:
-    """创建命令执行工具。
-
-    这是高风险工具：调用方必须在用户明确开启执行权限后才能注册它。
-    """
 
     sandbox = ExecutionSandbox(root, access=access)
 

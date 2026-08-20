@@ -1,5 +1,3 @@
-"""记忆模型：MemoryScope / MemoryRecord 与 frontmatter 解析序列化。"""
-
 from __future__ import annotations
 
 import re
@@ -28,7 +26,6 @@ class MemoryRecord:
 
 
 def valid_name(name: str) -> bool:
-    """kebab-case 且长度受限、非保留名。"""
     if not isinstance(name, str):
         return False
     if len(name) < 1 or len(name) > 64:
@@ -39,7 +36,6 @@ def valid_name(name: str) -> bool:
 
 
 def validate_record(record: MemoryRecord) -> None:
-    """写入前的强校验；非法时抛 ValueError。"""
     if not valid_name(record.name):
         raise ValueError(f"Invalid memory name: {record.name!r}. Use kebab-case (letters, digits, hyphens), " "1-64 chars, and not 'memory'.")
     if record.type not in MEMORY_TYPES:
@@ -49,7 +45,6 @@ def validate_record(record: MemoryRecord) -> None:
 
 
 def file_content(record: MemoryRecord) -> str:
-    """渲染完整的记忆 markdown 文件内容。"""
     frontmatter = {
         "name": record.name,
         "description": record.description,
@@ -60,7 +55,6 @@ def file_content(record: MemoryRecord) -> str:
 
 
 def deserialize(text: str, scope: MemoryScope) -> MemoryRecord | None:
-    """从文件文本解析记忆；frontmatter 缺失/损坏返回 None。"""
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return None

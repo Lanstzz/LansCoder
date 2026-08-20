@@ -1,5 +1,3 @@
-"""内置工具集合。"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -36,10 +34,6 @@ def create_builtin_registry(
     include_network_tools: bool = False,
     access: SandboxAccess | None = None,
 ) -> ToolRegistry:
-    """创建第一阶段默认可用工具。
-
-    默认只注册只读工具。写入类工具必须显式启用，方便后续接确认机制。
-    """
 
     tools = [
         create_ls_tool(root, access=access),

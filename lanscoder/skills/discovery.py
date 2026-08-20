@@ -1,5 +1,3 @@
-"""Discover project-local and machine-global skills."""
-
 from __future__ import annotations
 
 import os

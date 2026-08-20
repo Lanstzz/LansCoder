@@ -1,5 +1,3 @@
-"""工具调用结果的持久化收尾。"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,7 +14,6 @@ class SettledToolCall:
 
 
 class ToolCallSettlement:
-    """保持 provider 历史中 tool_call / tool_result 的闭合关系。"""
 
     def __init__(self, session: AgentSession) -> None:
         self.session = session

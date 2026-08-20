@@ -1,9 +1,3 @@
-"""Cross-cutting runtime primitives shared by agent, tools, permissions, and utils.
-
-These types intentionally live outside `agent/` so lower layers do not import
-upward into the orchestration package.
-"""
-
 from lanscoder.runtime.cancellation import (
     AgentCancelledError,
     CancellationToken,

@@ -1,11 +1,3 @@
-"""Pure MCP activation state for one user turn.
-
-Extracted from AgentLoop (缝 6) so ToolExecutor and the loop can share the
-validate/observe hooks without a construction-order cycle: the loop builds a
-``McpActivationTracker`` first, then hands ``validate``/``observe`` to the
-ToolExecutor.
-"""
-
 from __future__ import annotations
 
 from lanscoder.mcp.search import MCP_TOOL_SEARCH_NAME
@@ -14,7 +6,6 @@ from lanscoder.tools.types import ToolResult, make_error_result
 
 
 class McpActivationTracker:
-    """Tracks which ``mcp__`` tools are active for the current user turn."""
 
     def __init__(self, mcp_tool_names: frozenset[str]) -> None:
         self._mcp_tool_names = mcp_tool_names

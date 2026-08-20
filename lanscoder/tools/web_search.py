@@ -1,5 +1,3 @@
-"""`web_search` 工具。"""
-
 from __future__ import annotations
 
 import os
@@ -15,11 +13,10 @@ PARALLEL_MCP_URL = "https://search.parallel.ai/mcp"
 DEFAULT_TIMEOUT_SECONDS = 25
 DEFAULT_NUM_RESULTS = 8
 DEFAULT_CONTEXT_MAX_CHARACTERS = 10000
-FIRST_SEARCH_PROVIDER = "parallel"  # 默认优先使用 Parallel（无 key 免费）
+FIRST_SEARCH_PROVIDER = "parallel"
 
 
 def create_web_search_tool() -> Tool:
-    """创建网页搜索工具。默认使用 Parallel MCP（免费无 key），有 EXA_API_KEY 时回退到 Exa。"""
 
     def web_search(
         query: str,
@@ -45,7 +42,6 @@ def create_web_search_tool() -> Tool:
         if livecrawl not in ("fallback", "preferred"):
             return make_error_result("web_search", "livecrawl 只能是 fallback 或 preferred")
 
-        # 确定 provider 顺序
         provider = os.environ.get("LANSCODER_WEBSEARCH_PROVIDER") or FIRST_SEARCH_PROVIDER
         providers_to_try = ["parallel", "exa"]
         if provider == "exa":
@@ -54,7 +50,6 @@ def create_web_search_tool() -> Tool:
         last_error = None
         for prov in providers_to_try:
             if prov == "exa" and not os.environ.get("EXA_API_KEY"):
-                # 无 Exa key 时跳过
                 continue
             try:
                 if prov == "parallel":
@@ -81,7 +76,6 @@ def create_web_search_tool() -> Tool:
 
 
 def _run_parallel_search(query: str, num_results: int, timeout: int) -> ToolResult | None:
-    """调用 Parallel MCP 搜索。"""
     body = dumps_json(
         {
             "jsonrpc": "2.0",
@@ -171,11 +165,6 @@ def _run_exa_search(
 
 
 def _exa_mcp_url() -> str:
-    """生成 Exa MCP URL。
-
-    opencode 的实现也是优先连接 hosted MCP；如果存在 `EXA_API_KEY`，会把 key
-    作为查询参数传给 Exa MCP。这里保留同样约定，方便后续和外部工具生态对齐。
-    """
 
     api_key = os.getenv("EXA_API_KEY")
     if not api_key:
@@ -184,7 +173,6 @@ def _exa_mcp_url() -> str:
 
 
 def _redact_url(url: str) -> str:
-    """避免把 API key 写入 tool result metadata / session JSONL。"""
 
     parsed = parse.urlparse(url)
     query = parse.parse_qsl(parsed.query, keep_blank_values=True)
@@ -193,7 +181,6 @@ def _redact_url(url: str) -> str:
 
 
 def parse_mcp_search_response(body: str) -> str | None:
-    """从 MCP JSON-RPC 或 SSE 响应中提取文本结果。"""
 
     trimmed = body.strip()
     if trimmed:
@@ -211,11 +198,6 @@ def parse_mcp_search_response(body: str) -> str | None:
 
 
 def _parse_payload(payload: str) -> str | None:
-    """解析单个 JSON-RPC payload。
-
-    Exa MCP 可能直接返回 JSON，也可能通过 SSE 的 `data:` 行返回 JSON。
-    非 JSON 帧，例如 `[DONE]`，应该被忽略。
-    """
 
     trimmed = payload.strip()
     if not trimmed.startswith("{"):

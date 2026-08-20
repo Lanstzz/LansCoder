@@ -1,9 +1,3 @@
-"""TUI session slash command 处理。
-
-这一层只把 `/sessions`、`/session`、`/resume`、`/share`、`/rename` 映射到
-session 层服务；Textual widget 不直接扫描 JSONL，也不直接导出 Markdown。
-"""
-
 from __future__ import annotations
 
 from lanscoder.utils.text import display_value, model_label
@@ -32,7 +26,6 @@ class SessionRuntimeLike(Protocol):
 
 @dataclass(slots=True)
 class SessionCommandHandler:
-    """处理用户可见 session 命令。"""
 
     catalog: SessionCatalog
     current_session: SessionRuntimeLike | None = None
@@ -42,7 +35,7 @@ class SessionCommandHandler:
     share_service: SessionShareService | None = None
     store: JsonlSessionStore | None = None
     on_resume: Callable[[SessionRuntimeLike], None] | None = None
-    busy_check: Callable[[], bool] = lambda: False  # True while a turn is in-flight / paused
+    busy_check: Callable[[], bool] = lambda: False
 
     def commands(self) -> list[tuple[str, str]]:
         return [
@@ -65,9 +58,6 @@ class SessionCommandHandler:
         name = parts[0]
         args = parts[1:]
 
-        # /resume, /new and /fork all hot-swap the current session via on_resume;
-        # refuse while a turn is running or paused so the in-flight loop keeps a
-        # consistent session to write into.
         if name in {"/resume", "/new", "/fork"} and self.busy_check():
             return CommandResult(
                 handled=True,

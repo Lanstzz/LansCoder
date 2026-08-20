@@ -1,17 +1,3 @@
-"""Subagent engine for the delegate tool.
-
-The child runner is not constructed here: the assembly root injects a
-``child_runner_factory`` so this module never imports ``AgentLoop`` (breaking
-the historical ``agent.loop -> agent.subagent -> agent.loop`` import cycle).
-The engine keeps the boundary deliberately small:
-
-- child sessions are fresh and metadata-tagged;
-- tool access is profile restricted;
-- children do not receive the delegate tool, preventing recursion;
-- foreground execution returns only a compact summary to the parent;
-- background execution is handled by the Phase 1 generic async runtime.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -55,18 +41,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 子 agent 的紧预算默认值。组装根（app/runtime.create_agent_loop）用它构造 SubagentEngine
-# 并转发给 child_runner_factory，子 loop 与 engine 默认值共用同一常量，避免预算漂移。
 DEFAULT_CHILD_LIMITS = AgentLoopLimits(max_tool_rounds=20, max_provider_calls=40, max_turn_seconds=600)
 
 
 class SubagentEngine:
-    """Create and run isolated child sessions for the delegate tool.
-
-    The concrete child loop is produced by ``child_runner_factory`` (a
-    ``Callable[..., SessionTurnRunner]`` injected by the assembly root), so this
-    class never imports ``AgentLoop`` and the layer stays cycle-free.
-    """
 
     def __init__(
         self,
@@ -94,8 +72,6 @@ class SubagentEngine:
         self.limits = limits or DEFAULT_CHILD_LIMITS
         self.background_manager = background_manager
         self.child_runner_factory = child_runner_factory
-        # 前台 delegate 运行时的实时进度，TUI 用它渲染输入栏下方的 activity 行；
-        # 无前台 delegate 时为 None。
         self.foreground_progress: dict[str, Any] | None = None
 
     def profile(self, role: str) -> SubagentProfile | None:
@@ -126,10 +102,6 @@ class SubagentEngine:
                 error="background_not_allowed",
             )
 
-        # 进度去向是每次 run 独立的决定：前台（主线程、无后台 job）建一个 tracker 挂到
-        # self.foreground_progress 供 TUI 读取，后台委托由 job.progress 承载。tracker 作为
-        # 本次 run 的局部量贯穿整个 run —— 后台 run 的 tracker 恒为 None，因此永远清不掉
-        # 前台正在用的 tracker（曾有的竞态：后台 run 的 finally 无条件清掉前台进度而崩溃）。
         tracker: dict[str, Any] | None = None
         if not request.run_in_background and current_job_id() is None:
             tracker = {
@@ -148,13 +120,6 @@ class SubagentEngine:
                 self.foreground_progress = None
 
     def _needs_worktree(self, request: SubagentRequest, *, profile: SubagentProfile) -> bool:
-        """Whether this run must execute inside an isolated git worktree.
-
-        Mutation-capable roles isolate when running in the background so a
-        background job can never touch the parent working tree.  Callers can also
-        force isolation explicitly via ``request.isolate_worktree`` (used by the
-        parent ToolExecutor when it backgrounds a coder delegate).
-        """
 
         if request.isolate_worktree:
             return True
@@ -167,7 +132,6 @@ class SubagentEngine:
         profile: SubagentProfile,
         progress_tracker: dict[str, Any] | None,
     ) -> SubagentResult:
-        """Original Phase 2 behaviour: run the child against the parent-rooted tools."""
 
         child_session = self.create_child_session(request, profile=profile)
         started = time.monotonic()
@@ -226,14 +190,6 @@ class SubagentEngine:
         profile: SubagentProfile,
         progress_tracker: dict[str, Any] | None,
     ) -> SubagentResult:
-        """Phase 4: run a mutation-capable child inside a dedicated git worktree.
-
-        The child gets fresh tools rooted at the worktree and a child
-        ``PermissionManager`` whose ``project_root`` is the worktree path, so it
-        can never read or mutate the parent working tree.  On completion the
-        worktree is left in place and a diff summary is returned for explicit
-        parent review; nothing is auto-merged.
-        """
 
         if self.project_root is None:
             return SubagentResult(
@@ -378,24 +334,12 @@ class SubagentEngine:
         return child
 
     def _delete_child_session(self, session_id: str) -> None:
-        """Best-effort cleanup of a finished child session.
-
-        Child sessions are ephemeral working transcripts; once the subagent has
-        produced its result they must not linger in ``/resume``. Cleanup must
-        never break the parent loop, so failures are swallowed.
-        """
         try:
             self.store.delete_session(session_id)
         except Exception:  # noqa: BLE001 - cleanup must never break the parent loop
             pass
 
     def _supplied_tools_for_child(self, role: str) -> list[Tool]:
-        """Tools passed into AgentSession.create, excluding session-reserved tools.
-
-        ``retrieve_archive`` is injected by ``create_session_tool_registry`` for
-        each session, so passing the parent session's instance would violate the
-        reserved-name guard.
-        """
 
         return [tool for tool in self.tools_for_role(role) if tool.name != "retrieve_archive"]
 
@@ -407,21 +351,12 @@ class SubagentEngine:
         worktree: Worktree,
         session_id: str,
     ) -> AgentSession:
-        """Create a child session whose permissions/tools are rooted at the worktree.
-
-        The child gets its own ``PermissionManager`` (or a private clone of the
-        parent's) whose ``project_root`` is the worktree path, so every path,
-        shell, and git decision is evaluated against the isolated tree instead of
-        the parent working directory.
-        """
 
         permission_manager = self.permission_coordinator.child_permission_manager(
             root=worktree.path,
             mutation=True,
             background=False,
         )
-        # PROJECT sandbox keeps every file tool physically confined to the worktree
-        # root even though the policy auto-allows in-tree writes.
         sandbox_access = SandboxAccess(mode=SandboxAccessMode.PROJECT)
         child = AgentSession.create(
             store=self.store,
@@ -432,9 +367,6 @@ class SubagentEngine:
             permission_manager=permission_manager,
             sandbox_access=sandbox_access,
         )
-        # Background isolated coder has no interactive user, so per-write review
-        # confirmations would deadlock the job.  The worktree diff is reviewed by the
-        # parent instead, so disable the pausing prewrite-review path here.
         child.require_prewrite_review = False
         child.writer.append_session_metadata_updated(
             parent_session_id=request.parent_session_id,
@@ -446,18 +378,6 @@ class SubagentEngine:
         return child
 
     def _run_child_loop(self, child_session, prompt, tools, observer):
-        """Run the child loop via the injected factory and harvest the runner.
-
-        Returns ``(result, runner, error)``: ``result`` is the child's
-        ``AgentTurnResult`` (or ``None`` when the child raised), ``runner`` is
-        the ``SessionTurnRunner`` for usage harvesting, and ``error`` is the
-        concrete failure message (``None`` on success / pause). The child's
-        ``cancellation_token`` is captured at call time so a parent turn
-        cancelled mid-subagent aborts the child with ``AgentCancelledError``
-        (P2-9). Generic child failures are swallowed into ``result=None`` so the
-        delegate never breaks the parent loop; the caller builds the error result
-        and surfaces the concrete message back to the parent model.
-        """
 
         runner = self.child_runner_factory(
             session=child_session,
@@ -471,20 +391,10 @@ class SubagentEngine:
         except AgentCancelledError:
             raise
         except Exception as exc:
-            # Child session is deleted in the caller's `finally`, so the traceback
-            # would otherwise be unrecoverable; keep the log signal while the
-            # delegate still returns a generic failure result to the parent loop.
             logger.exception("subagent child loop failed; child session %s", child_session.session_id)
             return None, runner, str(exc)
 
     def _make_child_observer(self, progress_tracker: dict[str, Any] | None) -> TurnObserver:
-        """返回子 agent 的 TurnObserver：后台委托写 Job.progress，前台写 progress_tracker。
-
-        进度去向是每次 run 独立的决定，按线程局部 ``current_job_id()`` 分流：后台分支把
-        进度写给对应 job 供 TUI 的 activity 面板读，前台分支写本次 run 创建的
-        ``progress_tracker``（由 run() 决定并贯穿到本 run 结束）。tracker 按值闭包捕获，
-        任何时刻清掉 ``self.foreground_progress`` 都不会让运行中的前台子 agent 崩溃。
-        """
 
         def _report(state: dict[str, Any]) -> None:
             job_id = current_job_id()
@@ -499,12 +409,6 @@ class SubagentEngine:
         return TurnObserver(progress_callback=_report)
 
     def _attach_worktree_cleanup(self, manager: WorktreeManager, worktree: Worktree) -> None:
-        """Attach worktree teardown to the current background job.
-
-        A background coder runs inside an isolated worktree that is normally left
-        for parent review. If a /recall abandons the job, the worktree would
-        otherwise linger as an orphan; the attached cleanup removes it.
-        """
 
         if self.background_manager is None:
             return
@@ -523,12 +427,6 @@ class SubagentEngine:
         access: SandboxAccess,
         for_registry: bool = False,
     ) -> list[Tool]:
-        """Build fresh tools rooted at the worktree for the child's role.
-
-        Tools are rebuilt (not reused from the parent) so their internal path
-        sandboxes point at the worktree, not the parent cwd.  ``for_registry``
-        excludes session-reserved tool names when passing into ``AgentSession``.
-        """
 
         from lanscoder.tools.builtin import create_builtin_registry
 

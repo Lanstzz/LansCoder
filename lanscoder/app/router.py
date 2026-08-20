@@ -1,5 +1,3 @@
-"""多个 slash command handler 的组合入口。"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -24,7 +22,6 @@ class CompositeCommandHandler:
         return CommandResult(handled=handled_any)
 
     def all_commands(self) -> list[tuple[str, str]]:
-        """Collect all commands from registered handlers, sorted alphabetically."""
         commands: list[tuple[str, str]] = []
         for handler in self.handlers:
             commands.extend(handler.commands())

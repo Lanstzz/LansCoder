@@ -1,5 +1,3 @@
-"""常见模型厂商的 provider 预设。"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,7 +13,6 @@ OPENAI_COMPATIBLE_CAPABILITIES = ProviderCapabilities(
 
 @dataclass(frozen=True, slots=True)
 class ProviderPreset:
-    """从环境变量构造 provider 时使用的静态配置。"""
 
     name: str
     kind: str
@@ -29,8 +26,6 @@ class ProviderPreset:
     extra_body: dict[str, Any] | None = None
 
 
-# 这里优先覆盖对 coding agent 学习项目最常见的几类接入方式。
-# 大量厂商提供 OpenAI-compatible API，因此可以共用一个实现。
 PROVIDER_PRESETS: dict[str, ProviderPreset] = {
     "openai": ProviderPreset(
         name="openai",
@@ -100,7 +95,6 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         model_env="ANTHROPIC_MODEL",
         default_model="claude-sonnet-4-5",
         base_url_env="ANTHROPIC_BASE_URL",
-        # 与 OpenAI-compatible 主线对齐：streaming + tools + forced tool_choice。
         capabilities=ProviderCapabilities(
             supports_streaming=True,
             supports_forced_tool_choice=True,

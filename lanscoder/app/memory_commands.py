@@ -1,5 +1,3 @@
-"""/memory slash command：列出、新增、删除持久记忆。"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -14,7 +12,6 @@ from lanscoder.memory.models import MemoryRecord, MemoryScope
 
 @dataclass(slots=True)
 class MemoryCommandHandler:
-    """处理 `/memory` 系列命令。"""
 
     memory_provider: Callable[[], MemoryManager | None]
     writer_provider: Callable[[], SessionEventWriter | None] | None = None

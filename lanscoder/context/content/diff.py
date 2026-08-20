@@ -1,5 +1,3 @@
-"""git_diff / unified diff 输出的确定性压缩器。"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

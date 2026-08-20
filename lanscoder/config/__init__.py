@@ -1,5 +1,3 @@
-"""配置加载入口。"""
-
 from lanscoder.config.models import (
     ModelCatalog,
     ModelCatalogError,

@@ -1,5 +1,3 @@
-"""持久记忆工具：remember / forget / read_memory / search_memory。"""
-
 from __future__ import annotations
 
 from typing import Any

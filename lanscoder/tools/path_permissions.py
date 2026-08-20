@@ -1,5 +1,3 @@
-"""Shared permission helpers for path-reading tools."""
-
 from __future__ import annotations
 
 from collections.abc import Callable
