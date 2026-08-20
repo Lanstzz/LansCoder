@@ -19,17 +19,32 @@ from typing import Any
 from lanscoder.agent.background import BackgroundJobManager, current_job_id
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.session import AgentSession
-from lanscoder.agent.worktree import Worktree, WorktreeDiff, WorktreeError, WorktreeManager
+from lanscoder.agent.worktree import (
+    Worktree,
+    WorktreeDiff,
+    WorktreeError,
+    WorktreeManager,
+)
 from lanscoder.context.identity import new_session_id
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.permissions.grants import PermissionGrantStore
 from lanscoder.permissions.manager import PermissionManager
 from lanscoder.permissions.policy import DefaultPermissionPolicy
-from lanscoder.permissions.types import PermissionAction, PermissionGrant, PermissionMode, PermissionScopeType
+from lanscoder.permissions.types import (
+    PermissionAction,
+    PermissionGrant,
+    PermissionMode,
+    PermissionScopeType,
+)
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import MainRequestOptions
 from lanscoder.skills.models import SkillCatalog
-from lanscoder.subagent.types import SUBAGENT_PROFILES, SubagentProfile, SubagentRequest, SubagentResult
+from lanscoder.subagent.types import (
+    SUBAGENT_PROFILES,
+    SubagentProfile,
+    SubagentRequest,
+    SubagentResult,
+)
 from lanscoder.tools.types import Tool
 from lanscoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
 
@@ -55,13 +70,17 @@ class SubagentRunner:
         self.store = store
         self.provider = provider
         self.tools = list(tools)
-        self.project_root = Path(project_root).resolve() if project_root is not None else None
+        self.project_root = (
+            Path(project_root).resolve() if project_root is not None else None
+        )
         self.agents_md = agents_md
         self.skill_catalog = skill_catalog or SkillCatalog()
         self.permission_manager = permission_manager
         self.sandbox_access = sandbox_access or SandboxAccess()
         self.request_options = request_options or MainRequestOptions()
-        self.limits = limits or AgentLoopLimits(max_tool_rounds=20, max_provider_calls=40, max_turn_seconds=600)
+        self.limits = limits or AgentLoopLimits(
+            max_tool_rounds=20, max_provider_calls=40, max_turn_seconds=600
+        )
         self.background_manager = background_manager
         # 前台 delegate 运行时的实时进度，TUI 用它渲染输入栏下方的 activity 行；
         # 无前台 delegate 时为 None。
@@ -74,7 +93,11 @@ class SubagentRunner:
         profile = self.profile(role)
         if profile is None:
             return []
-        return [tool for tool in self.tools if tool.name in profile.allowed_tool_names and tool.name != "delegate"]
+        return [
+            tool
+            for tool in self.tools
+            if tool.name in profile.allowed_tool_names and tool.name != "delegate"
+        ]
 
     def run(self, request: SubagentRequest) -> SubagentResult:
         profile = self.profile(request.role)
@@ -95,24 +118,32 @@ class SubagentRunner:
                 error="background_not_allowed",
             )
 
-        # 后台委托时 ToolExecutor 在后台线程里跑 delegate，但其 SubagentRequest 总是
-        # run_in_background=False（delegate 工具硬编码），所以用 current_job_id() 区分：
-        # 真正的前台调用没有 job id，才建 foreground_progress；后台委托由 job.progress 承载。
+        # 进度去向是每次 run 独立的决定：前台（主线程、无后台 job）建一个 tracker 挂到
+        # self.foreground_progress 供 TUI 读取，后台委托由 job.progress 承载。tracker 作为
+        # 本次 run 的局部量贯穿整个 run —— 后台 run 的 tracker 恒为 None，因此永远清不掉
+        # 前台正在用的 tracker（曾有的竞态：后台 run 的 finally 无条件清掉前台进度而崩溃）。
+        tracker: dict[str, Any] | None = None
         if not request.run_in_background and current_job_id() is None:
-            self.foreground_progress = {
+            tracker = {
                 "label": request.role,
                 "started_at": time.monotonic(),
                 "provider_calls": 0,
                 "total_tokens": 0,
             }
+            self.foreground_progress = tracker
         try:
             if self._needs_worktree(request, profile=profile):
-                return self._run_isolated(request, profile=profile)
-            return self._run_inline(request, profile=profile)
+                return self._run_isolated(
+                    request, profile=profile, progress_tracker=tracker
+                )
+            return self._run_inline(request, profile=profile, progress_tracker=tracker)
         finally:
-            self.foreground_progress = None
+            if tracker is not None:
+                self.foreground_progress = None
 
-    def _needs_worktree(self, request: SubagentRequest, *, profile: SubagentProfile) -> bool:
+    def _needs_worktree(
+        self, request: SubagentRequest, *, profile: SubagentProfile
+    ) -> bool:
         """Whether this run must execute inside an isolated git worktree.
 
         Mutation-capable roles isolate when running in the background so a
@@ -125,7 +156,13 @@ class SubagentRunner:
             return True
         return bool(profile.requires_worktree and request.run_in_background)
 
-    def _run_inline(self, request: SubagentRequest, *, profile: SubagentProfile) -> SubagentResult:
+    def _run_inline(
+        self,
+        request: SubagentRequest,
+        *,
+        profile: SubagentProfile,
+        progress_tracker: dict[str, Any] | None,
+    ) -> SubagentResult:
         """Original Phase 2 behaviour: run the child against the parent-rooted tools."""
 
         child_session = self.create_child_session(request, profile=profile)
@@ -142,7 +179,7 @@ class SubagentRunner:
                 request_options=self.request_options,
                 background_manager=None,
                 enable_delegate_tool=False,
-                progress_callback=self._make_progress_callback(),
+                progress_callback=self._make_progress_callback(progress_tracker),
             )
             try:
                 result = asyncio.run(loop.run_user_turn(prompt))
@@ -162,7 +199,9 @@ class SubagentRunner:
                     elapsed_seconds=time.monotonic() - started,
                 )
             usage = loop.usage_summary()
-            content = response.content.strip() or "Subagent finished without text output."
+            content = (
+                response.content.strip() or "Subagent finished without text output."
+            )
             return SubagentResult(
                 ok=True,
                 role=request.role,
@@ -175,7 +214,13 @@ class SubagentRunner:
         finally:
             self._delete_child_session(child_session.session_id)
 
-    def _run_isolated(self, request: SubagentRequest, *, profile: SubagentProfile) -> SubagentResult:
+    def _run_isolated(
+        self,
+        request: SubagentRequest,
+        *,
+        profile: SubagentProfile,
+        progress_tracker: dict[str, Any] | None,
+    ) -> SubagentResult:
         """Phase 4: run a mutation-capable child inside a dedicated git worktree.
 
         The child gets fresh tools rooted at the worktree and a child
@@ -217,7 +262,9 @@ class SubagentRunner:
         self._attach_worktree_cleanup(manager, worktree)
 
         try:
-            child_session = self._create_isolated_child_session(request, profile=profile, worktree=worktree, session_id=session_id)
+            child_session = self._create_isolated_child_session(
+                request, profile=profile, worktree=worktree, session_id=session_id
+            )
             try:
                 prompt = self._child_prompt(request, profile=profile, worktree=worktree)
                 from lanscoder.agent.loop import AgentLoop
@@ -225,12 +272,16 @@ class SubagentRunner:
                 loop = AgentLoop(
                     session=child_session,
                     provider=self.provider,
-                    tools=self._worktree_child_tools(worktree.path, profile=profile, access=child_session.sandbox_access),
+                    tools=self._worktree_child_tools(
+                        worktree.path,
+                        profile=profile,
+                        access=child_session.sandbox_access,
+                    ),
                     limits=self.limits,
                     request_options=self.request_options,
                     background_manager=None,
                     enable_delegate_tool=False,
-                    progress_callback=self._make_progress_callback(),
+                    progress_callback=self._make_progress_callback(progress_tracker),
                 )
                 started = time.monotonic()
                 try:
@@ -272,8 +323,12 @@ class SubagentRunner:
                     )
                 diff = manager.diff(worktree)
                 usage = loop.usage_summary()
-                content = response.content.strip() or "Subagent finished without text output."
-                summary = self._compose_isolated_summary(content, worktree=worktree, diff=diff)
+                content = (
+                    response.content.strip() or "Subagent finished without text output."
+                )
+                summary = self._compose_isolated_summary(
+                    content, worktree=worktree, diff=diff
+                )
                 return SubagentResult(
                     ok=True,
                     role=request.role,
@@ -300,9 +355,15 @@ class SubagentRunner:
                 worktree_branch=worktree.branch,
             )
 
-    def create_child_session(self, request: SubagentRequest, *, profile: SubagentProfile) -> AgentSession:
+    def create_child_session(
+        self, request: SubagentRequest, *, profile: SubagentProfile
+    ) -> AgentSession:
         session_id = new_session_id()
-        permission_manager = self._background_child_permission_manager() if request.run_in_background else self._child_permission_manager_for_inline()
+        permission_manager = (
+            self._background_child_permission_manager()
+            if request.run_in_background
+            else self._child_permission_manager_for_inline()
+        )
         child = AgentSession.create(
             store=self.store,
             session_id=session_id,
@@ -339,7 +400,11 @@ class SubagentRunner:
         reserved-name guard.
         """
 
-        return [tool for tool in self.tools_for_role(role) if tool.name != "retrieve_archive"]
+        return [
+            tool
+            for tool in self.tools_for_role(role)
+            if tool.name != "retrieve_archive"
+        ]
 
     def _create_isolated_child_session(
         self,
@@ -357,7 +422,9 @@ class SubagentRunner:
         the parent working directory.
         """
 
-        permission_manager = self._child_permission_manager(worktree.path, mutation=True)
+        permission_manager = self._child_permission_manager(
+            worktree.path, mutation=True
+        )
         # PROJECT sandbox keeps every file tool physically confined to the worktree
         # root even though the policy auto-allows in-tree writes.
         sandbox_access = SandboxAccess(mode=SandboxAccessMode.PROJECT)
@@ -366,7 +433,9 @@ class SubagentRunner:
             session_id=session_id,
             agents_md=self.agents_md,
             skill_catalog=self.skill_catalog,
-            tools=self._worktree_child_tools(worktree.path, profile=profile, access=sandbox_access, for_registry=True),
+            tools=self._worktree_child_tools(
+                worktree.path, profile=profile, access=sandbox_access, for_registry=True
+            ),
             permission_manager=permission_manager,
             sandbox_access=sandbox_access,
         )
@@ -383,12 +452,13 @@ class SubagentRunner:
         )
         return child
 
-    def _make_progress_callback(self):
-        """返回进度回调：后台子 agent 写 BackgroundJob.progress，前台写 foreground_progress。
+    def _make_progress_callback(self, progress_tracker: dict[str, Any] | None):
+        """返回进度回调：后台子 agent 写 BackgroundJob.progress，前台写 progress_tracker。
 
-        用线程局部 ``current_job_id()`` 判断是否后台：后台时把进度写给对应 job 供
-        TUI 的 activity 面板读；前台时（无后台 job）写给 ``foreground_progress``，
-        让 TUI 在输入栏下方显示同样的进度行。
+        后台分支按线程局部 ``current_job_id()`` 判断，把进度写给对应 job 供 TUI 的
+        activity 面板读；前台分支写本次 run 创建的 ``progress_tracker``（由 run() 决定
+        并贯穿到本 run 结束）。回调把 tracker 按值闭包捕获，不再动态读共享属性，因此
+        任何时刻清掉 ``self.foreground_progress`` 都不会让运行中的前台子 agent 崩溃。
         """
         if self.background_manager is not None:
             job_id = current_job_id()
@@ -400,15 +470,17 @@ class SubagentRunner:
                         job.progress = state
 
                 return _report
-        if self.foreground_progress is not None:
+        if progress_tracker is not None:
 
             def _report(state: dict[str, Any]) -> None:
-                self.foreground_progress.update(state)
+                progress_tracker.update(state)
 
             return _report
         return None
 
-    def _attach_worktree_cleanup(self, manager: WorktreeManager, worktree: Worktree) -> None:
+    def _attach_worktree_cleanup(
+        self, manager: WorktreeManager, worktree: Worktree
+    ) -> None:
         """Attach worktree teardown to the current background job.
 
         A background coder runs inside an isolated worktree that is normally left
@@ -538,7 +610,11 @@ class SubagentRunner:
             access=access,
         )
         allowed = profile.allowed_tool_names
-        tools = [tool for tool in registry.tools() if tool.name in allowed and tool.name != "delegate"]
+        tools = [
+            tool
+            for tool in registry.tools()
+            if tool.name in allowed and tool.name != "delegate"
+        ]
         if for_registry:
             tools = [tool for tool in tools if tool.name != "retrieve_archive"]
         return tools
@@ -550,8 +626,14 @@ class SubagentRunner:
         profile: SubagentProfile,
         worktree: Worktree | None = None,
     ) -> str:
-        hints = "\n".join(f"- {hint}" for hint in request.path_hints if str(hint).strip())
-        summary = request.parent_summary.strip() if request.parent_summary else "(none provided)"
+        hints = "\n".join(
+            f"- {hint}" for hint in request.path_hints if str(hint).strip()
+        )
+        summary = (
+            request.parent_summary.strip()
+            if request.parent_summary
+            else "(none provided)"
+        )
         if worktree is not None:
             root = str(worktree.path)
             isolation = (
@@ -560,7 +642,11 @@ class SubagentRunner:
                 "then summarize what you changed. Do not attempt to merge or push.\n"
             )
         else:
-            root = str(self.project_root) if self.project_root is not None else "(current project root)"
+            root = (
+                str(self.project_root)
+                if self.project_root is not None
+                else "(current project root)"
+            )
             isolation = ""
         return (
             f"You are a LansCoder subagent with role: {profile.role}.\n"
@@ -574,7 +660,9 @@ class SubagentRunner:
             f"Task:\n{request.task}"
         )
 
-    def _compose_isolated_summary(self, content: str, *, worktree: Worktree, diff: "WorktreeDiff") -> str:
+    def _compose_isolated_summary(
+        self, content: str, *, worktree: Worktree, diff: "WorktreeDiff"
+    ) -> str:
         parts = [
             content,
             "",
