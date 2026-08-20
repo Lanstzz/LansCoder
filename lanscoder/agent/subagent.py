@@ -38,6 +38,10 @@ from lanscoder.permissions.types import (
 )
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import MainRequestOptions
+from lanscoder.runtime.cancellation import (
+    AgentCancelledError,
+    current_cancellation_token,
+)
 from lanscoder.skills.models import SkillCatalog
 from lanscoder.subagent.types import (
     SUBAGENT_PROFILES,
@@ -180,12 +184,17 @@ class SubagentRunner:
                 background_manager=None,
                 enable_delegate_tool=False,
                 progress_callback=self._make_progress_callback(progress_tracker),
+                cancellation_token=current_cancellation_token(),
             )
             try:
                 result = asyncio.run(loop.run_user_turn(prompt))
                 response = result.response
                 if response is None:
                     raise RuntimeError("subagent paused for user input")
+                if response.finish_reason == "interrupted":
+                    raise AgentCancelledError()
+            except AgentCancelledError:
+                raise
             except Exception as exc:  # noqa: BLE001 - delegate must return a tool result, not break parent loop
                 usage = loop.usage_summary()
                 return SubagentResult(
