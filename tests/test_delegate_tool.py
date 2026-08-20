@@ -360,6 +360,128 @@ def test_foreground_delegate_survives_background_delegate_finish(tmp_path) -> No
     assert "Subagent failed" not in foreground_results[0].summary
 
 
+def test_foreground_delegate_cancel_aborts_child(tmp_path) -> None:
+    """Foreground subagent must abort with AgentCancelledError when the parent turn
+    is cancelled — it must not run to completion and be mislabelled as failed."""
+
+    from lanscoder.runtime.cancellation import (
+        AgentCancelledError,
+        CancellationToken,
+        cancellation_context,
+    )
+
+    store = JsonlSessionStore(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingProvider(FakeProvider):
+        def complete(self, request: ChatRequest) -> ChatResponse:
+            if (
+                request.tools == []
+                and request.tool_choice == "none"
+                and request.max_tokens == 512
+            ):
+                return super().complete(request)
+            started.set()
+            if not release.wait(5):
+                raise AssertionError("release gate was not opened")
+            return ChatResponse(
+                provider="fake", model="fake-model", content="child done"
+            )
+
+    runner = SubagentRunner(
+        store=store, provider=BlockingProvider([]), tools=[_tool("view")]
+    )
+    token = CancellationToken()
+    outcomes: list[object] = []
+
+    def fg_func() -> None:
+        with cancellation_context(token):
+            try:
+                runner.run(
+                    SubagentRequest(
+                        role="researcher",
+                        task="foreground task",
+                        parent_session_id="p_fg",
+                    )
+                )
+            except AgentCancelledError as exc:
+                outcomes.append(exc)
+
+    fg_thread = threading.Thread(target=fg_func)
+    fg_thread.start()
+    assert started.wait(5), "foreground child should start and block on its provider"
+    token.cancel()  # user interrupts the turn mid-subagent
+    release.set()
+    fg_thread.join(10)
+    assert not fg_thread.is_alive(), "foreground delegate should abort after cancel"
+    assert len(outcomes) == 1
+    assert isinstance(outcomes[0], AgentCancelledError)
+
+
+def test_background_delegate_cancel_aborts_child(tmp_path) -> None:
+    """A cancelled background job must abort its inline subagent with
+    AgentCancelledError and finish cancelled, not run to completion."""
+
+    from lanscoder.runtime.cancellation import AgentCancelledError
+
+    store = JsonlSessionStore(tmp_path)
+    manager = BackgroundJobManager()
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingProvider(FakeProvider):
+        def complete(self, request: ChatRequest) -> ChatResponse:
+            if (
+                request.tools == []
+                and request.tool_choice == "none"
+                and request.max_tokens == 512
+            ):
+                return super().complete(request)
+            started.set()
+            if not release.wait(5):
+                raise AssertionError("release gate was not opened")
+            return ChatResponse(
+                provider="fake", model="fake-model", content="child done"
+            )
+
+    runner = SubagentRunner(
+        store=store,
+        provider=BlockingProvider([]),
+        tools=[_tool("view")],
+        background_manager=manager,
+    )
+    outcomes: list[object] = []
+
+    def job_func() -> ToolResult:
+        try:
+            runner.run(
+                SubagentRequest(
+                    role="researcher",
+                    task="background task",
+                    parent_session_id="p_bg",
+                )
+            )
+        except AgentCancelledError as exc:
+            outcomes.append(exc)
+        return make_text_result("delegate", "done")
+
+    try:
+        job = manager.start(job_func, tool_name="delegate")
+        assert started.wait(5), (
+            "background child should start and block on its provider"
+        )
+        manager.cancel(job.id)
+        release.set()
+        assert manager.wait(timeout=5) is True
+    finally:
+        manager.shutdown()
+
+    assert len(outcomes) == 1
+    assert isinstance(outcomes[0], AgentCancelledError)
+    assert job.status == "cancelled"
+
+
 def test_background_delegate_returns_placeholder_and_notification(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     manager = BackgroundJobManager()
