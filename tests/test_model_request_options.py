@@ -79,7 +79,7 @@ def test_main_stream_request_inherits_selected_model_options(tmp_path) -> None:
     )
     session.append_user_message("检查 README")
 
-    asyncio.run(loop._stream_once())
+    asyncio.run(loop._complete_once(streaming=True))
 
     request = provider.requests[-1]
     assert request.temperature == 0.3

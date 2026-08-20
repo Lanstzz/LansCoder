@@ -937,7 +937,7 @@ def test_streaming_success_records_projected_tool_result_as_consumed(tmp_path) -
     )
     provider = StreamingProvider([ChatResponse(provider="fake-stream", model="fake-stream-model", content="ok")])
 
-    asyncio.run(AgentLoop(session=session, provider=provider)._stream_once())
+    asyncio.run(AgentLoop(session=session, provider=provider)._complete_once(streaming=True))
 
     assert len(session.runtime_state.consumed_tool_result_part_ids) == 1
     assert [event.type for event in store.list_events(session.session_id)].count("provider_projection_consumed") == 1
