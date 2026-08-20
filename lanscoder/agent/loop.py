@@ -183,11 +183,9 @@ class AgentLoop:
         # → 见 lanscoder/agent/tool_execution.py::ToolExecutor
         self.tool_executor = ToolExecutor(
             session=session,
-            settlement=self.tool_settlement,
             emit_event=self._emit_tool_event,
             check_cancelled=self._check_cancelled,
             cancellation_token=self.cancellation_token,
-            emit_settlements=self._emit_settlements,
             validate_tool_call=self._validate_mcp_tool_call,
             observe_tool_result=self._observe_mcp_search_result,
             background_manager=self.background_manager,
@@ -1002,7 +1000,6 @@ class AgentLoop:
             "finished",
             "permission_requested",
             "denied",
-            "skipped",
             "interrupted",
             "background_started",
         ],
