@@ -146,6 +146,9 @@ class BackgroundNotification:
     task_id: str | None = None
     observed_revision: int | None = None
     task_plan_completion: str | None = None
+    elapsed_seconds: float | None = None
+    provider_calls: int | None = None
+    total_tokens: int | None = None
     kind: str = "tool"
 
 
@@ -328,6 +331,10 @@ class BackgroundJobManager:
     def _notification_for(self, job: BackgroundJob) -> BackgroundNotification:
         summary = _summarize(job)
         ok = job.status == STATUS_COMPLETED
+        progress = job.progress or {}
+        total_tokens = progress.get("total_tokens")
+        provider_calls = progress.get("provider_calls")
+        has_usage = total_tokens is not None or provider_calls is not None
         return BackgroundNotification(
             job_id=job.id,
             session_id=job.session_id,
@@ -339,6 +346,9 @@ class BackgroundJobManager:
             task_id=job.task_id,
             observed_revision=job.observed_revision,
             task_plan_completion=job.task_plan_completion,
+            elapsed_seconds=(self._clock() - job.created_at) if has_usage else None,
+            provider_calls=provider_calls if has_usage else None,
+            total_tokens=total_tokens if has_usage else None,
         )
 
     # -- 查询/收集 --------------------------------------------------------
@@ -539,6 +549,12 @@ def render_task_notification(notification: BackgroundNotification) -> str:
         lines.append(f"  <observed_revision>{notification.observed_revision}</observed_revision>")
     if notification.task_plan_completion:
         lines.append("  <task_plan_completion>" f"{escape(notification.task_plan_completion, quote=False)}" "</task_plan_completion>")
+    if notification.elapsed_seconds is not None:
+        lines.append(f"  <elapsed_seconds>{notification.elapsed_seconds:.1f}</elapsed_seconds>")
+    if notification.provider_calls is not None:
+        lines.append(f"  <provider_calls>{notification.provider_calls}</provider_calls>")
+    if notification.total_tokens is not None:
+        lines.append(f"  <total_tokens>{notification.total_tokens}</total_tokens>")
     lines.append(f"  <status>{escape(notification.status, quote=False)}</status>")
     lines.append(f"  <summary>{escape(notification.summary, quote=False)}</summary>")
     lines.append("</task_notification>")

@@ -31,6 +31,8 @@ from lanscoder.app.tui import _provider_name_markup
 from lanscoder.app.tui import _provider_model_markup
 from lanscoder.app.tui import _plain_static
 from lanscoder.app.tui import _observe_markdown_update
+from lanscoder.app.tui import _format_subagent_line
+from lanscoder.app.tui import _progress_indicator
 from lanscoder.app.picker import TuiPickerItem, TuiPickerState, render_picker
 from lanscoder.app.picker_adapters import render_picker_item
 from lanscoder.app import theme
@@ -149,6 +151,19 @@ class FakeTaskPlanPanel(FakeActivity):
 
     def remove_class(self, name: str) -> None:
         self.classes.discard(name)
+
+
+def test_progress_indicator_cycles_bar_frames() -> None:
+    frames = [_progress_indicator(i) for i in range(9)]
+    assert frames[:8] == ["[    ]", "[>   ]", "[->  ]", "[--> ]", "[--->]", "[ ---]", "[  --]", "[   -]"]
+    assert frames[8] == "[    ]"  # 回到第一个
+
+
+def test_format_subagent_line_uses_indicator_and_k_abbrev() -> None:
+    line = _format_subagent_line(label="researcher", elapsed=12.0, calls=3, tokens=2500, indicator="[--->]")
+    assert line == "[--->] researcher · 12s · 3 calls · 2.5k tokens"
+    line_small = _format_subagent_line(label="reviewer", elapsed=0.4, calls=1, tokens=850, indicator="[>   ]")
+    assert line_small == "[>   ] reviewer · 0s · 1 calls · 850 tokens"
 
 
 def test_stage_paste_attachments_adds_clipboard_attachment(monkeypatch, tmp_path) -> None:
@@ -736,6 +751,28 @@ async def test_lanscoder_app_shows_welcome_until_first_input() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_subagent_panel_keeps_content_margin_when_populated() -> None:
+    app = LansCoderApp(chat_runner=_PanelRunner())
+    async with app.run_test(size=(120, 40)) as pilot:
+        app._refresh_subagent_progress()
+        await pilot.pause()
+        panel = app.query_one("#subagent-panel")
+        assert panel.styles.margin.left == 3
+        assert panel.region.x == 3
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_subagent_panel_hidden_when_no_active_jobs() -> None:
+    app = LansCoderApp(chat_runner=FakeAsyncChatRunner())
+    async with app.run_test(size=(120, 40)):
+        app._refresh_subagent_progress()
+        panel = app.query_one("#subagent-panel")
+        assert panel.has_class("hidden")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_lanscoder_app_welcome_particles_animate_between_frames() -> None:
     app = LansCoderApp()
 
@@ -1053,6 +1090,25 @@ class FakeChatRunner:
         self.inputs.append(content)
         self.attachments.append(attachments)
         return ChatResponse(provider="fake", model="fake", content=f"reply:{content}")
+
+
+class _PanelJob:
+    created_at = 100.0
+    tool_name = "delegate"
+    label = "researcher"
+    progress = {"provider_calls": 3, "total_tokens": 2500}
+
+
+class _PanelManager:
+    def active_jobs(self):
+        return [_PanelJob()]
+
+
+class _PanelRunner(FakeChatRunner):
+    background_manager = _PanelManager()
+
+    def foreground_subagent(self) -> None:
+        return None
 
 
 class FakeDisplayChatRunner(FakeChatRunner):
