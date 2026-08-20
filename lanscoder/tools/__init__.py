@@ -4,6 +4,7 @@ from lanscoder.tools.builtin import create_builtin_registry
 from lanscoder.tools.apply_patch import create_apply_patch_tool
 from lanscoder.tools.ask_user import create_ask_user_tool
 from lanscoder.tools.delete import create_delete_tool
+from lanscoder.tools.delegate import create_delegate_tool
 from lanscoder.tools.diagnostics import create_diagnostics_tool
 from lanscoder.tools.edit import create_edit_tool
 from lanscoder.tools.fetch import create_fetch_tool
@@ -59,17 +60,15 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    """Lazily expose tools that depend on agent-layer runtime objects.
+    """Lazily resolve the task-plan tool factories.
 
-    Importing ``lanscoder.tools`` is part of low-level context/writer startup.
-    ``delegate`` depends on ``lanscoder.agent.subagent`` and therefore cannot be
-    imported eagerly here without creating a package-level cycle.
+    ``create_delegate_tool`` used to be resolved here too: it depended on
+    ``lanscoder.agent.subagent``, which would have created a package-level
+    import cycle during low-level startup. Now that delegate reads its types
+    from the leaf ``lanscoder.subagent`` package, it is imported eagerly at the
+    top of this module and only the task-plan tools remain deferred.
     """
 
-    if name == "create_delegate_tool":
-        from lanscoder.tools.delegate import create_delegate_tool
-
-        return create_delegate_tool
     task_factories = {
         "create_task_create_tool": ("lanscoder.tools.task_create", "create_task_create_tool"),
         "create_task_update_tool": ("lanscoder.tools.task_update", "create_task_update_tool"),

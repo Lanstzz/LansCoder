@@ -4,12 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from lanscoder.agent.subagent import (
-    SUBAGENT_PROFILES,
-    SubagentRequest,
-    SubagentRunner,
-)
 from lanscoder.providers.types import ToolDefinition
+from lanscoder.subagent.types import SubagentRequest, SubagentRunner
 from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils.schema import object_schema
 
@@ -99,16 +95,6 @@ def create_delegate_tool(
         ),
         executor=delegate,
     )
-
-
-def role_allows_background(role: str) -> bool:
-    profile = SUBAGENT_PROFILES.get(str(role).strip())
-    return bool(profile and profile.allow_background)
-
-
-def role_requires_worktree(role: str) -> bool:
-    profile = SUBAGENT_PROFILES.get(str(role).strip())
-    return bool(profile and profile.requires_worktree)
 
 
 def _format_delegate_result(summary: str, child_session_id: str) -> str:
