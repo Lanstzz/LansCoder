@@ -23,6 +23,7 @@
 
 ## Commands and Verification
 
+- The project's development virtual environment is `.venv`; run dev commands from it, e.g. `.venv/bin/python -m pytest`.
 - After code changes, run the linter and formatter (e.g., `ruff`) on the modified files. Fix all issues before proceeding.
 - Create or modify test files for new features and bug fixes. After writing or editing a test file, run it and iterate until it passes.
 - Run the narrowest relevant tests first, then the full suite for broad or cross-module changes.
