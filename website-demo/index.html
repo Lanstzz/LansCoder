@@ -201,7 +201,6 @@
   }
   .install-tab-panel { display: none; }
   .install-tabs input#tab-shell:checked ~ .install-tab-panels #panel-shell,
-  .install-tabs input#tab-brew:checked ~ .install-tab-panels #panel-brew,
   .install-tabs input#tab-pipx:checked ~ .install-tab-panels #panel-pipx {
     display: block;
   }
@@ -372,20 +371,14 @@
           <p>Choose your preferred install method:</p>
           <div class="install-tabs">
             <input type="radio" name="install-method" id="tab-shell" checked>
-            <input type="radio" name="install-method" id="tab-brew">
             <input type="radio" name="install-method" id="tab-pipx">
             <div class="install-tab-labels">
               <label for="tab-shell">Shell (macOS / Linux / Windows)</label>
-              <label for="tab-brew">Homebrew (macOS)</label>
               <label for="tab-pipx">pipx (all platforms)</label>
             </div>
             <div class="install-tab-panels">
               <div class="install-tab-panel" id="panel-shell">
                 <div class="code-block"><span class="prompt">$</span> <span class="cmd">curl -sSL https://raw.githubusercontent.com/Lanstzz/LansCoder/main/install.sh | bash</span></div>
-              </div>
-              <div class="install-tab-panel" id="panel-brew">
-                <div class="code-block"><span class="prompt">$</span> <span class="cmd">brew tap lanstzz/tap</span>
-<span class="prompt">$</span> <span class="cmd">brew install lanscoder</span></div>
               </div>
               <div class="install-tab-panel" id="panel-pipx">
                 <div class="code-block"><span class="prompt">$</span> <span class="cmd">pipx install lanscoder</span></div>
