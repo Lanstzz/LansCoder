@@ -82,8 +82,6 @@ def tool_event_status(event) -> str | None:
         return "permission_requested"
     if kind == "denied":
         return "denied"
-    if kind == "skipped":
-        return "skipped"
     return None
 
 
@@ -223,8 +221,6 @@ def tool_status_text(event) -> str:
         return f"permission requested{suffix}"
     if kind == "denied":
         return f"工具已拒绝：{name}"
-    if kind == "skipped":
-        return f"工具已跳过：{name}"
     return ""
 
 
