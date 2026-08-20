@@ -19,6 +19,7 @@ import pytest
 from lanscoder.agent.background import (
     DEFAULT_BACKGROUND_TOOL_NAMES,
     BackgroundCapacityError,
+    BackgroundJob,
     BackgroundJobManager,
     has_background_control_fields,
     render_task_notification,
@@ -1057,6 +1058,44 @@ def test_background_cancel_tool_handles_missing_and_existing() -> None:
         gate.set()
         manager.wait(timeout=5)
         manager.shutdown()
+
+
+def test_render_task_notification_includes_usage_when_present() -> None:
+    from lanscoder.agent.background import BackgroundNotification
+
+    text = render_task_notification(
+        BackgroundNotification(
+            job_id="bg_0001",
+            tool_name="delegate",
+            status="completed",
+            summary="done",
+            ok=True,
+            elapsed_seconds=12.5,
+            provider_calls=3,
+            total_tokens=2500,
+        )
+    )
+    assert "<elapsed_seconds>12.5</elapsed_seconds>" in text
+    assert "<provider_calls>3</provider_calls>" in text
+    assert "<total_tokens>2500</total_tokens>" in text
+
+
+def test_background_notification_carries_subagent_usage() -> None:
+    manager = BackgroundJobManager(clock=lambda: 112.5)
+    job = BackgroundJob(
+        id="bg_0001",
+        tool_name="delegate",
+        status="completed",
+        created_at=100.0,
+        progress={"provider_calls": 3, "total_tokens": 2500},
+    )
+    try:
+        notification = manager._notification_for(job)
+    finally:
+        manager.shutdown()
+    assert notification.total_tokens == 2500
+    assert notification.provider_calls == 3
+    assert notification.elapsed_seconds == 12.5
 
 
 def test_render_task_notification_shape() -> None:

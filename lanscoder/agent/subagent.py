@@ -12,6 +12,7 @@ The first implementation keeps the boundary deliberately small:
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +63,9 @@ class SubagentRunner:
         self.request_options = request_options or MainRequestOptions()
         self.limits = limits or AgentLoopLimits(max_tool_rounds=20, max_provider_calls=40, max_turn_seconds=600)
         self.background_manager = background_manager
+        # 前台 delegate 运行时的实时进度，TUI 用它渲染输入栏下方的 activity 行；
+        # 无前台 delegate 时为 None。
+        self.foreground_progress: dict[str, Any] | None = None
 
     def profile(self, role: str) -> SubagentProfile | None:
         return SUBAGENT_PROFILES.get(str(role))
@@ -91,9 +95,19 @@ class SubagentRunner:
                 error="background_not_allowed",
             )
 
-        if self._needs_worktree(request, profile=profile):
-            return self._run_isolated(request, profile=profile)
-        return self._run_inline(request, profile=profile)
+        if not request.run_in_background:
+            self.foreground_progress = {
+                "label": request.role,
+                "started_at": time.monotonic(),
+                "provider_calls": 0,
+                "total_tokens": 0,
+            }
+        try:
+            if self._needs_worktree(request, profile=profile):
+                return self._run_isolated(request, profile=profile)
+            return self._run_inline(request, profile=profile)
+        finally:
+            self.foreground_progress = None
 
     def _needs_worktree(self, request: SubagentRequest, *, profile: SubagentProfile) -> bool:
         """Whether this run must execute inside an isolated git worktree.
@@ -112,6 +126,7 @@ class SubagentRunner:
         """Original Phase 2 behaviour: run the child against the parent-rooted tools."""
 
         child_session = self.create_child_session(request, profile=profile)
+        started = time.monotonic()
         try:
             prompt = self._child_prompt(request, profile=profile)
             from lanscoder.agent.loop import AgentLoop
@@ -132,19 +147,27 @@ class SubagentRunner:
                 if response is None:
                     raise RuntimeError("subagent paused for user input")
             except Exception as exc:  # noqa: BLE001 - delegate must return a tool result, not break parent loop
+                usage = loop.usage_summary()
                 return SubagentResult(
                     ok=False,
                     role=request.role,
                     child_session_id=child_session.session_id,
                     summary=f"Subagent failed: {exc}",
                     error=str(exc),
+                    total_tokens=usage["total_tokens"],
+                    provider_calls=usage["provider_calls"],
+                    elapsed_seconds=time.monotonic() - started,
                 )
+            usage = loop.usage_summary()
             content = response.content.strip() or "Subagent finished without text output."
             return SubagentResult(
                 ok=True,
                 role=request.role,
                 child_session_id=child_session.session_id,
                 summary=content,
+                total_tokens=usage["total_tokens"],
+                provider_calls=usage["provider_calls"],
+                elapsed_seconds=time.monotonic() - started,
             )
         finally:
             self._delete_child_session(child_session.session_id)
@@ -206,11 +229,13 @@ class SubagentRunner:
                     enable_delegate_tool=False,
                     progress_callback=self._make_progress_callback(),
                 )
+                started = time.monotonic()
                 try:
                     result = asyncio.run(loop.run_user_turn(prompt))
                     response = result.response
                     if response is None:
                         diff = manager.diff(worktree)
+                        usage = loop.usage_summary()
                         return SubagentResult(
                             ok=False,
                             role=request.role,
@@ -221,9 +246,13 @@ class SubagentRunner:
                             worktree_path=str(worktree.path),
                             worktree_branch=worktree.branch,
                             diff_summary=diff.render(),
+                            total_tokens=usage["total_tokens"],
+                            provider_calls=usage["provider_calls"],
+                            elapsed_seconds=time.monotonic() - started,
                         )
                 except Exception as exc:  # noqa: BLE001 - never break the parent loop
                     diff = manager.diff(worktree)
+                    usage = loop.usage_summary()
                     return SubagentResult(
                         ok=False,
                         role=request.role,
@@ -234,8 +263,12 @@ class SubagentRunner:
                         worktree_path=str(worktree.path),
                         worktree_branch=worktree.branch,
                         diff_summary=diff.render(),
+                        total_tokens=usage["total_tokens"],
+                        provider_calls=usage["provider_calls"],
+                        elapsed_seconds=time.monotonic() - started,
                     )
                 diff = manager.diff(worktree)
+                usage = loop.usage_summary()
                 content = response.content.strip() or "Subagent finished without text output."
                 summary = self._compose_isolated_summary(content, worktree=worktree, diff=diff)
                 return SubagentResult(
@@ -247,6 +280,9 @@ class SubagentRunner:
                     worktree_path=str(worktree.path),
                     worktree_branch=worktree.branch,
                     diff_summary=diff.render(),
+                    total_tokens=usage["total_tokens"],
+                    provider_calls=usage["provider_calls"],
+                    elapsed_seconds=time.monotonic() - started,
                 )
             finally:
                 self._delete_child_session(session_id)
@@ -345,24 +381,29 @@ class SubagentRunner:
         return child
 
     def _make_progress_callback(self):
-        """Return a progress callback that updates the current background job.
+        """返回进度回调：后台子 agent 写 BackgroundJob.progress，前台写 foreground_progress。
 
-        Uses the thread-local ``current_job_id()`` to discover which background
-        job this subagent belongs to, then writes progress data into
-        ``BackgroundJob.progress`` for the TUI to read.
+        用线程局部 ``current_job_id()`` 判断是否后台：后台时把进度写给对应 job 供
+        TUI 的 activity 面板读；前台时（无后台 job）写给 ``foreground_progress``，
+        让 TUI 在输入栏下方显示同样的进度行。
         """
-        if self.background_manager is None:
-            return None
-        job_id = current_job_id()
-        if job_id is None:
-            return None
+        if self.background_manager is not None:
+            job_id = current_job_id()
+            if job_id is not None:
 
-        def _report(state: dict[str, Any]) -> None:
-            job = self.background_manager.get(job_id)
-            if job is not None:
-                job.progress = state
+                def _report(state: dict[str, Any]) -> None:
+                    job = self.background_manager.get(job_id)
+                    if job is not None:
+                        job.progress = state
 
-        return _report
+                return _report
+        if self.foreground_progress is not None:
+
+            def _report(state: dict[str, Any]) -> None:
+                self.foreground_progress.update(state)
+
+            return _report
+        return None
 
     def _attach_worktree_cleanup(self, manager: WorktreeManager, worktree: Worktree) -> None:
         """Attach worktree teardown to the current background job.

@@ -56,7 +56,13 @@ def create_delegate_tool(
             return make_error_result("delegate", result.summary, **result.to_data())
         return make_text_result(
             "delegate",
-            _format_delegate_result(result.summary, result.child_session_id),
+            _format_delegate_result(
+                result.summary,
+                result.child_session_id,
+                total_tokens=result.total_tokens,
+                provider_calls=result.provider_calls,
+                elapsed_seconds=result.elapsed_seconds,
+            ),
             **result.to_data(),
         )
 
@@ -97,5 +103,22 @@ def create_delegate_tool(
     )
 
 
-def _format_delegate_result(summary: str, child_session_id: str) -> str:
-    return f"Subagent {child_session_id} completed.\n\n{summary}"
+def _format_delegate_result(
+    summary: str,
+    child_session_id: str,
+    *,
+    total_tokens: int | None = None,
+    provider_calls: int | None = None,
+    elapsed_seconds: float | None = None,
+) -> str:
+    meta: list[str] = []
+    if elapsed_seconds is not None:
+        meta.append(f"{elapsed_seconds:.1f}s")
+    if provider_calls is not None:
+        meta.append(f"{provider_calls} calls")
+    if total_tokens is not None and total_tokens > 0:
+        meta.append(f"{total_tokens / 1000:.1f}k tokens" if total_tokens >= 1000 else f"{total_tokens} tokens")
+    header = f"Subagent {child_session_id} completed"
+    if meta:
+        header += " · " + " · ".join(meta)
+    return f"{header}\n\n{summary}"

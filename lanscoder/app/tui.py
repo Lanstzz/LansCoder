@@ -73,11 +73,33 @@ __all__ = [
     "LansCoderMarkdown",
     "LansCoderTuiConfig",
     "_entry_renderable",
+    "_format_subagent_line",
     "_observe_markdown_update",
     "_plain_static",
+    "_progress_indicator",
     "_provider_model_markup",
     "_provider_name_markup",
 ]
+
+
+_PROGRESS_INDICATORS = ("[    ]", "[>   ]", "[->  ]", "[--> ]", "[--->]", "[ ---]", "[  --]", "[   -]")
+
+
+def _progress_indicator(frame: int) -> str:
+    """搜索时的进度条指示：`[>   ]` → `[--->]` → `[   -]` → 回到空条循环。"""
+    return _PROGRESS_INDICATORS[frame % len(_PROGRESS_INDICATORS)]
+
+
+def _format_subagent_line(
+    *,
+    label: str,
+    elapsed: float,
+    calls: int,
+    tokens: int,
+    indicator: str,
+) -> str:
+    token_str = f"{tokens / 1000:.1f}k" if tokens >= 1000 else str(tokens)
+    return f"{indicator} {label} · {elapsed:.0f}s · {calls} calls · {token_str} tokens"
 
 
 @dataclass(slots=True)
@@ -177,6 +199,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._provider_glow_timer: Timer | None = None
         self._provider_glow_frame = 0
         self._subagent_progress_timer: Timer | None = None
+        self._activity_frame = 0
         self._pending_user_input: str | None = None
         self._pending_user_attachments: list[UserAttachment] | None = None
         self.transcript = TuiTranscript()
@@ -197,7 +220,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                     soft_wrap=True,
                     compact=True,
                 )
-            yield Vertical(id="subagent-panel")
+            yield Vertical(id="subagent-panel", classes="hidden")
 
     def on_mount(self) -> None:
         self.title = self.config.title
@@ -231,34 +254,51 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             pass
 
     def _refresh_subagent_progress(self) -> None:
-        """Periodic timer: read active background jobs and update the panel."""
+        """Periodic timer: render running background jobs plus the foreground delegate."""
         manager = None
+        foreground = None
         if self.chat_runner is not None:
             manager = getattr(self.chat_runner, "background_manager", None)
-        if manager is None:
-            return
-        jobs = manager.active_jobs()
+            foreground = getattr(self.chat_runner, "foreground_subagent", lambda: None)()
         try:
             panel = self.query_one("#subagent-panel")
         except Exception:
             return
         panel.remove_children()
-        if not jobs:
+        if foreground is None and manager is None:
+            panel.add_class("hidden")
             return
+        jobs = manager.active_jobs() if manager is not None else []
+        if not jobs and foreground is None:
+            panel.add_class("hidden")
+            return
+        panel.remove_class("hidden")
+        self._activity_frame += 1
+        indicator = _progress_indicator(self._activity_frame)
         now = time.monotonic()
         for job in jobs:
-            elapsed = now - job.created_at
-            label = job.label or job.tool_name
             progress = job.progress
-            calls = progress.get("provider_calls", 0) if progress else 0
-            tokens = progress.get("total_tokens", 0) if progress else 0
-            if tokens >= 1000:
-                token_str = f"{tokens / 1000:.1f}k"
-            else:
-                token_str = str(tokens)
             panel.mount(
                 Static(
-                    f"🔄 {label} · {elapsed:.0f}s · {calls} calls · {token_str} tokens",
+                    _format_subagent_line(
+                        label=job.label or job.tool_name,
+                        elapsed=now - job.created_at,
+                        calls=progress.get("provider_calls", 0) if progress else 0,
+                        tokens=progress.get("total_tokens", 0) if progress else 0,
+                        indicator=indicator,
+                    )
+                )
+            )
+        if foreground is not None:
+            panel.mount(
+                Static(
+                    _format_subagent_line(
+                        label=foreground.get("label") or "delegate",
+                        elapsed=now - foreground["started_at"],
+                        calls=foreground.get("provider_calls", 0),
+                        tokens=foreground.get("total_tokens", 0),
+                        indicator=indicator,
+                    )
                 )
             )
 

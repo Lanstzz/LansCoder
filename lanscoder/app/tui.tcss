@@ -193,10 +193,8 @@ ScrollBarCorner {
     color: #808185;
     border-top: solid #303238;
 }
-#subagent-panel:empty {
-    border-top: none;
-    padding: 0;
-    margin: 0;
+#subagent-panel.hidden {
+    display: none;
 }
 #subagent-panel Static {
     width: 100%;

@@ -167,6 +167,7 @@ class AgentLoop:
         self.background_manager = background_manager
         self.background_tool_names = background_tool_names if background_tool_names is not None else DEFAULT_BACKGROUND_TOOL_NAMES
         self.enable_delegate_tool = enable_delegate_tool
+        self._delegate_runner = None
         self._task_plan_reconciliation_attempted = False
         self._tool_rounds_completed = 0
 
@@ -972,22 +973,29 @@ class AgentLoop:
         )
 
     def _report_progress(self, response: ChatResponse) -> None:
-        """Notify the progress callback (if set) after each provider call.
+        """累积 token 用量，再通知进度回调（若有）。
 
-        Accumulates total token usage across the turn so the TUI can show
-        real-time subagent progress.
+        用量累积不依赖进度回调，这样前台子 agent（无后台 job、无回调）也能通过
+        ``usage_summary()`` 上报总量；后台子 agent 则同时把进度写给 TUI。
         """
-        if self.progress_callback is None:
-            return
         usage = response.usage
         if usage is not None and usage.total_tokens is not None:
             self._total_tokens += usage.total_tokens
+        if self.progress_callback is None:
+            return
         self.progress_callback(
             {
                 "provider_calls": self.provider_call_count,
                 "total_tokens": self._total_tokens,
             }
         )
+
+    def usage_summary(self) -> dict[str, int]:
+        """返回 loop 自创建以来累积的 provider 调用次数与 token 用量。"""
+        return {
+            "provider_calls": self.provider_call_count,
+            "total_tokens": self._total_tokens,
+        }
 
     def _context_budget_for_view(
         self,
@@ -1149,12 +1157,19 @@ class AgentLoop:
             request_options=self.request_options,
             background_manager=self.background_manager,
         )
+        self._delegate_runner = runner
         self.session.tool_registry.register(
             create_delegate_tool(
                 runner,
                 parent_session_id=self.session.session_id,
             )
         )
+
+    def foreground_subagent(self) -> dict[str, Any] | None:
+        """当前前台 delegate 子 agent 的实时进度（无则 None），供 TUI 在输入栏下方显示。"""
+        if self._delegate_runner is None:
+            return None
+        return self._delegate_runner.foreground_progress
 
     def _begin_turn(self, *, new_user_turn: bool = True) -> None:
         if new_user_turn:

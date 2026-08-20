@@ -407,6 +407,14 @@ class AgentChatRunner:
         self.loops.append(loop)
         return loop
 
+    def foreground_subagent(self) -> dict[str, Any] | None:
+        """当前前台 delegate 子 agent 的实时进度（无则 None），供 TUI 渲染。"""
+        for loop in self.loops:
+            info = loop.foreground_subagent()
+            if info is not None:
+                return info
+        return None
+
     def _waiting_for_input_response(self, pending: UserInputRequest | None) -> ChatResponse:
         response = ChatResponse(
             provider=self.provider.name,

@@ -11,7 +11,7 @@ from lanscoder.agent.subagent import SubagentRunner
 from lanscoder.subagent.types import SubagentRequest
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.base import ChatProvider
-from lanscoder.providers.types import ChatRequest, ChatResponse, ProviderCapabilities, ToolCall, ToolDefinition
+from lanscoder.providers.types import ChatRequest, ChatResponse, ProviderCapabilities, TokenUsage, ToolCall, ToolDefinition
 from lanscoder.tools.types import Tool, ToolResult, make_text_result
 
 
@@ -141,6 +141,44 @@ def test_agent_loop_registers_delegate_and_foreground_returns_summary(tmp_path) 
     assert result.data["role"] == "researcher"
     assert result.data["child_session_id"]
     assert "child summary" in result.content
+
+
+def test_foreground_delegate_result_includes_usage_and_elapsed(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="child summary",
+                usage=TokenUsage(input_tokens=10, output_tokens=20, total_tokens=2500),
+            )
+        ]
+    )
+    session = AgentSession.create(store=store, session_id="parent_usage", tools=[_tool("view")])
+    AgentLoop(session=session, provider=provider)
+
+    result = session.tool_registry.execute("delegate", {"role": "researcher", "task": "read docs"})
+
+    assert result.ok is True
+    assert result.data["total_tokens"] == 2500
+    assert result.data["provider_calls"] == 1
+    assert result.data["elapsed_seconds"] is not None
+    assert "2.5k tokens" in result.content
+    assert "calls" in result.content
+
+
+def test_foreground_progress_callback_writes_to_runner_tracker(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    runner = SubagentRunner(store=store, provider=FakeProvider([]), tools=[_tool("view")])
+    runner.foreground_progress = {"label": "researcher", "started_at": 0.0, "provider_calls": 0, "total_tokens": 0}
+
+    callback = runner._make_progress_callback()
+
+    assert callback is not None
+    callback({"provider_calls": 2, "total_tokens": 1500})
+    assert runner.foreground_progress["provider_calls"] == 2
+    assert runner.foreground_progress["total_tokens"] == 1500
 
 
 def test_background_delegate_returns_placeholder_and_notification(tmp_path) -> None:

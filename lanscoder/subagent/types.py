@@ -95,6 +95,9 @@ class SubagentResult:
     worktree_path: str | None = None
     worktree_branch: str | None = None
     diff_summary: str | None = None
+    total_tokens: int | None = None
+    provider_calls: int | None = None
+    elapsed_seconds: float | None = None
 
     def to_data(self) -> dict[str, Any]:
         return {
@@ -107,6 +110,9 @@ class SubagentResult:
             "worktree_path": self.worktree_path,
             "worktree_branch": self.worktree_branch,
             "diff_summary": self.diff_summary,
+            "total_tokens": self.total_tokens,
+            "provider_calls": self.provider_calls,
+            "elapsed_seconds": self.elapsed_seconds,
         }
 
 
