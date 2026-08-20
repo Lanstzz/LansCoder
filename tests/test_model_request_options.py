@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
+import pytest
+
 from lanscoder.agent.loop import AgentLoop
 from lanscoder.agent.session import AgentSession
 from lanscoder.app.runtime import AgentChatRunner, CurrentSessionState
@@ -157,6 +159,23 @@ def test_unified_complete_once_streaming_mode_collects_events(tmp_path) -> None:
     response = asyncio.run(loop._complete_once(streaming=True))
     assert response.content == "ok"
     assert [e.kind for e in loop.last_stream_events] == ["message_completed"]
+
+
+class IncompleteStreamProvider(RecordingProvider):
+    """astream 只产出局部 delta 就结束，不发送 message_completed。"""
+
+    async def astream(self, request: ChatRequest):
+        self.requests.append(request)
+        yield ChatStreamEvent(kind="text_delta", text="partial")
+
+
+def test_unified_complete_once_stream_without_completed_rolls_back_events(tmp_path) -> None:
+    session = _session(tmp_path)
+    loop = AgentLoop(session=session, provider=IncompleteStreamProvider())
+    session.append_user_message("hi")
+    with pytest.raises(ProviderError):
+        asyncio.run(loop._complete_once(streaming=True))
+    assert loop.last_stream_events == []
 
 
 def test_unified_recovery_retries_retryable_error_once_for_sync_mode(tmp_path) -> None:
