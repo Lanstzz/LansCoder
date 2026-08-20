@@ -9,7 +9,7 @@
 # 核心闭环 (一个 turn 的生命周期)：
 #   1. 用户消息 → session.append_user_message() 写入 JSONL
 #   2. session.rebuild_view() → ContextBuilder 投影成 provider messages
-#   3. provider.complete(ChatRequest) → 模型返回 ChatResponse
+#   3. provider.complete(ChatRequest) 或 provider.astream(ChatRequest) → 模型返回 ChatResponse
 #   4. 如果 response 有 tool_calls → ToolExecutor 执行 → tool_result 写回 JSONL
 #   5. 回到步骤 2，直到模型不再调用工具 / 达到限制 / 需要用户输入
 #
@@ -285,7 +285,9 @@ class AgentLoop:
         self._check_cancelled()
         self.session.append_user_message(content, attachments=attachments)  # 把用户消息写进jsonl
 
-        return await self._run_tool_loop(partial(self._complete_once_with_recovery, streaming=False))
+        return await self._run_tool_loop(
+            partial(self._complete_once_with_recovery, streaming=False),
+        )
 
     def _run_nudge_turn_sync(self) -> AgentTurnResult:
         """薄 sync facade：内部转调 async 唤醒轮次。"""
@@ -308,7 +310,9 @@ class AgentLoop:
         self._begin_turn()
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
-        return await self._run_tool_loop(partial(self._complete_once_with_recovery, streaming=False))
+        return await self._run_tool_loop(
+            partial(self._complete_once_with_recovery, streaming=False),
+        )
 
     # ============================================================================
     # resume_with_user_input — 权限确认恢复的异步入口
@@ -369,7 +373,9 @@ class AgentLoop:
         self._begin_turn(new_user_turn=False)
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
-        return await self._run_tool_loop(partial(self._complete_once_with_recovery, streaming=False))
+        return await self._run_tool_loop(
+            partial(self._complete_once_with_recovery, streaming=False),
+        )
 
     async def _resume_with_user_input_streaming(self, request_id: str, answer: str) -> AgentTurnResult:
         """流式模式下恢复权限确认，并继续消费 provider stream。"""
@@ -386,7 +392,9 @@ class AgentLoop:
             return result
         self._begin_turn(new_user_turn=False)
         self._check_cancelled()
-        return await self._run_tool_loop(partial(self._complete_once_with_recovery, streaming=True))
+        return await self._run_tool_loop(
+            partial(self._complete_once_with_recovery, streaming=True),
+        )
 
     async def _run_user_turn_streaming(
         self,
@@ -414,10 +422,9 @@ class AgentLoop:
         self._check_cancelled()
         self.session.append_user_message(content, attachments=attachments)
 
-        result = await self._run_tool_loop(
+        return await self._run_tool_loop(
             partial(self._complete_once_with_recovery, streaming=True),
         )
-        return result
 
     async def _run_nudge_turn_streaming(self) -> AgentTurnResult:
         """streaming 版唤醒轮次：语义与同步版一致。"""
@@ -436,7 +443,9 @@ class AgentLoop:
         self._begin_turn()
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
-        return await self._run_tool_loop(partial(self._complete_once_with_recovery, streaming=True))
+        return await self._run_tool_loop(
+            partial(self._complete_once_with_recovery, streaming=True),
+        )
 
     async def _append_permission_resume_result(self, request_id: str, answer: str) -> AgentTurnResult | None:
         """用回答恢复一个暂停的权限/ask_user。
@@ -653,15 +662,15 @@ class AgentLoop:
                         self.stream_event_handler(event)
                     if event.kind == "message_completed":
                         final_response = event.response
+                if final_response is None:
+                    raise ProviderError(
+                        ProviderErrorKind.API_ERROR,
+                        "provider stream ended without message_completed event",
+                    )
             except ProviderError:
                 # 失败的 streaming 尝试不把已收到的局部 delta 当真实回答留给 UI
                 del self.last_stream_events[start_event_count:]
                 raise
-            if final_response is None:
-                raise ProviderError(
-                    ProviderErrorKind.API_ERROR,
-                    "provider stream ended without message_completed event",
-                )
             response = final_response
         self._record_projection_consumed(prepared)
         self._report_progress(response)
@@ -695,7 +704,7 @@ class AgentLoop:
                     )
                 if not exc.requires_compaction:
                     raise
-                result = self._compact_for_prompt_too_long(runtime_instruction=runtime_instruction)
+                result = await anyio.to_thread.run_sync(partial(self._compact_for_prompt_too_long, runtime_instruction=runtime_instruction))
                 if result is None or result.status != "success":
                     raise
                 return await self._complete_once(
