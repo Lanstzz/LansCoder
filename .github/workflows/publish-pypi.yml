@@ -27,38 +27,3 @@ jobs:
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: python -m twine upload dist/*
 
-  update-homebrew:
-    needs: publish
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - name: Clone homebrew-tap
-        run: |
-          git clone https://x-access-token:${{ secrets.HOMEBREW_TAP_TOKEN }}@github.com/Lanstzz/homebrew-tap.git
-          cd homebrew-tap
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Compute SHA256 and update formula
-        run: |
-          TAG="${{ github.ref_name }}"
-          URL="https://github.com/Lanstzz/LansCoder/archive/refs/tags/${TAG}.tar.gz"
-          SHA256=$(curl -sL "$URL" | shasum -a 256 | cut -d' ' -f1)
-
-          cd homebrew-tap
-
-          # Update version URL
-          sed -i "s|url \".*\"|url \"$URL\"|" Formula/lanscoder.rb
-
-          # Update SHA256
-          sed -i "s|sha256 \".*\"|sha256 \"$SHA256\"|" Formula/lanscoder.rb
-
-          echo "Updated formula to ${TAG} (sha256: ${SHA256})"
-
-      - name: Commit and push
-        run: |
-          cd homebrew-tap
-          git add Formula/lanscoder.rb
-          git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "Update LansCoder to ${{ github.ref_name }}"
-          git push

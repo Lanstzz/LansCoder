@@ -32,13 +32,6 @@ Choose your preferred install method:
 curl -sSL https://raw.githubusercontent.com/Lanstzz/LansCoder/main/install.sh | bash
 ```
 
-**Homebrew (macOS):**
-
-```sh
-brew tap lanstzz/tap
-brew install lanscoder
-```
-
 **pipx (all platforms):**
 
 ```sh
