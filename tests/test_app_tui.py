@@ -494,6 +494,42 @@ async def test_subagent_panel_x_stops_foreground_turn() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_subagent_panel_up_at_top_exits_selection() -> None:
+    """Up on the topmost highlighted subagent returns to the input bar — the
+    mirror of down entering selection from the input."""
+    fake = _FakeForegroundChatRunner()
+    app = LansCoderApp(chat_runner=fake)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._refresh_subagent_progress()
+        await pilot.press("down")
+        assert app._subagent_select_mode is True
+        assert app._subagent_selected == "fg"
+        await pilot.press("up")
+        assert app._subagent_select_mode is False
+        assert app._subagent_selected is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_subagent_panel_escape_clears_highlight() -> None:
+    """Esc exits selection mode AND removes the row highlight."""
+    fake = _FakeForegroundChatRunner()
+    app = LansCoderApp(chat_runner=fake)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._refresh_subagent_progress()
+        await pilot.press("down")
+        await pilot.press("escape")
+        assert app._subagent_select_mode is False
+        assert app._subagent_selected is None
+        panel = app.query_one("#subagent-panel")
+        selected = [s for s in panel.query("Static") if s.has_class("selected")]
+        assert selected == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_subagent_panel_x_stops_background_job() -> None:
     gate = threading.Event()
 

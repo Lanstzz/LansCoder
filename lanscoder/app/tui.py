@@ -742,21 +742,32 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
     def _handle_subagent_select_key(self, event: Key) -> bool:
         """选择模式下的按键：↑/↓ 移动、x 停止、Esc 返回；其它键退出选择并交由原逻辑。"""
         if event.key == "escape":
-            self._subagent_select_mode = False
+            self._exit_subagent_selection()
             return True
         if event.key in {"up", "down"}:
-            self._subagent_selected = move_selection(self._subagent_rows(), self._subagent_selected, event.key)
+            rows = self._subagent_rows()
+            # 顶部按上 = 输入栏按下的镜像：退出选择回输入栏。
+            if event.key == "up" and self._subagent_selected == (rows[0].id if rows else None):
+                self._exit_subagent_selection()
+                return True
+            self._subagent_selected = move_selection(rows, self._subagent_selected, event.key)
             self._refresh_subagent_progress()
             return True
         if event.key == "x":
             self._stop_selected_subagent()
             return True
-        self._subagent_select_mode = False
+        self._exit_subagent_selection()
         return False
 
     def _enter_subagent_selection(self) -> None:
         self._subagent_select_mode = True
         self._subagent_selected = move_selection(self._subagent_rows(), None, "down")
+        self._refresh_subagent_progress()
+
+    def _exit_subagent_selection(self) -> None:
+        """退出选择模式：清 mode 与选中项并重渲染，避免高亮残留。"""
+        self._subagent_select_mode = False
+        self._subagent_selected = None
         self._refresh_subagent_progress()
 
     def _stop_selected_subagent(self) -> None:
