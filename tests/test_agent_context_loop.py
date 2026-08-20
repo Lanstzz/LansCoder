@@ -698,7 +698,7 @@ def test_agent_loop_runs_bypass_allowed_tool_calls_in_parallel(tmp_path, make_lo
             _slow_named_tool("python_exec", delay=0.2, execution_intervals=execution_intervals),
         ],
     )
-    session.set_permission_mode(PermissionMode.BYPASS)
+    session.permission_coordinator.set_mode(PermissionMode.BYPASS)
     provider = FakeProvider(
         [
             ChatResponse(
@@ -1128,7 +1128,7 @@ def test_agent_loop_exposes_only_searched_mcp_schemas_for_current_turn(tmp_path,
         agents_md="",
         tools=tools,
     )
-    session.set_permission_mode(PermissionMode.BYPASS)
+    session.permission_coordinator.set_mode(PermissionMode.BYPASS)
     provider = FakeProvider(
         [
             ChatResponse(
@@ -1180,7 +1180,7 @@ def test_agent_loop_clears_mcp_activation_on_next_user_turn(tmp_path, make_loop)
         agents_md="",
         tools=_mcp_tools(caller),
     )
-    session.set_permission_mode(PermissionMode.BYPASS)
+    session.permission_coordinator.set_mode(PermissionMode.BYPASS)
     provider = FakeProvider(
         [
             ChatResponse(
@@ -1254,7 +1254,7 @@ def test_agent_loop_streaming_keeps_same_mcp_visibility_rules(tmp_path, make_loo
         agents_md="",
         tools=_mcp_tools(caller),
     )
-    session.set_permission_mode(PermissionMode.BYPASS)
+    session.permission_coordinator.set_mode(PermissionMode.BYPASS)
     provider = StreamingProvider(
         [
             ChatResponse(
@@ -2919,7 +2919,7 @@ def test_agent_loop_bypass_mode_emits_prewrite_review_and_executes_without_confi
         project_root=tmp_path,
         tools=[create_write_tool(tmp_path)],
     )
-    session.set_permission_mode(PermissionMode.BYPASS)
+    session.permission_coordinator.set_mode(PermissionMode.BYPASS)
     provider = FakeProvider(
         [
             ChatResponse(
@@ -2966,7 +2966,7 @@ def test_agent_loop_streaming_bypass_mode_emits_prewrite_review_without_confirma
         project_root=tmp_path,
         tools=[create_write_tool(tmp_path)],
     )
-    session.set_permission_mode(PermissionMode.BYPASS)
+    session.permission_coordinator.set_mode(PermissionMode.BYPASS)
     provider = StreamingProvider(
         [
             ChatResponse(
@@ -3014,7 +3014,7 @@ def test_agent_loop_bypass_mode_blocks_mutation_when_prewrite_review_fails(tmp_p
         project_root=tmp_path,
         tools=[create_edit_tool(tmp_path)],
     )
-    session.set_permission_mode(PermissionMode.BYPASS)
+    session.permission_coordinator.set_mode(PermissionMode.BYPASS)
     provider = FakeProvider(
         [
             ChatResponse(
@@ -3358,8 +3358,8 @@ def test_agent_loop_permission_allow_once_executes_without_grant(tmp_path, make_
     assert result.response is not None
     assert result.response.content == "写好了"
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "hello"
-    assert session.permission_manager is not None
-    assert session.permission_manager.grants.list() == []
+    assert session.permission_coordinator.permission_manager is not None
+    assert session.permission_coordinator.permission_manager.grants.list() == []
     view = store.rebuild_session_view("sess_perm_once")
     assert [message.role for message in view.messages] == ["user", "assistant", "tool", "assistant"]
     assert view.messages[2].parts[0].metadata["ok"] is True
@@ -3440,8 +3440,8 @@ def test_agent_loop_permission_allow_always_adds_grant_and_executes(tmp_path, ma
     loop._resume_with_user_input_sync(pending.id, "allow_always_same_scope")
 
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "hello"
-    assert session.permission_manager is not None
-    grants = session.permission_manager.grants.list()
+    assert session.permission_coordinator.permission_manager is not None
+    grants = session.permission_coordinator.permission_manager.grants.list()
     assert len(grants) == 1
     assert grants[0].effect == "allow"
     assert grants[0].scope_value == str((tmp_path / "README.md").resolve())

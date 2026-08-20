@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,6 +10,7 @@ from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.session import AgentSession
 from lanscoder.agent.subagent_engine import SubagentEngine
 from lanscoder.subagent.types import SubagentRequest, SubagentResult
+from lanscoder.context.identity import new_session_id
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import (
@@ -20,6 +22,27 @@ from lanscoder.providers.types import (
     ToolDefinition,
 )
 from lanscoder.tools.types import Tool, ToolResult, make_text_result
+
+_ENGINE_HOST_STORE = JsonlSessionStore(Path(tempfile.mkdtemp()))
+
+
+def _engine_coordinator(*, permission_manager=None):
+    """Build a PermissionCoordinator for a standalone SubagentEngine.
+
+    The engine now takes the parent session's ``permission_coordinator``; these
+    tests build engines without a parent session, so a host session on a shared
+    throwaway store supplies one.  The engine never touches the coordinator's
+    session-backed pending/preflight state, so the throwaway host is inert.
+    """
+
+    host = AgentSession.create(
+        store=_ENGINE_HOST_STORE,
+        session_id=new_session_id(),
+        agents_md="",
+        tools=[],
+        permission_manager=permission_manager,
+    )
+    return host.permission_coordinator
 
 
 @dataclass
@@ -117,6 +140,7 @@ def test_subagent_runner_filters_tools_by_profile(tmp_path) -> None:
             _tool("delegate"),
             _tool("shell"),
         ],
+        permission_coordinator=_engine_coordinator(),
         child_runner_factory=_child_runner_factory(provider),
     )
 
@@ -133,6 +157,7 @@ def test_child_session_is_metadata_tagged(tmp_path) -> None:
         store=store,
         provider=provider,
         tools=[_tool("view")],
+        permission_coordinator=_engine_coordinator(),
         child_runner_factory=_child_runner_factory(provider),
     )
 
@@ -159,6 +184,7 @@ def test_subagent_run_restricts_child_tools_and_deletes_session(tmp_path) -> Non
         store=store,
         provider=provider,
         tools=[_tool("view"), _tool("delegate")],
+        permission_coordinator=_engine_coordinator(),
         child_runner_factory=_child_runner_factory(provider),
     )
 
@@ -231,6 +257,7 @@ def test_foreground_progress_writes_to_runner_tracker(tmp_path) -> None:
         store=store,
         provider=provider,
         tools=[_tool("view")],
+        permission_coordinator=_engine_coordinator(),
         child_runner_factory=_child_runner_factory(provider),
     )
     tracker = {
@@ -265,6 +292,7 @@ def test_background_delegate_does_not_expose_foreground_tracker(tmp_path) -> Non
         store=store,
         provider=provider,
         tools=[_tool("view")],
+        permission_coordinator=_engine_coordinator(),
         background_manager=manager,
         child_runner_factory=_child_runner_factory(provider),
     )
@@ -318,6 +346,7 @@ def test_foreground_delegate_survives_background_delegate_finish(tmp_path) -> No
         store=store,
         provider=provider,
         tools=[_tool("view")],
+        permission_coordinator=_engine_coordinator(),
         background_manager=manager,
         child_runner_factory=_child_runner_factory(provider),
     )
@@ -375,6 +404,7 @@ def test_foreground_delegate_cancel_aborts_child(tmp_path) -> None:
         store=store,
         provider=provider,
         tools=[_tool("view")],
+        permission_coordinator=_engine_coordinator(),
         child_runner_factory=_child_runner_factory(provider),
     )
     token = CancellationToken()
@@ -429,6 +459,7 @@ def test_background_delegate_cancel_aborts_child(tmp_path) -> None:
         store=store,
         provider=provider,
         tools=[_tool("view")],
+        permission_coordinator=_engine_coordinator(),
         background_manager=manager,
         child_runner_factory=_child_runner_factory(provider),
     )
@@ -489,6 +520,7 @@ def test_background_delegate_cancel_keeps_job_error_clear(tmp_path) -> None:
         store=store,
         provider=provider,
         tools=[_tool("view")],
+        permission_coordinator=_engine_coordinator(),
         background_manager=manager,
         child_runner_factory=_child_runner_factory(provider),
     )
@@ -669,7 +701,7 @@ def test_isolated_coder_writes_only_in_worktree(tmp_path) -> None:
         provider=provider,
         tools=[],
         project_root=repo,
-        permission_manager=permission_manager,
+        permission_coordinator=_engine_coordinator(permission_manager=permission_manager),
         child_runner_factory=_child_runner_factory(provider),
     )
 
@@ -728,7 +760,7 @@ def test_isolated_coder_can_delete_inside_worktree_without_parent_delete(
         provider=provider,
         tools=[],
         project_root=repo,
-        permission_manager=PermissionManager(policy=DefaultPermissionPolicy(repo), mode=PermissionMode.STANDARD),
+        permission_coordinator=_engine_coordinator(permission_manager=PermissionManager(policy=DefaultPermissionPolicy(repo), mode=PermissionMode.STANDARD)),
         child_runner_factory=_child_runner_factory(provider),
     )
 
@@ -780,6 +812,7 @@ def test_isolated_coder_dangerous_shell_is_denied_not_waiting(tmp_path) -> None:
         provider=provider,
         tools=[],
         project_root=repo,
+        permission_coordinator=_engine_coordinator(),
         child_runner_factory=_child_runner_factory(provider),
     )
 
@@ -813,10 +846,15 @@ def test_background_child_permission_manager_is_autonomous(tmp_path) -> None:
         provider=provider,
         tools=[],
         project_root=repo,
+        permission_coordinator=_engine_coordinator(),
         child_runner_factory=_child_runner_factory(provider),
     )
 
-    manager = runner._background_child_permission_manager()
+    manager = runner.permission_coordinator.child_permission_manager(
+        root=repo,
+        mutation=False,
+        background=True,
+    )
 
     assert manager is not None
     assert manager.autonomous is True
@@ -927,7 +965,7 @@ def test_isolated_coder_cancel_aborts_child(tmp_path) -> None:
         provider=provider,
         tools=[],
         project_root=repo,
-        permission_manager=PermissionManager(policy=DefaultPermissionPolicy(repo), mode=PermissionMode.STANDARD),
+        permission_coordinator=_engine_coordinator(permission_manager=PermissionManager(policy=DefaultPermissionPolicy(repo), mode=PermissionMode.STANDARD)),
         background_manager=manager,
         child_runner_factory=_child_runner_factory(provider),
     )
@@ -973,6 +1011,7 @@ def test_isolated_coder_without_git_repo_returns_error(tmp_path) -> None:
         provider=provider,
         tools=[],
         project_root=tmp_path,
+        permission_coordinator=_engine_coordinator(),
         child_runner_factory=_child_runner_factory(provider),
     )
     result = runner.run(

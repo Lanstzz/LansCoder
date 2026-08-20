@@ -1,5 +1,6 @@
 from lanscoder.agent.session import AgentSession
 from lanscoder.app.permission_commands import PermissionCommandHandler
+from lanscoder.app.runtime import CurrentSessionState
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.permissions.types import PermissionMode
 from lanscoder.tools.builtin import create_builtin_registry
@@ -13,7 +14,7 @@ def test_permission_mode_command_shows_current_mode(tmp_path) -> None:
         project_root=tmp_path,
         tools=[],
     )
-    handler = PermissionCommandHandler(session=session)
+    handler = PermissionCommandHandler(session=CurrentSessionState(session))
 
     result = handler.handle("/mode")
 
@@ -30,15 +31,15 @@ def test_permission_mode_command_updates_session_and_manager(tmp_path) -> None:
         project_root=tmp_path,
         tools=[],
     )
-    handler = PermissionCommandHandler(session=session)
+    handler = PermissionCommandHandler(session=CurrentSessionState(session))
 
     result = handler.handle("/mode aggressive")
 
     assert result.handled is True
     assert result.output == "Permission mode set to: aggressive"
-    assert session.mode == PermissionMode.AGGRESSIVE.value
-    assert session.permission_manager is not None
-    assert session.permission_manager.mode == PermissionMode.AGGRESSIVE
+    assert session.permission_mode == PermissionMode.AGGRESSIVE.value
+    assert session.permission_coordinator.permission_manager is not None
+    assert session.permission_coordinator.permission_manager.mode == PermissionMode.AGGRESSIVE
 
 
 def test_permission_mode_command_accepts_bypass(tmp_path) -> None:
@@ -50,17 +51,17 @@ def test_permission_mode_command_accepts_bypass(tmp_path) -> None:
         tools=create_builtin_registry(tmp_path, access=access).tools(),
         sandbox_access=access,
     )
-    handler = PermissionCommandHandler(session=session)
+    handler = PermissionCommandHandler(session=CurrentSessionState(session))
 
     result = handler.handle("/mode bypass")
 
     assert result.handled is True
     assert result.output == "Permission mode set to: bypass"
-    assert session.mode == PermissionMode.BYPASS.value
-    assert session.permission_manager is not None
-    assert session.permission_manager.mode == PermissionMode.BYPASS
+    assert session.permission_mode == PermissionMode.BYPASS.value
+    assert session.permission_coordinator.permission_manager is not None
+    assert session.permission_coordinator.permission_manager.mode == PermissionMode.BYPASS
     assert access.mode == SandboxAccessMode.UNRESTRICTED
-    assert session.permission_policy["path_access"] == "unrestricted"
+    assert session.permission_coordinator.permission_policy["path_access"] == "unrestricted"
 
 
 def test_permission_mode_command_restores_project_sandbox_after_bypass(tmp_path) -> None:
@@ -72,15 +73,15 @@ def test_permission_mode_command_restores_project_sandbox_after_bypass(tmp_path)
         tools=create_builtin_registry(tmp_path, access=access).tools(),
         sandbox_access=access,
     )
-    session.set_permission_mode(PermissionMode.BYPASS)
-    handler = PermissionCommandHandler(session=session)
+    session.permission_coordinator.set_mode(PermissionMode.BYPASS)
+    handler = PermissionCommandHandler(session=CurrentSessionState(session))
 
     result = handler.handle("/mode standard")
 
     assert result.handled is True
-    assert session.mode == PermissionMode.STANDARD.value
+    assert session.permission_mode == PermissionMode.STANDARD.value
     assert access.mode == SandboxAccessMode.PROJECT
-    assert session.permission_policy["path_access"] == "project_root_only"
+    assert session.permission_coordinator.permission_policy["path_access"] == "project_root_only"
 
 
 def test_bypass_mode_lets_existing_tools_access_outside_project(tmp_path) -> None:
@@ -96,9 +97,9 @@ def test_bypass_mode_lets_existing_tools_access_outside_project(tmp_path) -> Non
     )
 
     confirmation = session.tool_registry.execute("view", {"path": str(outside)})
-    session.set_permission_mode(PermissionMode.BYPASS)
+    session.permission_coordinator.set_mode(PermissionMode.BYPASS)
     allowed = session.tool_registry.execute("view", {"path": str(outside)})
-    session.set_permission_mode(PermissionMode.STANDARD)
+    session.permission_coordinator.set_mode(PermissionMode.STANDARD)
     confirmation_again = session.tool_registry.execute("view", {"path": str(outside)})
 
     assert confirmation.ok is True
@@ -118,13 +119,13 @@ def test_permission_mode_command_rejects_unknown_mode(tmp_path) -> None:
         project_root=tmp_path,
         tools=[],
     )
-    handler = PermissionCommandHandler(session=session)
+    handler = PermissionCommandHandler(session=CurrentSessionState(session))
 
     result = handler.handle("/mode chaos")
 
     assert result.handled is True
     assert "Unknown permission mode" in result.output
-    assert session.mode == PermissionMode.STANDARD.value
+    assert session.permission_mode == PermissionMode.STANDARD.value
 
 
 def test_permission_mode_command_rejects_removed_conservative_mode(tmp_path) -> None:
@@ -134,13 +135,13 @@ def test_permission_mode_command_rejects_removed_conservative_mode(tmp_path) -> 
         project_root=tmp_path,
         tools=[],
     )
-    handler = PermissionCommandHandler(session=session)
+    handler = PermissionCommandHandler(session=CurrentSessionState(session))
 
     result = handler.handle("/mode conservative")
 
     assert result.handled is True
     assert result.output == "Unknown permission mode. Available: standard, aggressive, bypass"
-    assert session.mode == PermissionMode.STANDARD.value
+    assert session.permission_mode == PermissionMode.STANDARD.value
 
 
 def test_permission_mode_enum_contains_only_three_modes() -> None:

@@ -305,7 +305,7 @@ def test_resume_service_restores_pending_permission_even_after_grant_exists(tmp_
 
     pending = make_loop(session=original, provider=provider)._run_user_turn_sync("写 README")
     assert pending.pending_input is not None
-    original.permission_manager.resolve_confirmation(
+    original.permission_coordinator.permission_manager.resolve_confirmation(
         original.pending_permission_execution.permission_request,
         "allow_always_same_scope",
     )
@@ -329,7 +329,7 @@ def test_resume_service_has_no_pending_review_after_bypass_write(tmp_path: Path)
         project_root=tmp_path,
         tools=[create_write_tool(tmp_path)],
     )
-    original.set_permission_mode(PermissionMode.BYPASS)
+    original.permission_coordinator.set_mode(PermissionMode.BYPASS)
     tool_call = ToolCall(
         id="call_write",
         name="write",

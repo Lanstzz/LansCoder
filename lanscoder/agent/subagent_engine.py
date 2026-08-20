@@ -19,7 +19,7 @@ import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lanscoder.agent.background import BackgroundJobManager, current_job_id
 from lanscoder.agent.loop_limits import AgentLoopLimits
@@ -34,15 +34,6 @@ from lanscoder.agent.worktree import (
 )
 from lanscoder.context.identity import new_session_id
 from lanscoder.context.store import JsonlSessionStore
-from lanscoder.permissions.grants import PermissionGrantStore
-from lanscoder.permissions.manager import PermissionManager
-from lanscoder.permissions.policy import DefaultPermissionPolicy
-from lanscoder.permissions.types import (
-    PermissionAction,
-    PermissionGrant,
-    PermissionMode,
-    PermissionScopeType,
-)
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import MainRequestOptions
 from lanscoder.runtime.cancellation import (
@@ -58,6 +49,9 @@ from lanscoder.subagent.types import (
 )
 from lanscoder.tools.types import Tool
 from lanscoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
+
+if TYPE_CHECKING:
+    from lanscoder.agent.permission import PermissionCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +73,7 @@ class SubagentEngine:
         project_root: str | Path | None = None,
         agents_md: str = "",
         skill_catalog: SkillCatalog | None = None,
-        permission_manager: PermissionManager | None = None,
-        sandbox_access: SandboxAccess | None = None,
+        permission_coordinator: PermissionCoordinator,
         request_options: MainRequestOptions | None = None,
         limits: AgentLoopLimits | None = None,
         background_manager: BackgroundJobManager | None = None,
@@ -92,8 +85,7 @@ class SubagentEngine:
         self.project_root = Path(project_root).resolve() if project_root is not None else None
         self.agents_md = agents_md
         self.skill_catalog = skill_catalog or SkillCatalog()
-        self.permission_manager = permission_manager
-        self.sandbox_access = sandbox_access or SandboxAccess()
+        self.permission_coordinator = permission_coordinator
         self.request_options = request_options or MainRequestOptions()
         self.limits = limits or AgentLoopLimits(max_tool_rounds=20, max_provider_calls=40, max_turn_seconds=600)
         self.background_manager = background_manager
@@ -270,7 +262,7 @@ class SubagentEngine:
                     self._worktree_child_tools(
                         worktree.path,
                         profile=profile,
-                        access=child_session.sandbox_access,
+                        access=child_session.permission_coordinator.sandbox_access,
                     ),
                     self._make_child_observer(progress_tracker),
                 )
@@ -329,7 +321,18 @@ class SubagentEngine:
 
     def create_child_session(self, request: SubagentRequest, *, profile: SubagentProfile) -> AgentSession:
         session_id = new_session_id()
-        permission_manager = self._background_child_permission_manager() if request.run_in_background else self._child_permission_manager_for_inline()
+        if request.run_in_background:
+            permission_manager = self.permission_coordinator.child_permission_manager(
+                root=self.project_root,
+                mutation=False,
+                background=True,
+            )
+        else:
+            permission_manager = self.permission_coordinator.child_permission_manager(
+                root=None,
+                mutation=False,
+                background=False,
+            )
         child = AgentSession.create(
             store=self.store,
             session_id=session_id,
@@ -337,7 +340,7 @@ class SubagentEngine:
             skill_catalog=self.skill_catalog,
             tools=self._supplied_tools_for_child(profile.role),
             permission_manager=permission_manager,
-            sandbox_access=self.sandbox_access,
+            sandbox_access=self.permission_coordinator.sandbox_access,
         )
         child.writer.append_session_metadata_updated(
             parent_session_id=request.parent_session_id,
@@ -384,7 +387,11 @@ class SubagentEngine:
         the parent working directory.
         """
 
-        permission_manager = self._child_permission_manager(worktree.path, mutation=True)
+        permission_manager = self.permission_coordinator.child_permission_manager(
+            root=worktree.path,
+            mutation=True,
+            background=False,
+        )
         # PROJECT sandbox keeps every file tool physically confined to the worktree
         # root even though the policy auto-allows in-tree writes.
         sandbox_access = SandboxAccess(mode=SandboxAccessMode.PROJECT)
@@ -474,94 +481,6 @@ class SubagentEngine:
         job = self.background_manager.get(job_id)
         if job is not None:
             job.worktree_cleanup = lambda: manager.remove(worktree, force=True)
-
-    def _child_permission_manager_for_inline(self) -> PermissionManager | None:
-        """Clone the parent permission manager with a NETWORK_REQUEST grant added.
-
-        Inline subagents (researcher, tester, reviewer) inherit the parent's policy
-        and mode, but need web_search/fetch auto-allowed so they never pause for
-        interactive confirmation.
-        """
-        if self.permission_manager is None:
-            return None
-        grants = PermissionGrantStore(grants=self.permission_manager.grants.list())
-        grants.add(
-            PermissionGrant(
-                id="grant_subagent_network_request",
-                effect="allow",
-                action=PermissionAction.NETWORK_REQUEST,
-                scope_type=PermissionScopeType.HOST,
-                scope_value="*",
-                created_at="runtime",
-                reason="Subagent may make read-only network requests (web_search, fetch).",
-            )
-        )
-        return PermissionManager(
-            policy=self.permission_manager.policy,
-            grants=grants,
-            mode=self.permission_manager.mode,
-        )
-
-    def _child_permission_manager(self, root, *, mutation: bool) -> PermissionManager:
-        """Build an autonomous permission manager scoped to ``root``.
-
-        The policy root is ``root`` (the worktree path for a coder, the project
-        root otherwise), so every path/shell/git decision is evaluated against the
-        isolated scope.  AGGRESSIVE mode auto-allows in-tree writes and a safe
-        validation-command allow-list so a background subagent can make progress
-        without an interactive user.  Anything still requiring confirmation
-        (sensitive paths, dangerous shell, out-of-tree) is auto-DENIED rather than
-        paused, so the subagent receives a clean denial and can try a safer
-        approach instead of hanging.  Mutation-capable roles additionally get
-        write/delete grants scoped to the isolated root.  A fresh grant store
-        avoids inheriting parent-scoped grants.
-        """
-
-        grants = PermissionGrantStore()
-        if mutation:
-            root_value = str(root)
-            for action in (PermissionAction.WRITE_PATH, PermissionAction.DELETE_PATH):
-                grants.add(
-                    PermissionGrant(
-                        id=f"grant_subagent_{action.value}",
-                        effect="allow",
-                        action=action,
-                        scope_type=PermissionScopeType.PATH_TREE,
-                        scope_value=root_value,
-                        created_at="runtime",
-                        reason="Isolated background coder may mutate only its dedicated worktree.",
-                    )
-                )
-        grants.add(
-            PermissionGrant(
-                id="grant_subagent_network_request",
-                effect="allow",
-                action=PermissionAction.NETWORK_REQUEST,
-                scope_type=PermissionScopeType.HOST,
-                scope_value="*",
-                created_at="runtime",
-                reason="Subagent may make read-only network requests (web_search, fetch).",
-            )
-        )
-        return PermissionManager(
-            policy=DefaultPermissionPolicy(root),
-            grants=grants,
-            mode=PermissionMode.AGGRESSIVE,
-            autonomous=True,
-        )
-
-    def _background_child_permission_manager(self) -> PermissionManager | None:
-        """Autonomous permissions for a background subagent with no worktree.
-
-        Background researcher/reviewer/tester roles run inline (no worktree), but
-        still have no interactive user, so they must not pause for confirmation.
-        They have no write/delete tools, so no mutation grants are added; the
-        network grant and AGGRESSIVE shell allow-list cover their approved actions.
-        """
-
-        if self.project_root is None:
-            return self._child_permission_manager_for_inline()
-        return self._child_permission_manager(self.project_root, mutation=False)
 
     def _worktree_child_tools(
         self,

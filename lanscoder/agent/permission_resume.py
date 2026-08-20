@@ -9,16 +9,16 @@ Task 6 把原先 AgentLoop 里的 8 个 resume 方法抽到这里，loop 只保�
 - ``finished``：没有匹配的 pending 请求（或没有权限管理器），
   ``result`` 携带 ``AgentTurnResult(COMPLETED, finish_reason="error")``。
 
-pending 查找只经过注入的最小 ``PendingStore`` 协议，本任务由
-``SessionPendingStore`` 薄适配 session；任务 7 换成 coordinator-backed 实现时
-不修改 handler 逻辑。
+pending 查找只经过注入的最小 ``PendingStore`` 协议；实现由
+``CoordinatorPendingStore`` 走 ``PermissionCoordinator`` 的 pending_get/pending_clear，
+handler 逻辑不感知 store 实现差异。
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 import anyio
 
@@ -37,6 +37,9 @@ from lanscoder.tools.permission_results import (
 )
 from lanscoder.tools.types import ToolResult, make_text_result
 
+if TYPE_CHECKING:
+    from lanscoder.agent.permission import PermissionCoordinator
+
 
 @dataclass(frozen=True)
 class ResumeOutcome:
@@ -47,10 +50,27 @@ class ResumeOutcome:
 
 
 class PendingStore(Protocol):
-    """handler 访问 pending 状态的最小协议（任务 7 换 coordinator-backed 实现）。"""
+    """handler 访问 pending 状态的最小协议（经 coordinator-backed 实现）。"""
 
     def get(self, request_id: str) -> PendingPermissionExecution | None: ...
     def clear(self) -> None: ...
+
+
+class CoordinatorPendingStore:
+    """把 coordinator 的 pending 状态薄适配成最小 PendingStore 协议。
+
+    ``get`` 走 ``coordinator.pending_get``，``clear`` 走 ``coordinator.pending_clear``；
+    handler 逻辑不感知 store 实现差异。
+    """
+
+    def __init__(self, coordinator: PermissionCoordinator) -> None:
+        self._coordinator = coordinator
+
+    def get(self, request_id: str) -> PendingPermissionExecution | None:
+        return self._coordinator.pending_get(request_id)
+
+    def clear(self) -> None:
+        self._coordinator.pending_clear()
 
 
 class PermissionResumeHandler:
@@ -69,6 +89,7 @@ class PermissionResumeHandler:
         tool_executor: ToolExecutor,
         observer: TurnObserver,
         session: AgentSession,
+        permission_coordinator: PermissionCoordinator,
         on_tool_round_completed: Callable[[], None],
     ) -> None:
         self._pending_store = pending_store
@@ -76,6 +97,7 @@ class PermissionResumeHandler:
         self._tool_executor = tool_executor
         self._observer = observer
         self._session = session
+        self._permission_coordinator = permission_coordinator
         self._on_tool_round_completed = on_tool_round_completed
 
     def set_tool_round_callback(self, callback: Callable[[], None]) -> None:
@@ -111,7 +133,7 @@ class PermissionResumeHandler:
                     finish_reason="error",
                 ),
             )
-        if pending.kind == "permission_confirmation" and self._session.permission_manager is None:
+        if pending.kind == "permission_confirmation" and self._permission_coordinator.permission_manager is None:
             return AgentTurnResult(
                 status=AgentTurnStatus.COMPLETED,
                 response=ChatResponse(
@@ -179,15 +201,15 @@ class PermissionResumeHandler:
 
     def _resolve_pending_confirmation(self, pending: PendingPermissionExecution, answer: str) -> PermissionDecision:
         if not pending.review_only:
-            return self._session.permission_manager.resolve_confirmation(pending.permission_request, answer)
+            return self._permission_coordinator.permission_manager.resolve_confirmation(pending.permission_request, answer)
         normalized = answer.strip().lower()
         if normalized in {"allow_once", "allow", "once", "2"}:
-            current = self._session.preflight_tool_call_permission(pending.tool_call)
+            current = self._permission_coordinator.preflight(pending.tool_call)
             if current is not None and current.decision.kind == PermissionDecisionKind.DENY:
                 return current.decision
             return PermissionDecision(kind=PermissionDecisionKind.ALLOW, reason="用户批准应用已预览的修改。")
         if normalized in {"deny", "no", "1"} or normalized.startswith(("reject:", "reject_with_feedback:")):
-            return self._session.permission_manager.resolve_confirmation(pending.permission_request, answer)
+            return self._permission_coordinator.permission_manager.resolve_confirmation(pending.permission_request, answer)
         return PermissionDecision(
             kind=PermissionDecisionKind.DENY,
             reason=f"未知写前预览选择：{answer}",
@@ -210,8 +232,8 @@ class PermissionResumeHandler:
                 error=pending.prewrite_review.error or "未知错误",
             )
         if pending.prewrite_review.is_current(
-            self._session.permission_manager.policy.project_root,
-            access=self._session.sandbox_access,
+            self._permission_coordinator.permission_manager.policy.project_root,
+            access=self._permission_coordinator.sandbox_access,
         ):
             return None
         return make_prewrite_review_stale_result(

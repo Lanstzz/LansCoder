@@ -38,12 +38,13 @@ from lanscoder.tools.session_registry import ToolRegistryLike, create_session_to
 from lanscoder.tools.types import Tool, ToolResult, make_error_result
 from lanscoder.context.models import AgentMessage, MessagePart, SessionView
 from lanscoder.input.attachments import UserAttachment, prepare_attachments_for_session
-from lanscoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
+from lanscoder.utils.sandbox_access import SandboxAccess
 from lanscoder.skills.discovery import discover_all_skills
 from lanscoder.skills.catalog import render_skill_catalog
 from lanscoder.skills.models import SkillCatalog
 
 if TYPE_CHECKING:
+    from lanscoder.agent.permission import PermissionCoordinator
     from lanscoder.memory.manager import MemoryManager
 
 DEFAULT_BASE_RULES = "你是 LansCoder，一个本地 AI coding agent。请遵守项目规则并优先保持上下文可恢复。"
@@ -101,12 +102,9 @@ class AgentSession:
     prompt_cache: PromptPrefixCache = field(default_factory=PromptPrefixCache)
     prompt_builder: SystemPromptBuilder = field(default_factory=SystemPromptBuilder)
     provider_capability_overrides: dict[str, object] = field(default_factory=dict)
-    permission_manager: PermissionManager | None = None
-    permission_policy: dict[str, object] = field(default_factory=lambda: dict(DEFAULT_PERMISSION_POLICY))
-    sandbox_access: SandboxAccess = field(default_factory=SandboxAccess)
+    permission_coordinator: PermissionCoordinator | None = None
     known_message_ids: set[str] = field(default_factory=set)
     turn_counter: int = 0
-    mode: str = "default"
     memory_manager: MemoryManager | None = None
     benchmark_task: str = ""
     require_prewrite_review: bool = True
@@ -146,11 +144,15 @@ class AgentSession:
             agents_md=agents_md,
             skill_catalog=resolved_catalog,
             known_message_ids=known_message_ids,
+            turn_counter=0,
+            memory_manager=memory_manager,
+        )
+        from lanscoder.agent.permission import PermissionCoordinator
+
+        session.permission_coordinator = PermissionCoordinator(
+            session=session,
             permission_manager=permission_manager,
             sandbox_access=sandbox_access or SandboxAccess(),
-            turn_counter=0,
-            mode=permission_manager.mode.value if permission_manager is not None else "default",
-            memory_manager=memory_manager,
         )
         registry = create_session_tool_registry(
             session_id=session_id,
@@ -166,7 +168,6 @@ class AgentSession:
             memory_manager=memory_manager,
         )
         session.tool_registry = registry
-        session._sync_sandbox_access_with_mode()
         session.append_session_created()
         return session
 
@@ -240,12 +241,16 @@ class AgentSession:
             agents_md=agents_md,
             skill_catalog=resolved_catalog,
             known_message_ids=known_message_ids,
-            permission_manager=permission_manager,
-            sandbox_access=sandbox_access or SandboxAccess(),
             turn_counter=turn_counter,
-            mode=permission_manager.mode.value if permission_manager is not None else "default",
             memory_manager=memory_manager,
             _tool_result_message_ids=_tool_result_message_ids_from_view(view),
+        )
+        from lanscoder.agent.permission import PermissionCoordinator
+
+        session.permission_coordinator = PermissionCoordinator(
+            session=session,
+            permission_manager=permission_manager,
+            sandbox_access=sandbox_access or SandboxAccess(),
         )
         registry = create_session_tool_registry(
             session_id=session_id,
@@ -261,7 +266,6 @@ class AgentSession:
             memory_manager=memory_manager,
         )
         session.tool_registry = registry
-        session._sync_sandbox_access_with_mode()
         return session
 
     def restore_pending_permission_execution(self) -> PendingPermissionExecution | None:
@@ -280,7 +284,7 @@ class AgentSession:
             return None
 
         tool_call, deferred_tool_calls, persisted_review_only = pending[0]
-        preflight = self.preflight_tool_call_permission(tool_call)
+        preflight = self.permission_coordinator.preflight(tool_call)
         if preflight is None:
             ask_user_request = _ask_user_request_from_tool_call(tool_call)
             if ask_user_request is None:
@@ -301,11 +305,11 @@ class AgentSession:
             permission_request=preflight.request,
             prewrite_review=(
                 build_prewrite_review(
-                    self.permission_manager.policy.project_root,
+                    self.permission_coordinator.permission_manager.policy.project_root,
                     tool_call,
-                    access=self.sandbox_access,
+                    access=self.permission_coordinator.sandbox_access,
                 )
-                if self.permission_manager is not None and supports_prewrite_review(tool_call.name)
+                if self.permission_coordinator.permission_manager is not None and supports_prewrite_review(tool_call.name)
                 else None
             ),
             review_only=(persisted_review_only if persisted_review_only is not None else preflight.decision.kind == PermissionDecisionKind.ALLOW),
@@ -340,10 +344,12 @@ class AgentSession:
             return None
         if pending.kind == "ask_user":
             return pending.ask_user_request
-        if self.permission_manager is None or pending.permission_request is None:
+        if self.permission_coordinator is None or self.permission_coordinator.permission_manager is None or pending.permission_request is None:
             return None
         confirmation = (
-            self.permission_manager.build_prewrite_review_confirmation(pending.permission_request) if pending.review_only else self.permission_manager.build_confirmation(pending.permission_request)
+            self.permission_coordinator.permission_manager.build_prewrite_review_confirmation(pending.permission_request)
+            if pending.review_only
+            else self.permission_coordinator.permission_manager.build_confirmation(pending.permission_request)
         )
         if pending.prewrite_review is not None:
             confirmation.payload["prewrite_review"] = pending.prewrite_review.to_payload()
@@ -381,8 +387,8 @@ class AgentSession:
             provider_model=provider_model,
             provider_capabilities=provider_capabilities,
             provider_capability_overrides=self.provider_capability_overrides,
-            permission_policy=self.permission_policy,
-            mode=self.mode,
+            permission_policy=self.permission_coordinator.permission_policy if self.permission_coordinator is not None else dict(DEFAULT_PERMISSION_POLICY),
+            mode=self.permission_mode,
             memory_index=self.memory_manager.render_index_text() if self.memory_manager is not None else "",
         )
         entry = self.prompt_cache.get_or_build(inputs, self.prompt_builder)
@@ -487,22 +493,6 @@ class AgentSession:
 
         return self.tool_registry.execute(tool_call.name, tool_call.arguments)
 
-    def preflight_tool_call_permission(self, tool_call: ToolCall) -> ToolPermissionPreflight | None:
-        """对工具调用做权限预检，但不执行工具。
-
-        只有权限 wrapper 支持这个能力；无权限声明的工具返回 `None`，由旧执行路径
-        直接处理。这样权限系统接入不会污染普通工具的执行模型。
-        """
-
-        registry = self.tool_registry
-        if not isinstance(registry, PermissionAwareToolRegistry):
-            return None
-        preflight = registry.preflight(tool_call.name, tool_call.arguments)
-        if preflight is None:
-            return None
-        _, _, request, decision = preflight
-        return ToolPermissionPreflight(request=request, decision=decision)
-
     def execute_tool_call_after_permission_confirmation(self, tool_call: ToolCall) -> ToolResult:
         """执行已经通过用户确认的 pending tool_call。"""
 
@@ -512,35 +502,6 @@ class AgentSession:
                 tool_call.arguments,
             )
         return self.tool_registry.execute(tool_call.name, tool_call.arguments)
-
-    def set_permission_mode(self, mode: PermissionMode | str) -> PermissionMode:
-        """切换当前 session 的权限策略模式。"""
-
-        resolved = PermissionMode(str(mode))
-        self.mode = resolved.value
-        if self.permission_manager is not None:
-            self.permission_manager.mode = resolved
-        self._sync_sandbox_access_with_mode()
-        return resolved
-
-    def _sync_sandbox_access_with_mode(self) -> None:
-        if self.mode == PermissionMode.BYPASS.value:
-            self.sandbox_access.mode = SandboxAccessMode.UNRESTRICTED
-            self.permission_policy["path_access"] = "unrestricted"
-            self.permission_policy["read"] = "allow"
-            self.permission_policy["write"] = "allow"
-            self.permission_policy["delete"] = "allow"
-            self.permission_policy["shell"] = "allow"
-            self.permission_policy["network"] = "allow"
-            return
-
-        self.sandbox_access.mode = SandboxAccessMode.PROJECT
-        self.permission_policy["path_access"] = DEFAULT_PERMISSION_POLICY["path_access"]
-        self.permission_policy["read"] = DEFAULT_PERMISSION_POLICY["read"]
-        self.permission_policy["write"] = DEFAULT_PERMISSION_POLICY["write"]
-        self.permission_policy["delete"] = DEFAULT_PERMISSION_POLICY["delete"]
-        self.permission_policy["shell"] = DEFAULT_PERMISSION_POLICY["shell"]
-        self.permission_policy["network"] = DEFAULT_PERMISSION_POLICY["network"]
 
     def append_tool_result(self, *, tool_call: ToolCall, result: ToolResult) -> str:
         """把工具执行结果写成 role=tool 事实。
@@ -612,6 +573,14 @@ class AgentSession:
     @property
     def current_turn(self) -> int:
         return self.writer.current_turn
+
+    @property
+    def permission_mode(self) -> str:
+        """当前权限模式的字符串值，供 TUI / system prompt 读取。"""
+
+        if self.permission_coordinator is None:
+            return "default"
+        return self.permission_coordinator.mode.value
 
     def rebuild_view(self):
         """从 append-only JSONL 重建当前 SessionView。"""

@@ -19,9 +19,11 @@ from lanscoder.agent.guardrails import TurnGuardrails
 from lanscoder.agent.loop import AgentLoop
 from lanscoder.agent.loop_limits import _AgentLoopLimitReached, AgentLoopLimits
 from lanscoder.agent.mcp_activation import McpActivationTracker
+from lanscoder.agent.permission import PermissionCoordinator
+from lanscoder.agent.permission_resume import CoordinatorPendingStore
 from lanscoder.agent.ports import SessionTurnRunner
 from lanscoder.agent.request_builder import PreparedMainRequest, RequestBuilder
-from lanscoder.agent.session import AgentSession
+from lanscoder.agent.session import AgentSession, SessionPendingStore
 from lanscoder.agent.subagent_engine import SubagentEngine
 from lanscoder.agent.tool_execution import ToolExecutionEvent, ToolExecutor
 from lanscoder.agent.user_input import AgentTurnResult, AgentTurnStatus
@@ -44,6 +46,7 @@ from lanscoder.providers.types import (
 from lanscoder.subagent.types import SubagentRunner
 from lanscoder.tools.ask_user import create_ask_user_tool
 from lanscoder.tools.types import Tool, ToolResult, make_text_result
+from lanscoder.tools.write import create_write_tool
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -294,7 +297,7 @@ def test_observer_consumer_pipeline(tmp_path, make_loop) -> None:
         agents_md="",
         tools=[_echo_tool()],
     )
-    session.set_permission_mode(PermissionMode.BYPASS)
+    session.permission_coordinator.set_mode(PermissionMode.BYPASS)
     provider = _SequenceProvider(
         [
             ChatResponse(
@@ -328,7 +331,7 @@ def test_observer_consumer_pipeline(tmp_path, make_loop) -> None:
         agents_md="",
         tools=[_echo_tool()],
     )
-    stream_session.set_permission_mode(PermissionMode.BYPASS)
+    stream_session.permission_coordinator.set_mode(PermissionMode.BYPASS)
     stream_provider = _SequenceProvider(
         [
             ChatResponse(
@@ -356,7 +359,7 @@ def test_mcp_activation_tracker_turn_boundary(tmp_path, make_loop) -> None:
         agents_md="",
         tools=_contract_mcp_tools(caller),
     )
-    session.set_permission_mode(PermissionMode.BYPASS)
+    session.permission_coordinator.set_mode(PermissionMode.BYPASS)
     provider = _SequenceProvider(
         [
             ChatResponse(
@@ -625,10 +628,13 @@ def test_subagent_engine_no_module_loop_import() -> None:
 
 def test_subagent_runner_protocol_contract(tmp_path) -> None:
     provider = FakeProvider()
+    store = JsonlSessionStore(tmp_path)
+    host = AgentSession.create(store=store, session_id="sess_engine_host", agents_md="")
     engine = SubagentEngine(
-        store=JsonlSessionStore(tmp_path),
+        store=store,
         provider=provider,
         tools=[],
+        permission_coordinator=host.permission_coordinator,
         child_runner_factory=lambda **kwargs: None,
     )
 
@@ -649,3 +655,104 @@ def test_make_loop_uses_production_constructor(make_loop, tmp_path) -> None:
     assert loop._mcp_activation is not None
     # AgentChatRunner 的 per-turn loop 工厂与组装根 create_agent_loop 同源。
     assert inspect.getmodule(AgentChatRunner._create_loop) is inspect.getmodule(create_agent_loop)
+
+
+def test_permission_coordinator_contract_signature() -> None:
+    """钉 PermissionCoordinator 六个核心方法的参数名（缝 4 接口契约）。"""
+
+    assert list(inspect.signature(PermissionCoordinator.set_mode).parameters) == ["self", "mode"]
+    assert list(inspect.signature(PermissionCoordinator.preflight).parameters) == ["self", "tool_call"]
+    assert list(inspect.signature(PermissionCoordinator.prepare).parameters) == ["self", "tool_call", "deferred_tool_calls"]
+    assert list(inspect.signature(PermissionCoordinator.store_pending_request).parameters) == ["self", "tool_call", "request", "deferred_tool_calls", "review_only"]
+    assert list(inspect.signature(PermissionCoordinator.requires_review).parameters) == ["self", "tool_call"]
+    assert list(inspect.signature(PermissionCoordinator.bypass_mutation).parameters) == ["self", "tool_call", "preflight"]
+
+
+class _RecordingPermissionCoordinator(PermissionCoordinator):
+    """记录一次 prepare 编排内部的方法调用顺序。"""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.calls: list[str] = []
+
+    def preflight(self, tool_call):
+        self.calls.append("preflight")
+        return super().preflight(tool_call)
+
+    def requires_review(self, tool_call):
+        self.calls.append("requires_review")
+        return super().requires_review(tool_call)
+
+    def store_pending_request(self, **kwargs):
+        self.calls.append("store_pending_request")
+        return super().store_pending_request(**kwargs)
+
+    def bypass_mutation(self, tool_call, *, preflight):
+        self.calls.append("bypass_mutation")
+        return super().bypass_mutation(tool_call, preflight=preflight)
+
+
+def test_permission_coordinator_call_order(tmp_path) -> None:
+    """钉缝 4 行为不变式：preflight →（requires_review 时）store_pending_request → bypass_mutation。"""
+
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
+    session = AgentSession.from_project(
+        store=store,
+        session_id="sess_coord_order",
+        project_root=tmp_path,
+        tools=[create_write_tool(tmp_path)],
+    )
+    base = session.permission_coordinator
+    coordinator = _RecordingPermissionCoordinator(
+        session=session,
+        permission_manager=base.permission_manager,
+        sandbox_access=base.sandbox_access,
+    )
+    session.permission_coordinator = coordinator
+    tool_call = ToolCall(id="call_write", name="write", arguments={"path": "README.md", "content": "hello"})
+
+    # STANDARD：write 需要确认，preflight 后直接 store_pending_request，不触发 bypass。
+    prepared = coordinator.prepare(tool_call, [])
+    assert coordinator.calls == ["preflight", "store_pending_request"]
+    assert prepared.pending_input is not None
+    assert prepared.result is None
+    assert "bypass_mutation" not in coordinator.calls
+
+    # BYPASS：write 放行但需要 bypass 写前预览，requires_review 之后走 bypass_mutation。
+    coordinator.set_mode(PermissionMode.BYPASS)
+    coordinator.calls.clear()
+    prepared = coordinator.prepare(tool_call, [])
+    assert coordinator.calls == ["preflight", "requires_review", "bypass_mutation"]
+    assert prepared.pending_input is None
+    assert prepared.result is None
+    assert "store_pending_request" not in coordinator.calls
+
+
+def test_coordinator_pending_store_swap(tmp_path) -> None:
+    """CoordinatorPendingStore 与 SessionPendingStore 行为等价（request_id 匹配/不匹配）。"""
+
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
+    session = AgentSession.from_project(
+        store=store,
+        session_id="sess_pending_swap",
+        project_root=tmp_path,
+        tools=[create_write_tool(tmp_path)],
+    )
+    coordinator = session.permission_coordinator
+    tool_call = ToolCall(id="call_write", name="write", arguments={"path": "README.md", "content": "hello"})
+    prepared = coordinator.prepare(tool_call, [])
+    assert prepared.pending_input is not None
+
+    coordinator_store = CoordinatorPendingStore(coordinator)
+    session_store = SessionPendingStore(session)
+    request_id = session.pending_permission_execution.request_id
+
+    assert coordinator_store.get(request_id) is session.pending_permission_execution
+    assert session_store.get(request_id) is session.pending_permission_execution
+    assert coordinator_store.get("wrong_request_id") is None
+    assert session_store.get("wrong_request_id") is None
+
+    coordinator_store.clear()
+    assert coordinator_store.get(request_id) is None
+    assert session_store.get(request_id) is None
+    assert session.pending_permission_execution is None
