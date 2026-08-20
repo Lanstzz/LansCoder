@@ -26,7 +26,11 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from lanscoder.providers.types import ToolDefinition
-from lanscoder.runtime.cancellation import CancellationToken, cancellation_context
+from lanscoder.runtime.cancellation import (
+    AgentCancelledError,
+    CancellationToken,
+    cancellation_context,
+)
 from lanscoder.tools.types import ToolResult, make_text_result
 
 # ---------------------------------------------------------------------------
@@ -278,6 +282,10 @@ class BackgroundJobManager:
         try:
             with cancellation_context(job.token):
                 result = func()
+        except AgentCancelledError:
+            # 取消是"中断"语义，不是失败：job 保持 cancelled 且不带 error。
+            self._finish(job, result=None, error=None)
+            return
         except Exception as exc:  # noqa: BLE001 - 后台失败必须转成 notification，而不是吞掉
             self._finish(job, result=None, error=f"后台任务执行失败：{exc}")
             return
