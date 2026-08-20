@@ -33,7 +33,8 @@ import anyio
 from lanscoder.runtime.cancellation import AgentCancelledError, CancellationToken
 from lanscoder.runtime.user_input import UserInputRequest
 from lanscoder.agent.ports import ContextManagerLike
-from lanscoder.agent.loop_limits import AgentLoopLimits, AgentLoopStopReason
+from lanscoder.agent.loop_limits import AgentLoopLimits, AgentLoopStopReason, _AgentLoopLimitReached
+from lanscoder.agent.guardrails import TurnGuardrails
 from lanscoder.agent.request_builder import PreparedMainRequest, RequestBuilder
 from lanscoder.agent.session import AgentSession, PendingPermissionExecution
 from lanscoder.agent.task_plan_policy import TaskPlanPolicy
@@ -92,6 +93,7 @@ class AgentLoop:
         context_builder: ContextBuilder | None = None,
         context_manager: ContextManagerLike | None = None,
         limits: AgentLoopLimits | None = None,
+        guardrails: TurnGuardrails | None = None,
         clock=time.monotonic,
         stream_event_handler: Callable[[ChatStreamEvent], None] | None = None,
         tool_event_handler: Callable[[ToolExecutionEvent], None] | None = None,
@@ -133,13 +135,11 @@ class AgentLoop:
 
         # -------- 阶段 3：循环上限控制 (limits) --------
         # max_tool_rounds: 一次 turn 最多允许模型调用多少轮工具，防止无限循环
-        # provider_call_count: 当前 turn 已调用 provider 的次数，受 limits.max_provider_calls 约束
-        # turn_started_at: turn 开始时间，用于 check_turn_timeout 超时检测
+        # guardrails: turn 级预算策略，持有 provider 调用计数、turn 起始时间与 limit 响应构造
         self.limits = limits or AgentLoopLimits.default()
         self.max_tool_rounds = self.limits.max_tool_rounds
         self.clock = clock
-        self.provider_call_count = 0
-        self.turn_started_at: float | None = None
+        self.guardrails = guardrails or TurnGuardrails(provider=provider, limits=self.limits, clock=clock)
 
         # -------- 阶段 4：事件流回调（UI 层注入，AgentLoop 本身不消费）--------
         self.last_stream_events: list[ChatStreamEvent] = []
@@ -254,7 +254,7 @@ class AgentLoop:
 
         1. 检查 pending_permission_execution：上一轮可能因权限确认暂停，
            此时历史里已经有 assistant tool_call 等待 tool_result，不能再追加用户消息。
-        2. _begin_turn()：重置 provider_call_count / turn_started_at 等 turn 级计数器。
+        2. _begin_turn()：重置 turn 级计数器（guardrails）与工具轮次。
         3. _repair_interrupted_tool_calls_before_provider_request()：修复上一轮意外中断
            留下的"有 tool_call 但缺 tool_result"的非法序列（补一条 canceled tool_result）。
         4. append_user_message()：把用户输入写入 JSONL。
@@ -270,7 +270,7 @@ class AgentLoop:
                 pending_input=self.tool_executor.permission_input_request_from_pending(pending),
             )
 
-        self._begin_turn()  # provider_call_count = 0, _tool_rounds_completed=0
+        self._begin_turn()  # 重置 guardrails 计数器和工具轮次
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
         self.session.append_user_message(content, attachments=attachments)  # 把用户消息写进jsonl
@@ -351,12 +351,12 @@ class AgentLoop:
         """
 
         try:
-            self._check_turn_timeout()
+            self.guardrails.check_timeout()
             self._check_cancelled()
         except _AgentLoopLimitReached as exc:
-            return self._complete_turn(self._limit_response(exc.reason))
+            return self._complete_turn(self.guardrails.limit_response(exc.reason))
         except AgentCancelledError:
-            return self._complete_turn(self._interrupted_response())
+            return self._complete_turn(self.guardrails.interrupted_response())
         result = await self._append_permission_resume_result(request_id, answer)
         if result is not None:
             return result
@@ -371,12 +371,12 @@ class AgentLoop:
         """流式模式下恢复权限确认，并继续消费 provider stream。"""
 
         try:
-            self._check_turn_timeout()
+            self.guardrails.check_timeout()
             self._check_cancelled()
         except _AgentLoopLimitReached as exc:
-            return self._complete_turn(self._limit_response(exc.reason))
+            return self._complete_turn(self.guardrails.limit_response(exc.reason))
         except AgentCancelledError:
-            return self._complete_turn(self._interrupted_response())
+            return self._complete_turn(self.guardrails.interrupted_response())
         result = await self._append_permission_resume_result(request_id, answer)
         if result is not None:
             return result
@@ -607,8 +607,8 @@ class AgentLoop:
     #
     # 流程：
     #   1. _prepare_main_provider_request：构造 ChatRequest（含 projection / budget / compact）
-    #   2. _reserve_provider_call：检查是否达到 max_provider_calls 上限
-    #   3. _check_turn_timeout / _check_cancelled：超时或取消则抛异常提前退出
+    #   2. guardrails.reserve_call：检查是否达到 max_provider_calls 上限
+    #   3. guardrails.check_timeout / _check_cancelled：超时或取消则抛异常提前退出
     #   4. provider.complete / provider.astream：实际调用模型 API
     #   5. _record_projection_consumed：记录本次投影被哪些 tool_result part 消费，
     #      便于后续 compact 判断哪些 tool_result 已经”被模型看过了”
@@ -628,8 +628,8 @@ class AgentLoop:
             tool_choice=tool_choice,
             runtime_instruction=runtime_instruction,
         )
-        self._reserve_provider_call()
-        self._check_turn_timeout()
+        self.guardrails.reserve_call()
+        self.guardrails.check_timeout()
         self._check_cancelled()
         if not streaming:
             response = await anyio.to_thread.run_sync(self.provider.complete, prepared.request)
@@ -729,7 +729,7 @@ class AgentLoop:
         guardrail_stop = False
         try:
             if self.max_tool_rounds is not None and self._tool_rounds_completed >= self.max_tool_rounds:
-                return self._complete_turn(self._limit_response(AgentLoopStopReason.TOOL_ROUND_LIMIT))
+                return self._complete_turn(self.guardrails.limit_response(AgentLoopStopReason.TOOL_ROUND_LIMIT))
             response = self._drop_unsupported_tool_calls(await complete_once(tool_choice=initial_tool_choice))
             tool_rounds = self._tool_rounds_completed
             response, pending_input, tool_rounds = await self._continue_tool_loop_from_response(
@@ -748,15 +748,15 @@ class AgentLoop:
                 if pending_input is not None:
                     return self._pending_turn_result(pending_input)
         except _AgentLoopLimitReached as exc:
-            response = self._limit_response(exc.reason)
+            response = self.guardrails.limit_response(exc.reason)
             guardrail_stop = True
         except AgentCancelledError:
             self._append_interrupted_tool_results()
-            response = self._interrupted_response()
+            response = self.guardrails.interrupted_response()
 
         if self._is_cancelled():
             self._append_interrupted_tool_results()
-            response = self._interrupted_response()
+            response = self.guardrails.interrupted_response()
             return self._complete_turn(response)
         if guardrail_stop:
             return self._complete_turn(response)
@@ -955,7 +955,7 @@ class AgentLoop:
             return
         self.progress_callback(
             {
-                "provider_calls": self.provider_call_count,
+                "provider_calls": self.guardrails.call_count,
                 "total_tokens": self._total_tokens,
             }
         )
@@ -963,7 +963,7 @@ class AgentLoop:
     def usage_summary(self) -> dict[str, int]:
         """返回 loop 自创建以来累积的 provider 调用次数与 token 用量。"""
         return {
-            "provider_calls": self.provider_call_count,
+            "provider_calls": self.guardrails.call_count,
             "total_tokens": self._total_tokens,
         }
 
@@ -1096,8 +1096,7 @@ class AgentLoop:
     def _begin_turn(self, *, new_user_turn: bool = True) -> None:
         if new_user_turn:
             self._active_mcp_tool_names.clear()
-            self.provider_call_count = 0
-            self.turn_started_at = self.clock()
+            self.guardrails.begin_turn()
             self._task_plan_reconciliation_attempted = False
             self._tool_rounds_completed = 0
 
@@ -1156,22 +1155,6 @@ class AgentLoop:
                 observed_revision=notification.observed_revision,
             )
 
-    def _check_provider_call_limit(self) -> None:
-        limit = self.limits.max_provider_calls
-        if limit is not None and self.provider_call_count >= limit:
-            raise _AgentLoopLimitReached(AgentLoopStopReason.PROVIDER_CALL_LIMIT)
-
-    def _reserve_provider_call(self) -> None:
-        self._check_provider_call_limit()
-        self.provider_call_count += 1
-
-    def _check_turn_timeout(self) -> None:
-        limit = self.limits.max_turn_seconds
-        if limit is None or self.turn_started_at is None:
-            return
-        if self.clock() - self.turn_started_at >= limit:
-            raise _AgentLoopLimitReached(AgentLoopStopReason.TURN_TIMEOUT)
-
     def _is_cancelled(self) -> bool:
         return self.cancellation_token is not None and self.cancellation_token.is_cancelled
 
@@ -1210,43 +1193,4 @@ class AgentLoop:
     def _tool_round_limit_response(self, response: ChatResponse) -> ChatResponse:
         """工具轮次上限命中后，只保存纯文本说明，避免写入未执行的 tool_call。"""
 
-        return self._limit_response(AgentLoopStopReason.TOOL_ROUND_LIMIT, raw=response.raw)
-
-    def _limit_response(self, reason: AgentLoopStopReason, *, raw: dict | None = None) -> ChatResponse:
-        messages = {
-            AgentLoopStopReason.PROVIDER_CALL_LIMIT: (f"provider 调用次数达到上限（max_provider_calls={self.limits.max_provider_calls}），已停止继续执行。"),
-            AgentLoopStopReason.TURN_TIMEOUT: (f"本轮任务耗时达到上限（max_turn_seconds={self.limits.max_turn_seconds}），已停止继续执行。"),
-            AgentLoopStopReason.TOOL_ROUND_LIMIT: (f"工具调用轮次达到上限（max_tool_rounds={self.limits.max_tool_rounds}），已停止继续执行工具。"),
-        }
-        return ChatResponse(
-            provider=self.provider.name,
-            model=self.provider.model,
-            content=messages[reason],
-            tool_calls=[],
-            finish_reason=reason.value,
-            raw=raw,
-        )
-
-    def _interrupted_response(self) -> ChatResponse:
-        return ChatResponse(
-            provider=self.provider.name,
-            model=self.provider.model,
-            content="当前任务已中断。",
-            tool_calls=[],
-            finish_reason="interrupted",
-            raw={"interrupted": True},
-        )
-
-
-# ----------------------------------------------------------------------------
-# _AgentLoopLimitReached — 内部异常，用于在嵌套调用中传递"停止原因"
-# ----------------------------------------------------------------------------
-# 以 _ 前缀表示模块私有。当 _reserve_provider_call / _check_turn_timeout 发现
-# 达到 limits 上限时抛出，由 _run_tool_loop 的外层 except 捕获，
-# 转换成优雅退出的 _limit_response(reason)。这样可以把"为什么停"的语义
-# （PROVIDER_CALL_LIMIT / TURN_TIMEOUT / TOOL_ROUND_LIMIT）从深层调用栈
-# 传回到 turn 出口，而不需要在每一层函数签名里加 reason 参数。
-class _AgentLoopLimitReached(Exception):
-    def __init__(self, reason: AgentLoopStopReason) -> None:
-        super().__init__(reason.value)
-        self.reason = reason
+        return self.guardrails.limit_response(AgentLoopStopReason.TOOL_ROUND_LIMIT, raw=response.raw)

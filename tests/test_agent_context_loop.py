@@ -2487,7 +2487,7 @@ def test_agent_loop_does_not_persist_task_plan_reconciliation_as_user_message(tm
     assert [message.role for message in session.rebuild_view().messages].count("user") == 1
 
 
-def test_agent_loop_resets_provider_call_count_for_each_user_turn(tmp_path) -> None:
+def test_agent_loop_resets_call_count_for_each_user_turn(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_provider_count_reset", agents_md="")
     provider = FakeProvider(
@@ -2503,7 +2503,10 @@ def test_agent_loop_resets_provider_call_count_for_each_user_turn(tmp_path) -> N
     )
 
     first = loop._run_user_turn_sync("第一轮")
+    assert loop.guardrails.call_count == 1
+
     second = loop._run_user_turn_sync("第二轮")
+    assert loop.guardrails.call_count == 1
 
     assert first.content == "first"
     assert second.content == "second"

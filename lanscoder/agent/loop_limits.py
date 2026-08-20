@@ -42,3 +42,16 @@ class AgentLoopLimits:
 
     def with_max_tool_rounds(self, value: int | None) -> "AgentLoopLimits":
         return replace(self, max_tool_rounds=value)
+
+
+class _AgentLoopLimitReached(Exception):
+    """Internal signal that a turn budget was hit.
+
+    Raised by guardrails when a limit is exceeded and caught at the turn exit,
+    carrying the stop reason so the loop never needs a reason parameter threaded
+    through deep call stacks.
+    """
+
+    def __init__(self, reason: AgentLoopStopReason) -> None:
+        super().__init__(reason.value)
+        self.reason = reason

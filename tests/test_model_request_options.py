@@ -186,4 +186,4 @@ def test_unified_recovery_retries_retryable_error_once_for_sync_mode(tmp_path) -
     session.append_user_message("hi")
     response = asyncio.run(loop._complete_once_with_recovery(streaming=False))
     assert response.content == "ok"
-    assert loop.provider_call_count == 2
+    assert loop.guardrails.call_count == 2
