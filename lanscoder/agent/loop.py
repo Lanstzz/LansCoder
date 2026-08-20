@@ -25,6 +25,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from functools import partial
 from typing import Any, Literal
 
 import anyio
@@ -368,7 +369,7 @@ class AgentLoop:
             return result
         self._begin_turn(new_user_turn=False)
         self._check_cancelled()
-        return await self._run_tool_loop_interactive_async(self._stream_once_with_recovery)
+        return await self._run_tool_loop_interactive_async(partial(self._complete_once_with_recovery, streaming=True))
 
     async def _run_user_turn_streaming(
         self,
@@ -397,7 +398,7 @@ class AgentLoop:
         self.session.append_user_message(content, attachments=attachments)
 
         result = await self._run_tool_loop_interactive_async(
-            self._stream_once_with_recovery,
+            partial(self._complete_once_with_recovery, streaming=True),
         )
         return result
 
@@ -418,7 +419,7 @@ class AgentLoop:
         self._begin_turn()
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
-        return await self._run_tool_loop_interactive_async(self._stream_once_with_recovery)
+        return await self._run_tool_loop_interactive_async(partial(self._complete_once_with_recovery, streaming=True))
 
     def _append_permission_resume_result(self, request_id: str, answer: str) -> AgentTurnResult | None:
         """用回答恢复一个暂停的权限/ask_user。
@@ -760,92 +761,6 @@ class AgentLoop:
                     runtime_instruction=runtime_instruction,
                     streaming=streaming,
                 )
-
-    async def _stream_once(
-        self,
-        *,
-        tool_choice="auto",
-        runtime_instruction: str | None = None,
-    ) -> ChatResponse:
-        """消费一次 provider stream，最终仍返回完整 ChatResponse。
-
-        UI 可以读取 `last_stream_events` 展示 text_delta；但工具调用必须等 stream 完成后
-        才能执行，因为 OpenAI-compatible 的 tool arguments 可能分散在多个 chunk 中。
-        """
-
-        prepared = self._prepare_main_provider_request(
-            tool_choice=tool_choice,
-            runtime_instruction=runtime_instruction,
-        )
-        final_response: ChatResponse | None = None
-        self._reserve_provider_call()
-        self._check_turn_timeout()
-        self._check_cancelled()
-        async for event in self.provider.astream(prepared.request):
-            self._check_cancelled()
-            self.last_stream_events.append(event)
-            if self.stream_event_handler is not None:
-                self.stream_event_handler(event)
-            if event.kind == "message_completed":
-                final_response = event.response
-        if final_response is None:
-            raise ProviderError(
-                ProviderErrorKind.API_ERROR,
-                "provider stream ended without message_completed event",
-            )
-        self._record_projection_consumed(prepared)
-        self._report_progress(final_response)
-        return final_response
-
-    async def _stream_once_with_recovery(
-        self,
-        *,
-        tool_choice="auto",
-        runtime_instruction: str | None = None,
-    ) -> ChatResponse:
-        retryable_failures = 0
-        while True:
-            try:
-                return await self._stream_once_attempt(
-                    tool_choice=tool_choice,
-                    runtime_instruction=runtime_instruction,
-                )
-            except ProviderError as exc:
-                if exc.retryable:
-                    if retryable_failures == 0:
-                        retryable_failures += 1
-                        continue
-                    return self._complete_once_sync(
-                        tool_choice=tool_choice,
-                        runtime_instruction=runtime_instruction,
-                    )
-                if not exc.requires_compaction:
-                    raise
-                result = self._compact_for_prompt_too_long(runtime_instruction=runtime_instruction)
-                if result is None or result.status != "success":
-                    raise
-                return await self._stream_once_attempt(
-                    tool_choice=tool_choice,
-                    runtime_instruction=runtime_instruction,
-                )
-
-    async def _stream_once_attempt(
-        self,
-        *,
-        tool_choice="auto",
-        runtime_instruction: str | None = None,
-    ) -> ChatResponse:
-        start_event_count = len(self.last_stream_events)
-        try:
-            return await self._stream_once(
-                tool_choice=tool_choice,
-                runtime_instruction=runtime_instruction,
-            )
-        except ProviderError:
-            # streaming 尝试失败时，不能把已经收到的局部 delta 当成真实回答留给 UI。
-            # 真正成功的重试会重新产生完整事件。
-            del self.last_stream_events[start_event_count:]
-            raise
 
     # ============================================================================
     # _run_tool_loop_interactive — 核心工具循环（本文件最关键的函数）
