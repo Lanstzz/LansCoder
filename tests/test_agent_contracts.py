@@ -428,6 +428,98 @@ def test_resume_rebind_observers(tmp_path, make_loop) -> None:
     assert new_stream
 
 
+def test_resume_outcome_discriminant(tmp_path, make_loop) -> None:
+    """PermissionResumeHandler 的三值判别式：continue / wait_for_input / finished。
+
+    三用例都经 loop 的入口 glue 走生产路径，断言落在返回的 AgentTurnResult 上：
+    - 整批跑完 → continue：resume 后重新进入工具循环，最终 COMPLETED。
+    - 链式 pending → wait_for_input：延迟批次里又有 ask_user，结果 WAITING_FOR_USER_INPUT。
+    - request_id 不匹配 → finished：结果 COMPLETED 且 finish_reason == "error"。
+    """
+    store = JsonlSessionStore(tmp_path)
+
+    # continue：单 ask_user 恢复后无延迟批次，重新进入工具循环得到最终回答。
+    continue_session = AgentSession.create(
+        store=store,
+        session_id="sess_resume_continue",
+        agents_md="",
+        tools=[create_ask_user_tool()],
+    )
+    continue_provider = _SequenceProvider(
+        [
+            ChatResponse(
+                provider="fake-seq",
+                model="fake-seq-model",
+                content="",
+                tool_calls=[ToolCall(id="call_ask", name="ask_user", arguments={"question": "继续?", "options": ["y", "n"]})],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake-seq", model="fake-seq-model", content="done"),
+        ]
+    )
+    continue_loop = make_loop(session=continue_session, provider=continue_provider)
+    paused = continue_loop._run_user_turn_sync("部署")
+    assert paused.status == AgentTurnStatus.WAITING_FOR_USER_INPUT
+    resumed = continue_loop._resume_with_user_input_sync(paused.pending_input.id, "y")
+    assert resumed.status == AgentTurnStatus.COMPLETED
+    assert resumed.response is not None
+    assert resumed.response.content == "done"
+
+    # wait_for_input：两个 ask_user，回答第一个后延迟批次里的第二个再次暂停。
+    chain_session = AgentSession.create(
+        store=store,
+        session_id="sess_resume_chain",
+        agents_md="",
+        tools=[create_ask_user_tool()],
+    )
+    chain_provider = _SequenceProvider(
+        [
+            ChatResponse(
+                provider="fake-seq",
+                model="fake-seq-model",
+                content="",
+                tool_calls=[
+                    ToolCall(id="call_ask_1", name="ask_user", arguments={"question": "继续?", "options": ["y", "n"]}),
+                    ToolCall(id="call_ask_2", name="ask_user", arguments={"question": "再来?", "options": ["y", "n"]}),
+                ],
+                finish_reason="tool_calls",
+            )
+        ]
+    )
+    chain_loop = make_loop(session=chain_session, provider=chain_provider)
+    paused = chain_loop._run_user_turn_sync("部署")
+    assert paused.status == AgentTurnStatus.WAITING_FOR_USER_INPUT
+    resumed = chain_loop._resume_with_user_input_sync(paused.pending_input.id, "y")
+    assert resumed.status == AgentTurnStatus.WAITING_FOR_USER_INPUT
+    assert resumed.pending_input is not None
+    assert resumed.pending_input.id == "call_ask_2"
+
+    # finished：request_id 与已有 pending 不匹配，返回携带错误响应的结果。
+    wrong_session = AgentSession.create(
+        store=store,
+        session_id="sess_resume_wrong",
+        agents_md="",
+        tools=[create_ask_user_tool()],
+    )
+    wrong_provider = _SequenceProvider(
+        [
+            ChatResponse(
+                provider="fake-seq",
+                model="fake-seq-model",
+                content="",
+                tool_calls=[ToolCall(id="call_ask", name="ask_user", arguments={"question": "继续?", "options": ["y", "n"]})],
+                finish_reason="tool_calls",
+            )
+        ]
+    )
+    wrong_loop = make_loop(session=wrong_session, provider=wrong_provider)
+    paused = wrong_loop._run_user_turn_sync("部署")
+    assert paused.status == AgentTurnStatus.WAITING_FOR_USER_INPUT
+    resumed = wrong_loop._resume_with_user_input_sync("wrong_request_id", "y")
+    assert resumed.status == AgentTurnStatus.COMPLETED
+    assert resumed.finish_reason == "error"
+
+
 def test_loop_tool_executor_attribute_contract(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
