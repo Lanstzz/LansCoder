@@ -16,7 +16,6 @@ import anyio
 
 from lanscoder.runtime.cancellation import CancellationToken, cancellation_context
 from lanscoder.agent.session import AgentSession, PendingPermissionExecution
-from lanscoder.agent.tool_settlement import ToolCallSettlement
 from lanscoder.agent.background import (
     BackgroundCapacityError,
     BackgroundJob,
@@ -79,7 +78,6 @@ class ToolExecutionEvent:
         "finished",
         "permission_requested",
         "denied",
-        "skipped",
         "interrupted",
         "background_started",
     ]
@@ -108,22 +106,18 @@ class ToolExecutor:
         self,
         *,
         session: AgentSession,
-        settlement: ToolCallSettlement,
         emit_event: Callable[..., None],
         check_cancelled: Callable[[], None],
         cancellation_token: CancellationToken | None,
-        emit_settlements: Callable[[str, object], None],
         validate_tool_call: Callable[[ToolCall], ToolResult | None] | None = None,
         observe_tool_result: Callable[[ToolCall, ToolResult], None] | None = None,
         background_manager: BackgroundJobManager | None = None,
         background_tool_names: frozenset[str] | None = None,
     ) -> None:
         self.session = session
-        self.settlement = settlement
         self._emit_event = emit_event
         self._check_cancelled = check_cancelled
         self.cancellation_token = cancellation_token
-        self._emit_settlements = emit_settlements
         self._validate_tool_call = validate_tool_call
         self._observe_tool_result = observe_tool_result
         self._background_manager = background_manager
