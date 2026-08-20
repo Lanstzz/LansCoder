@@ -10,9 +10,12 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import anyio
+
+if TYPE_CHECKING:
+    from lanscoder.agent.observer import ToolEventSink
 
 from lanscoder.runtime.cancellation import CancellationToken, cancellation_context
 from lanscoder.agent.session import AgentSession, PendingPermissionExecution
@@ -106,8 +109,7 @@ class ToolExecutor:
         self,
         *,
         session: AgentSession,
-        emit_event: Callable[..., None],
-        check_cancelled: Callable[[], None],
+        event_sink: ToolEventSink,
         cancellation_token: CancellationToken | None,
         validate_tool_call: Callable[[ToolCall], ToolResult | None] | None = None,
         observe_tool_result: Callable[[ToolCall, ToolResult], None] | None = None,
@@ -115,14 +117,44 @@ class ToolExecutor:
         background_tool_names: frozenset[str] | None = None,
     ) -> None:
         self.session = session
-        self._emit_event = emit_event
-        self._check_cancelled = check_cancelled
+        self._event_sink = event_sink
         self.cancellation_token = cancellation_token
         self._validate_tool_call = validate_tool_call
         self._observe_tool_result = observe_tool_result
         self._background_manager = background_manager
         self._background_tool_names = background_tool_names
         self._background_request: dict[str, tuple[str | None, str | None]] = {}
+
+    def _check_cancelled(self) -> None:
+        if self.cancellation_token is not None:
+            self.cancellation_token.raise_if_cancelled()
+
+    def _emit_event(
+        self,
+        kind: Literal[
+            "prewrite_review",
+            "started",
+            "finished",
+            "permission_requested",
+            "denied",
+            "interrupted",
+            "background_started",
+        ],
+        tool_call: ToolCall,
+        *,
+        result: ToolResult | None = None,
+        permission_request: PermissionRequest | None = None,
+        prewrite_review: dict[str, object] | None = None,
+    ) -> None:
+        self._event_sink.on_tool_event(
+            ToolExecutionEvent(
+                kind=kind,
+                tool_call=tool_call,
+                result=result,
+                permission_request=permission_request,
+                prewrite_review=prewrite_review,
+            )
+        )
 
     def execute_interactive(self, tool_calls: list[ToolCall]) -> ToolExecutionState:
         """执行一个 response 里的全部 tool_calls。

@@ -35,6 +35,8 @@ from lanscoder.runtime.user_input import UserInputRequest
 from lanscoder.agent.ports import ContextManagerLike
 from lanscoder.agent.loop_limits import AgentLoopLimits, AgentLoopStopReason, _AgentLoopLimitReached
 from lanscoder.agent.guardrails import TurnGuardrails
+from lanscoder.agent.mcp_activation import McpActivationTracker
+from lanscoder.agent.observer import TurnObserver
 from lanscoder.agent.request_builder import PreparedMainRequest, RequestBuilder
 from lanscoder.agent.session import AgentSession, PendingPermissionExecution
 from lanscoder.agent.task_plan_policy import TaskPlanPolicy
@@ -64,7 +66,7 @@ from lanscoder.tools.permission_results import (
     make_prewrite_review_stale_result,
 )
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
-from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
+from lanscoder.tools.types import Tool, ToolResult, make_text_result
 
 
 class AgentLoop:
@@ -105,6 +107,9 @@ class AgentLoop:
         enable_delegate_tool: bool = True,
         subagent_runner: SubagentRunner | None = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        observer: TurnObserver | None = None,
+        mcp_activation: McpActivationTracker | None = None,
+        tool_executor: ToolExecutor | None = None,
     ) -> None:
         # -------- 阶段 1：核心依赖 (session / provider / 工具元数据) --------
         # session: 持久化 JSONL 写入与视图重建，是所有"事实落库"的入口
@@ -141,13 +146,14 @@ class AgentLoop:
         self.guardrails = guardrails or TurnGuardrails(provider=provider, limits=self.limits, clock=clock)
 
         # -------- 阶段 4：事件流回调（UI 层注入，AgentLoop 本身不消费）--------
+        # stream/tool handler 以属性透传给 observer：runtime _resume_turn 通过 setter
+        # 重绑 handler（runtime.py），getter 返回 backing field 保持只读读取形状。
         self.last_stream_events: list[ChatStreamEvent] = []
-        self.stream_event_handler = stream_event_handler
-        self.tool_event_handler = tool_event_handler
         self.guidance_provider = guidance_provider
         self.cancellation_token = cancellation_token
-        self.progress_callback = progress_callback
         self._total_tokens = 0
+        self._stream_event_handler = stream_event_handler
+        self._tool_event_handler = tool_event_handler
 
         # -------- 阶段 5：后台任务管理 (background jobs) --------
         # background_manager: 管理长时运行的后台工具（如 grep 大仓库），可被取消/查询状态
@@ -158,25 +164,50 @@ class AgentLoop:
         self._task_plan_reconciliation_attempted = False
         self._tool_rounds_completed = 0
 
-        # -------- 阶段 6：MCP 激活状态快照 ----------
+        # -------- 阶段 6：MCP 激活状态 ----------
         # 工具注册已上移到组装根（_builders.register_loop_tools），loop 不再注册任何工具。
-        # 这里快照 session 已有的 mcp__ 工具名，供 MCP 激活校验与搜索结果观测使用。
-        self._mcp_tool_names = {name for name in self.session.tool_registry.names() if name.startswith("mcp__")}
-        self._active_mcp_tool_names: set[str] = set()
+        # MCP 激活校验与搜索结果观测由 McpActivationTracker 持有：先构造 tracker，再把
+        # validate/observe 交给 ToolExecutor，避免 ToolExecutor↔loop 构造顺序环（P0）。
+        self._mcp_activation = mcp_activation or McpActivationTracker(frozenset(name for name in session.tool_registry.names() if name.startswith("mcp__")))
 
-        # -------- 阶段 7：ToolExecutor 创建 --------
-        # ToolExecutor 负责真正把 tool_call 变成 tool_result：权限检查、沙盒执行、事件回报
-        # → 见 lanscoder/agent/tool_execution.py::ToolExecutor
-        self.tool_executor = ToolExecutor(
+        # -------- 阶段 7：TurnObserver + ToolExecutor 创建 --------
+        # observer 收敛 progress/stream/tool 三个事件回调；ToolExecutor 经 event_sink 消费
+        # 工具事件，validate/observe 由 tracker 提供。任务 5 会把三者改为必需注入并删兜底。
+        self._observer = observer or TurnObserver(
+            stream_event_handler=stream_event_handler,
+            tool_event_handler=tool_event_handler,
+            progress_callback=progress_callback,
+        )
+        self.tool_executor = tool_executor or ToolExecutor(
             session=session,
-            emit_event=self._emit_tool_event,
-            check_cancelled=self._check_cancelled,
+            event_sink=self._observer,
             cancellation_token=self.cancellation_token,
-            validate_tool_call=self._validate_mcp_tool_call,
-            observe_tool_result=self._observe_mcp_search_result,
+            validate_tool_call=self._mcp_activation.validate,
+            observe_tool_result=self._mcp_activation.observe,
             background_manager=self.background_manager,
             background_tool_names=self.background_tool_names,
         )
+
+    # ----------------------------------------------------------------------------
+    # handler 属性 — 透传给 observer（runtime _resume_turn 的 setter 重绑形状）
+    # ----------------------------------------------------------------------------
+    @property
+    def stream_event_handler(self) -> Callable[[ChatStreamEvent], None] | None:
+        return self._stream_event_handler
+
+    @stream_event_handler.setter
+    def stream_event_handler(self, value: Callable[[ChatStreamEvent], None] | None) -> None:
+        self._stream_event_handler = value
+        self._observer.set_stream_event_handler(value)
+
+    @property
+    def tool_event_handler(self) -> Callable[[ToolExecutionEvent], None] | None:
+        return self._tool_event_handler
+
+    @tool_event_handler.setter
+    def tool_event_handler(self, value: Callable[[ToolExecutionEvent], None] | None) -> None:
+        self._tool_event_handler = value
+        self._observer.set_tool_event_handler(value)
 
     # ----------------------------------------------------------------------------
     # run_user_turn — 统一 async 入口
@@ -214,6 +245,7 @@ class AgentLoop:
 
         self.cancellation_token = token
         self.tool_executor.cancellation_token = token
+        self._observer.replace_cancellation_token(token)
 
     def clear_stream_events(self) -> None:
         self.last_stream_events = []
@@ -627,8 +659,7 @@ class AgentLoop:
                 async for event in self.provider.astream(prepared.request):
                     self._check_cancelled()
                     self.last_stream_events.append(event)
-                    if self.stream_event_handler is not None:
-                        self.stream_event_handler(event)
+                    self._observer.on_stream_event(event)
                     if event.kind == "message_completed":
                         final_response = event.response
                 if final_response is None:
@@ -846,9 +877,7 @@ class AgentLoop:
         permission_request: PermissionRequest | None = None,
         prewrite_review: dict[str, object] | None = None,
     ) -> None:
-        if self.tool_event_handler is None:
-            return
-        self.tool_event_handler(
+        self._observer.on_tool_event(
             ToolExecutionEvent(
                 kind=kind,
                 tool_call=tool_call,
@@ -930,7 +959,7 @@ class AgentLoop:
         )
 
     def _report_progress(self, response: ChatResponse) -> None:
-        """累积 token 用量，再通知进度回调（若有）。
+        """累积 token 用量，再把运行值镜像给 observer 分发。
 
         用量累积不依赖进度回调，这样前台子 agent（无后台 job、无回调）也能通过
         ``usage_summary()`` 上报总量；后台子 agent 则同时把进度写给 TUI。
@@ -938,21 +967,11 @@ class AgentLoop:
         usage = response.usage
         if usage is not None and usage.total_tokens is not None:
             self._total_tokens += usage.total_tokens
-        if self.progress_callback is None:
-            return
-        self.progress_callback(
-            {
-                "provider_calls": self.guardrails.call_count,
-                "total_tokens": self._total_tokens,
-            }
-        )
+        self._observer.on_progress(self.guardrails.call_count, self._total_tokens)
 
     def usage_summary(self) -> dict[str, int]:
         """返回 loop 自创建以来累积的 provider 调用次数与 token 用量。"""
-        return {
-            "provider_calls": self.guardrails.call_count,
-            "total_tokens": self._total_tokens,
-        }
+        return self._observer.usage_summary()
 
     def _compact_if_needed(
         self,
@@ -1006,7 +1025,7 @@ class AgentLoop:
         for definition in self.session.tool_registry.definitions():
             if definition.name in HIDDEN_TOOL_STATUS_NAMES:
                 continue
-            if definition.name in self._mcp_tool_names and definition.name not in self._active_mcp_tool_names:
+            if definition.name in self._mcp_activation.mcp_tool_names and definition.name not in self._mcp_activation.active_names:
                 continue
             definitions.append(self._augment_tool_definition(definition))
         return definitions
@@ -1041,36 +1060,10 @@ class AgentLoop:
 
     def _begin_turn(self, *, new_user_turn: bool = True) -> None:
         if new_user_turn:
-            self._active_mcp_tool_names.clear()
+            self._mcp_activation.clear()
             self.guardrails.begin_turn()
             self._task_plan_reconciliation_attempted = False
             self._tool_rounds_completed = 0
-
-    def _validate_mcp_tool_call(self, tool_call: ToolCall) -> ToolResult | None:
-        if tool_call.name not in self._mcp_tool_names:
-            return None
-        if tool_call.name in self._active_mcp_tool_names:
-            return None
-        return make_error_result(
-            tool_call.name,
-            "MCP tool is not active for this user turn. Call mcp_tool_search first.",
-            mcp_activation_required=True,
-        )
-
-    def _observe_mcp_search_result(
-        self,
-        tool_call: ToolCall,
-        result: ToolResult,
-    ) -> None:
-        if tool_call.name != "mcp_tool_search" or not result.ok:
-            return
-        payload = result.data.get("mcp_tool_search")
-        if not isinstance(payload, dict):
-            return
-        activated = payload.get("activated_tools")
-        if not isinstance(activated, list):
-            return
-        self._active_mcp_tool_names.update(name for name in activated if isinstance(name, str) and name in self._mcp_tool_names)
 
     def _append_pending_guidance(self) -> None:
         if self.guidance_provider is None:

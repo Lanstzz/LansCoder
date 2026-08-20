@@ -8,9 +8,13 @@
 
 from __future__ import annotations
 
+from lanscoder.agent.background import DEFAULT_BACKGROUND_TOOL_NAMES
 from lanscoder.agent.loop import AgentLoop
+from lanscoder.agent.mcp_activation import McpActivationTracker
+from lanscoder.agent.observer import TurnObserver
 from lanscoder.agent.request_builder import RequestBuilder
 from lanscoder.agent.subagent import SubagentRunner
+from lanscoder.agent.tool_execution import ToolExecutor
 from lanscoder.context.context_builder import ContextBuilder
 from lanscoder.providers.types import MainRequestOptions
 from lanscoder.tools.background import create_background_cancel_tool, create_background_status_tool
@@ -76,4 +80,33 @@ def create_agent_loop(**kwargs) -> AgentLoop:
         provider=kwargs.get("provider"),
         request_options=kwargs.get("request_options"),
     )
-    return AgentLoop(**kwargs, request_builder=request_builder, subagent_runner=runner)
+    # 在构造 loop 前先装好三个协作对象并注入，覆盖 loop 的兜底构造（任务 5 会把
+    # 兜底删掉，此处成为唯一构造点）。tracker 先行，ToolExecutor 的 validate/observe
+    # 与 observer 的事件分发都依赖它。
+    session = kwargs["session"]
+    mcp_activation = McpActivationTracker(frozenset(name for name in session.tool_registry.names() if name.startswith("mcp__")))
+    observer = TurnObserver(
+        stream_event_handler=kwargs.get("stream_event_handler"),
+        tool_event_handler=kwargs.get("tool_event_handler"),
+        progress_callback=kwargs.get("progress_callback"),
+    )
+    background_tool_names = kwargs.get("background_tool_names")
+    if background_tool_names is None:
+        background_tool_names = DEFAULT_BACKGROUND_TOOL_NAMES
+    tool_executor = ToolExecutor(
+        session=session,
+        event_sink=observer,
+        cancellation_token=kwargs.get("cancellation_token"),
+        validate_tool_call=mcp_activation.validate,
+        observe_tool_result=mcp_activation.observe,
+        background_manager=kwargs.get("background_manager"),
+        background_tool_names=background_tool_names,
+    )
+    return AgentLoop(
+        **kwargs,
+        request_builder=request_builder,
+        subagent_runner=runner,
+        mcp_activation=mcp_activation,
+        observer=observer,
+        tool_executor=tool_executor,
+    )
