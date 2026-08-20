@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import re
 import shutil
 from pathlib import Path
 
@@ -30,7 +31,7 @@ def create_grep_tool(root: str | Path, *, access: SandboxAccess | None = None) -
         case_sensitive: bool = False,
         max_results: int = DEFAULT_MAX_SEARCH_RESULTS,
     ) -> ToolResult:
-        """在项目内按固定字符串搜索文本；返回文件、行号和匹配行。"""
+        """在项目内按正则表达式搜索文本；返回文件、行号和匹配行。"""
 
         try:
             target = sandbox.resolve_validated(path)
@@ -86,7 +87,6 @@ def _grep_with_rg(
         "--with-filename",
         "--color",
         "never",
-        "--fixed-strings",
         "--glob",
         include,
         "--max-count",
@@ -145,9 +145,14 @@ def _grep_with_python(
     max_results: int,
     fallback_error: str | None = None,
 ) -> ToolResult:
-    """使用 Python 实现的搜索后备路径。"""
+    """使用 Python 实现的正则搜索后备路径。"""
 
-    needle = pattern if case_sensitive else pattern.lower()
+    flags = 0 if case_sensitive else re.IGNORECASE
+    try:
+        compiled = re.compile(pattern, flags)
+    except re.error as exc:
+        return make_error_result(tool_name, f"无效的正则表达式：{exc}")
+
     results: list[dict[str, object]] = []
     files = [target] if target.is_file() else [item for item in target.rglob("*") if item.is_file()]
 
@@ -161,8 +166,7 @@ def _grep_with_python(
             continue
 
         for line_number, line in enumerate(lines, start=1):
-            haystack = line if case_sensitive else line.lower()
-            if needle not in haystack:
+            if compiled.search(line) is None:
                 continue
             results.append({"path": relative, "line": line_number, "text": line})
             if len(results) >= max_results:
