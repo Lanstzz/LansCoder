@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from lanscoder.agent.loop import AgentLoop
 from lanscoder.agent.session import AgentSession
 from lanscoder.app.runtime import AgentChatRunner, CurrentSessionState
 from lanscoder.context.store import JsonlSessionStore
@@ -45,10 +44,10 @@ def _session(tmp_path) -> AgentSession:
     return AgentSession.create(store=JsonlSessionStore(tmp_path), session_id="sess_options", agents_md="")
 
 
-def test_main_sync_request_inherits_selected_model_options(tmp_path) -> None:
+def test_main_sync_request_inherits_selected_model_options(tmp_path, make_loop) -> None:
     provider = RecordingProvider()
     session = _session(tmp_path)
-    loop = AgentLoop(
+    loop = make_loop(
         session=session,
         provider=provider,
         request_options=MainRequestOptions(
@@ -67,10 +66,10 @@ def test_main_sync_request_inherits_selected_model_options(tmp_path) -> None:
     assert request.extra_body == {"reasoning_effort": "high"}
 
 
-def test_main_stream_request_inherits_selected_model_options(tmp_path) -> None:
+def test_main_stream_request_inherits_selected_model_options(tmp_path, make_loop) -> None:
     provider = RecordingProvider()
     session = _session(tmp_path)
-    loop = AgentLoop(
+    loop = make_loop(
         session=session,
         provider=provider,
         request_options=MainRequestOptions(
@@ -142,19 +141,19 @@ class RetryableOnceProvider(ChatProvider):
             yield event
 
 
-def test_unified_complete_once_sync_mode_returns_provider_response(tmp_path) -> None:
+def test_unified_complete_once_sync_mode_returns_provider_response(tmp_path, make_loop) -> None:
     provider = RecordingProvider()
     session = _session(tmp_path)
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
     session.append_user_message("hi")
     response = asyncio.run(loop._complete_once(streaming=False))
     assert response.content == "ok"
 
 
-def test_unified_complete_once_streaming_mode_collects_events(tmp_path) -> None:
+def test_unified_complete_once_streaming_mode_collects_events(tmp_path, make_loop) -> None:
     provider = RecordingProvider()
     session = _session(tmp_path)
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
     session.append_user_message("hi")
     response = asyncio.run(loop._complete_once(streaming=True))
     assert response.content == "ok"
@@ -169,20 +168,20 @@ class IncompleteStreamProvider(RecordingProvider):
         yield ChatStreamEvent(kind="text_delta", text="partial")
 
 
-def test_unified_complete_once_stream_without_completed_rolls_back_events(tmp_path) -> None:
+def test_unified_complete_once_stream_without_completed_rolls_back_events(tmp_path, make_loop) -> None:
     session = _session(tmp_path)
-    loop = AgentLoop(session=session, provider=IncompleteStreamProvider())
+    loop = make_loop(session=session, provider=IncompleteStreamProvider())
     session.append_user_message("hi")
     with pytest.raises(ProviderError):
         asyncio.run(loop._complete_once(streaming=True))
     assert loop.last_stream_events == []
 
 
-def test_unified_recovery_retries_retryable_error_once_for_sync_mode(tmp_path) -> None:
+def test_unified_recovery_retries_retryable_error_once_for_sync_mode(tmp_path, make_loop) -> None:
     # 关键新行为（spec 4.3）：非流式也获得 retryable 重试
     base = RecordingProvider()
     session = _session(tmp_path)
-    loop = AgentLoop(session=session, provider=RetryableOnceProvider(base))
+    loop = make_loop(session=session, provider=RetryableOnceProvider(base))
     session.append_user_message("hi")
     response = asyncio.run(loop._complete_once_with_recovery(streaming=False))
     assert response.content == "ok"

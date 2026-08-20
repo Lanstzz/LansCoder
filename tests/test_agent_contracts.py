@@ -4,20 +4,27 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
+import subprocess
+import sys
+import typing
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
-from lanscoder.agent._builders import register_loop_tools
+from lanscoder.app.runtime import AgentChatRunner, create_agent_loop, register_loop_tools
 from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.guardrails import TurnGuardrails
 from lanscoder.agent.loop import AgentLoop
 from lanscoder.agent.loop_limits import _AgentLoopLimitReached, AgentLoopLimits
 from lanscoder.agent.mcp_activation import McpActivationTracker
+from lanscoder.agent.ports import SessionTurnRunner
 from lanscoder.agent.request_builder import PreparedMainRequest, RequestBuilder
 from lanscoder.agent.session import AgentSession
+from lanscoder.agent.subagent_engine import SubagentEngine
 from lanscoder.agent.tool_execution import ToolExecutionEvent, ToolExecutor
-from lanscoder.agent.user_input import AgentTurnStatus
+from lanscoder.agent.user_input import AgentTurnResult, AgentTurnStatus
 from lanscoder.context.context_builder import ContextBuilder
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.mcp.adapter import adapt_mcp_tool
@@ -34,8 +41,11 @@ from lanscoder.providers.types import (
     ToolCall,
     ToolDefinition,
 )
+from lanscoder.subagent.types import SubagentRunner
 from lanscoder.tools.ask_user import create_ask_user_tool
 from lanscoder.tools.types import Tool, ToolResult, make_text_result
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 @dataclass
@@ -120,7 +130,7 @@ def test_turn_guardrails_behavior() -> None:
         guardrails.check_timeout()
 
 
-def test_registry_complete_before_loop(tmp_path) -> None:
+def test_registry_complete_before_loop(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_registry_single_source", agents_md="")
     provider = FakeProvider()
@@ -142,15 +152,15 @@ def test_registry_complete_before_loop(tmp_path) -> None:
             request_options=MainRequestOptions(),
         )
 
-        # AgentLoop 构造之前，registry 已是单一工具源：caller + 后台控制 + delegate 全齐。
+        # 一阶段只注册 caller + 后台控制；delegate 由 create_agent_loop 二阶段（传入
+        # SubagentEngine）补注册，构造 AgentLoop 之前 registry 已是单一工具源。
         names = session.tool_registry.names()
-        for expected in ("caller_tool", "background_status", "background_cancel", "delegate"):
+        for expected in ("caller_tool", "background_status", "background_cancel"):
             assert expected in names
-        # runtime 通过 _current_tools() 喂入的每个工具，register_loop_tools 都已放入 registry。
-        for tool in [caller_tool]:
-            assert tool.name in names
+        assert "delegate" not in names
 
-        # 工具注册完全上移到组装根：构造 AgentLoop 期间 register 零新增。
+        # 工具注册完全上移到组装根：make_loop 经 create_agent_loop 只补 delegate，
+        # AgentLoop 构造本身 register 零新增。
         original_register = session.tool_registry.register
         register_calls: list[str] = []
 
@@ -159,8 +169,9 @@ def test_registry_complete_before_loop(tmp_path) -> None:
             return original_register(tool)
 
         session.tool_registry.register = _spy_register
-        AgentLoop(session=session, provider=provider)
-        assert register_calls == []
+        make_loop(session=session, provider=provider)
+        assert register_calls == ["delegate"]
+        assert "delegate" in session.tool_registry.names()
     finally:
         manager.shutdown()
 
@@ -275,7 +286,7 @@ def _echo_tool() -> Tool:
     )
 
 
-def test_observer_consumer_pipeline(tmp_path) -> None:
+def test_observer_consumer_pipeline(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
         store=store,
@@ -297,7 +308,7 @@ def test_observer_consumer_pipeline(tmp_path) -> None:
         ]
     )
     observer = _RecordingObserver()
-    loop = AgentLoop(session=session, provider=provider, observer=observer)
+    loop = make_loop(session=session, provider=provider, observer=observer)
 
     result = loop._run_user_turn_sync("echo")
 
@@ -330,13 +341,13 @@ def test_observer_consumer_pipeline(tmp_path) -> None:
             ChatResponse(provider="fake-seq", model="fake-seq-model", content="streamed"),
         ]
     )
-    stream_loop = AgentLoop(session=stream_session, provider=stream_provider, observer=observer)
+    stream_loop = make_loop(session=stream_session, provider=stream_provider, observer=observer)
     asyncio.run(stream_loop.run_user_turn("echo", streaming=True))
 
     assert any(isinstance(event, ChatStreamEvent) for event in observer.stream_events)
 
 
-def test_mcp_activation_tracker_turn_boundary(tmp_path) -> None:
+def test_mcp_activation_tracker_turn_boundary(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     caller = _ContractMcpCaller()
     session = AgentSession.create(
@@ -358,7 +369,7 @@ def test_mcp_activation_tracker_turn_boundary(tmp_path) -> None:
             ChatResponse(provider="fake-seq", model="fake-seq-model", content="second done"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     loop._run_user_turn_sync("Read issue 12")
     loop._run_user_turn_sync("Explain this local function")
@@ -368,7 +379,7 @@ def test_mcp_activation_tracker_turn_boundary(tmp_path) -> None:
     assert not any(name.startswith("mcp__") for name in next_turn_names)
 
 
-def test_resume_rebind_observers(tmp_path) -> None:
+def test_resume_rebind_observers(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
         store=store,
@@ -395,7 +406,7 @@ def test_resume_rebind_observers(tmp_path) -> None:
     old_tool: list[ToolExecutionEvent] = []
     new_stream: list[ChatStreamEvent] = []
     new_tool: list[ToolExecutionEvent] = []
-    loop = AgentLoop(
+    loop = make_loop(
         session=session,
         provider=provider,
         stream_event_handler=old_stream.append,
@@ -417,7 +428,7 @@ def test_resume_rebind_observers(tmp_path) -> None:
     assert new_stream
 
 
-def test_loop_tool_executor_attribute_contract(tmp_path) -> None:
+def test_loop_tool_executor_attribute_contract(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
         store=store,
@@ -425,7 +436,7 @@ def test_loop_tool_executor_attribute_contract(tmp_path) -> None:
         agents_md="",
     )
     provider = _SequenceProvider([ChatResponse(provider="fake-seq", model="fake-seq-model", content="hi")])
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     assert isinstance(loop.tool_executor, ToolExecutor)
     assert callable(loop.tool_executor.execute_interactive)
@@ -453,3 +464,96 @@ def test_mcp_activation_tracker_contract() -> None:
     tracker.clear()
     assert tracker.active_names == frozenset()
     assert tracker.validate(ToolCall(id="call_a_3", name="mcp__a", arguments={})) is not None
+
+
+def test_run_user_turn_contract_signature() -> None:
+    params = list(inspect.signature(AgentLoop.run_user_turn).parameters)
+    assert params == ["self", "content", "attachments", "streaming"]
+
+
+def test_session_turn_runner_protocol_contract(make_loop, tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_turn_runner_protocol", agents_md="")
+    loop = make_loop(session=session, provider=FakeProvider())
+
+    assert isinstance(loop, SessionTurnRunner)
+    assert "content" in inspect.signature(loop.run_user_turn).parameters
+
+
+def test_sync_facade_contract_signature() -> None:
+    assert list(inspect.signature(AgentLoop._run_user_turn_sync).parameters) == [
+        "self",
+        "content",
+        "attachments",
+    ]
+    assert list(inspect.signature(AgentLoop._run_nudge_turn_sync).parameters) == ["self"]
+    assert list(inspect.signature(AgentLoop._resume_with_user_input_sync).parameters) == [
+        "self",
+        "request_id",
+        "answer",
+    ]
+    for facade in (
+        AgentLoop._run_user_turn_sync,
+        AgentLoop._run_nudge_turn_sync,
+        AgentLoop._resume_with_user_input_sync,
+    ):
+        # loop.py 用 `from __future__ import annotations`，注解是字符串，
+        # 经 get_type_hints 求值后应是同一个 AgentTurnResult 类。
+        assert typing.get_type_hints(facade).get("return") is AgentTurnResult
+
+
+def test_subagent_engine_no_module_loop_import() -> None:
+    """Importing ``subagent_engine`` must not pull in ``agent.loop``.
+
+    The child loop is produced by the injected ``child_runner_factory``, so the
+    engine no longer lazily imports ``AgentLoop``. Asserted in a fresh
+    interpreter because this test module already imports both.
+    """
+
+    code = (
+        "import sys\n"
+        "import lanscoder.agent.subagent_engine\n"
+        "if 'lanscoder.agent.loop' in sys.modules:\n"
+        "    sys.stderr.write('agent.loop leaked: %r\\n' % [m for m in sys.modules if m == 'lanscoder.agent.loop'])\n"
+        "    raise SystemExit(1)\n"
+    )
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = str(PROJECT_ROOT) + (os.pathsep + existing if existing else "")
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        cwd=str(PROJECT_ROOT),
+        env=env,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_subagent_runner_protocol_contract(tmp_path) -> None:
+    provider = FakeProvider()
+    engine = SubagentEngine(
+        store=JsonlSessionStore(tmp_path),
+        provider=provider,
+        tools=[],
+        child_runner_factory=lambda **kwargs: None,
+    )
+
+    assert isinstance(engine, SubagentRunner)
+    assert engine.foreground_progress is None
+
+
+def test_make_loop_uses_production_constructor(make_loop, tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_make_loop_prod", agents_md="")
+    loop = make_loop(session=session, provider=FakeProvider())
+
+    assert isinstance(loop, AgentLoop)
+    assert loop.request_builder is not None
+    assert loop.guardrails is not None
+    assert loop._observer is not None
+    assert loop.tool_executor is not None
+    assert loop._mcp_activation is not None
+    # AgentChatRunner 的 per-turn loop 工厂与组装根 create_agent_loop 同源。
+    assert inspect.getmodule(AgentChatRunner._create_loop) is inspect.getmodule(create_agent_loop)

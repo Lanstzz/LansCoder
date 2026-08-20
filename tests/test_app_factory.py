@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from lanscoder.agent._builders import create_agent_loop
+from lanscoder.app.runtime import create_agent_loop
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.session import AgentSession
 from lanscoder.app.factory import create_lanscoder_app

@@ -3,8 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from lanscoder.app.factory import create_lanscoder_app
-from lanscoder.agent._builders import create_agent_loop
-from lanscoder.agent.loop import AgentLoop
+from lanscoder.app.runtime import create_agent_loop
 from lanscoder.agent.session import AgentSession
 from lanscoder.context.llm_compact import LlmCompactService
 from lanscoder.context.manager import ContextWindowManager
@@ -48,12 +47,12 @@ class FakeProvider(ChatProvider):
         return response
 
 
-def test_agent_single_turn_e2e_writes_and_rebuilds_session(tmp_path) -> None:
+def test_agent_single_turn_e2e_writes_and_rebuilds_session(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_e2e", agents_md="项目规则")
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="收到")])
 
-    response = AgentLoop(session=session, provider=provider)._run_user_turn_sync("你好")
+    response = make_loop(session=session, provider=provider)._run_user_turn_sync("你好")
 
     assert response.content == "收到"
     assert len(provider.requests) == 1
@@ -113,16 +112,16 @@ def test_agent_tool_call_e2e_uses_real_view_tool_and_persists_result(tmp_path) -
     assert view.messages[2].parts[0].metadata["ok"] is True
 
 
-def test_agent_resume_e2e_replays_history_and_continues_turn(tmp_path) -> None:
+def test_agent_resume_e2e_replays_history_and_continues_turn(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     original = AgentSession.create(store=store, session_id="sess_e2e", agents_md="规则")
     first_provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="第一轮回复")])
 
-    AgentLoop(session=original, provider=first_provider)._run_user_turn_sync("第一轮")
+    make_loop(session=original, provider=first_provider)._run_user_turn_sync("第一轮")
 
     resumed = AgentSession.resume(store=store, session_id="sess_e2e", agents_md="规则")
     second_provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="第二轮回复")])
-    response = AgentLoop(session=resumed, provider=second_provider)._run_user_turn_sync("第二轮")
+    response = make_loop(session=resumed, provider=second_provider)._run_user_turn_sync("第二轮")
 
     assert response.content == "第二轮回复"
     assert len(second_provider.requests) == 1
@@ -201,13 +200,13 @@ def test_app_user_flow_e2e_reads_file_renames_shares_resumes_and_continues(tmp_p
     assert provider.requests[-1].messages[-1].content.endswith("继续")
 
 
-def test_prompt_too_long_e2e_writes_l3_checkpoint_and_retries_with_summary(tmp_path) -> None:
+def test_prompt_too_long_e2e_writes_l3_checkpoint_and_retries_with_summary(tmp_path, make_loop) -> None:
     """模拟上下文过长后的 L3 摘要恢复链路。"""
 
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_prompt_retry", agents_md="规则")
     seed_provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="旧回复")])
-    AgentLoop(session=session, provider=seed_provider)._run_user_turn_sync("旧问题")
+    make_loop(session=session, provider=seed_provider)._run_user_turn_sync("旧问题")
 
     provider = FakeProvider(
         [
@@ -225,7 +224,7 @@ def test_prompt_too_long_e2e_writes_l3_checkpoint_and_retries_with_summary(tmp_p
         ),
     )
 
-    response = AgentLoop(
+    response = make_loop(
         session=session,
         provider=provider,
         context_manager=context_manager,
@@ -291,11 +290,11 @@ def _echo_tool(*, output: str) -> Tool:
     )
 
 
-def test_auto_token_threshold_e2e_writes_compaction_and_checkpoint(tmp_path) -> None:
+def test_auto_token_threshold_e2e_writes_compaction_and_checkpoint(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_auto_token", agents_md="")
     seed = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="旧回复")])
-    AgentLoop(session=session, provider=seed)._run_user_turn_sync("旧问题")
+    make_loop(session=session, provider=seed)._run_user_turn_sync("旧问题")
     provider = FakeProvider(
         [
             ChatResponse(provider="fake", model="fake-model", content="自动压缩摘要"),
@@ -304,7 +303,7 @@ def test_auto_token_threshold_e2e_writes_compaction_and_checkpoint(tmp_path) -> 
         ]
     )
 
-    response = AgentLoop(
+    response = make_loop(
         session=session,
         provider=provider,
         context_manager=_compact_manager(store, provider, reason="token_threshold"),
@@ -383,18 +382,18 @@ def test_auto_large_turn_tool_results_do_not_bypass_dynamic_watermark(tmp_path) 
     assert _checkpoint_events(store, "sess_turn_tools") == []
 
 
-def test_auto_tail_message_count_does_not_bypass_dynamic_watermark(tmp_path) -> None:
+def test_auto_tail_message_count_does_not_bypass_dynamic_watermark(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_tail_count", agents_md="")
     seed = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="旧回复")])
-    AgentLoop(session=session, provider=seed)._run_user_turn_sync("旧问题")
+    make_loop(session=session, provider=seed)._run_user_turn_sync("旧问题")
     provider = FakeProvider(
         [
             ChatResponse(provider="fake", model="fake-model", content="完成"),
         ]
     )
 
-    response = AgentLoop(
+    response = make_loop(
         session=session,
         provider=provider,
         context_manager=_compact_manager(store, provider, reason="tail_message_count"),

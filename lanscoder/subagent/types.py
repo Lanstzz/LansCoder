@@ -10,7 +10,7 @@ and the tools layer builds the delegate tool against them. The module has no
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, runtime_checkable
 
 SubagentRole = Literal["researcher", "reviewer", "tester", "coder"]
 
@@ -126,13 +126,19 @@ def role_requires_worktree(role: str) -> bool:
     return bool(profile and profile.requires_worktree)
 
 
+@runtime_checkable
 class SubagentRunner(Protocol):
     """The runner surface the delegate tool depends on.
 
-    The concrete implementation lives in ``lanscoder.agent.subagent`` and is
-    injected into the delegate tool at construction time. The delegate only
-    relies on this protocol, so the tools layer never imports the agent layer.
+    The concrete implementation lives in ``lanscoder.agent.subagent_engine``
+    and is injected into the delegate tool at construction time. The delegate
+    only relies on this protocol, so the tools layer never imports the agent
+    layer. ``foreground_progress`` is the live progress dict of a foreground
+    subagent (``None`` when none is running); the TUI reads it to render an
+    activity line under the input bar.
     """
+
+    foreground_progress: dict[str, Any] | None
 
     def profile(self, role: str) -> SubagentProfile | None: ...
 

@@ -26,6 +26,7 @@ from lanscoder.utils.text import ellipsis_truncate
 import asyncio
 import json
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -34,12 +35,16 @@ import anyio
 
 from lanscoder.runtime.cancellation import CancellationToken
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
-from lanscoder.agent._builders import create_agent_loop
+from lanscoder.agent.background import DEFAULT_BACKGROUND_TOOL_NAMES, BackgroundJobManager
+from lanscoder.agent.guardrails import TurnGuardrails
 from lanscoder.agent.loop import AgentLoop, ToolExecutionEvent
-from lanscoder.agent.request_builder import RequestBuilder
-from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.loop_limits import AgentLoopLimits
+from lanscoder.agent.mcp_activation import McpActivationTracker
+from lanscoder.agent.observer import TurnObserver
+from lanscoder.agent.request_builder import RequestBuilder
 from lanscoder.agent.session import AgentSession
+from lanscoder.agent.subagent_engine import SubagentEngine
+from lanscoder.agent.tool_execution import ToolExecutor
 from lanscoder.agent.user_input import AgentTurnStatus
 from lanscoder.runtime.user_input import UserInputRequest
 from lanscoder.context.context_builder import ContextBuilder
@@ -48,7 +53,174 @@ from lanscoder.context.runtime_state import SessionRuntimeState
 from lanscoder.permissions.types import PermissionMode
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import ChatResponse, ChatStreamEvent, MainRequestOptions
+from lanscoder.tools.background import (
+    create_background_cancel_tool,
+    create_background_status_tool,
+)
+from lanscoder.tools.delegate import create_delegate_tool
 from lanscoder.tools.types import Tool
+
+
+# ----------------------------------------------------------------------------
+# 组装根 (assembly root)：create_agent_loop / register_loop_tools
+# ----------------------------------------------------------------------------
+# AgentLoop 的所有协作对象（request_builder / guardrails / observer / mcp_activation /
+# tool_executor / SubagentEngine / delegate tool）都在这里构造并注入，AgentLoop 构造不再
+# 带任何兜底。child_runner_factory 把子 agent 的 child session 交给同一组装根，因此
+# SubagentEngine 不需要 import lanscoder.agent.loop（打破历史 import 环）。
+def register_loop_tools(
+    session,
+    *,
+    caller_tools,
+    background_manager,
+    provider,
+    request_options,
+    subagent_runner=None,
+) -> SubagentEngine | None:
+    """在组装根注册 caller / 后台控制工具；subagent_runner 非空时补注册 delegate。
+
+    ``AgentLoop`` 构造时不再注册任何工具，registry 是唯一的工具来源。同名工具跳过注册
+    （去重）；delegate 只在 ``subagent_runner`` 显式传入时注册（由组装根传入已构造的
+    SubagentEngine），其 child 工具快照不含 delegate，防止递归委托。
+    """
+
+    registry = session.tool_registry
+    for tool in caller_tools or []:
+        if tool.name not in registry.names():
+            registry.register(tool)
+    if background_manager is not None:
+        if "background_status" not in registry.names():
+            registry.register(create_background_status_tool(background_manager, session_id=session.session_id))
+        if "background_cancel" not in registry.names():
+            registry.register(create_background_cancel_tool(background_manager, session_id=session.session_id))
+    if subagent_runner is not None and "delegate" not in registry.names():
+        registry.register(create_delegate_tool(subagent_runner, parent_session_id=session.session_id))
+    return subagent_runner
+
+
+def create_agent_loop(
+    *,
+    session,
+    provider,
+    context_builder=None,
+    context_manager=None,
+    limits=None,
+    request_options=None,
+    context_window=None,
+    background_manager=None,
+    background_tool_names=None,
+    guidance_provider=None,
+    cancellation_token=None,
+    stream_event_handler=None,
+    tool_event_handler=None,
+    enable_delegate_tool=True,
+    **_,
+) -> AgentLoop:
+    """全协作对象构造注入：AgentLoop 的唯一构造路径。
+
+    ``tools``（仅用于注册，不回传 loop）与可选注入的 ``observer``/``clock`` 经
+    ``**_`` 捕获。子 loop（child_runner_factory 路径）显式传入 observer，组装根直接
+    复用而不新建，保证子 agent 的进度仍按 SubagentEngine 的分流走。
+    """
+
+    tools = _.pop("tools", None)
+    observer = _.pop("observer", None)
+    clock = _.pop("clock", None)
+
+    register_loop_tools(
+        session,
+        caller_tools=tools,
+        background_manager=background_manager,
+        provider=provider,
+        request_options=request_options,
+    )
+
+    def _child_runner_factory(*, session, tools, observer, cancellation_token):
+        return create_agent_loop(
+            session=session,
+            provider=provider,
+            tools=tools,
+            observer=observer,
+            cancellation_token=cancellation_token,
+            background_manager=None,
+            enable_delegate_tool=False,
+        )
+
+    project_root = session.permission_manager.policy.project_root if session.permission_manager is not None else None
+    engine = SubagentEngine(
+        store=session.store,
+        provider=provider,
+        tools=session.tool_registry.tools(),
+        project_root=project_root,
+        agents_md=session.agents_md,
+        skill_catalog=session.skill_catalog,
+        permission_manager=session.permission_manager,
+        sandbox_access=session.sandbox_access,
+        request_options=request_options,
+        limits=limits,
+        background_manager=background_manager,
+        child_runner_factory=_child_runner_factory,
+    )
+    if enable_delegate_tool:
+        register_loop_tools(
+            session,
+            caller_tools=None,
+            background_manager=None,
+            provider=provider,
+            request_options=request_options,
+            subagent_runner=engine,
+        )
+
+    request_builder = RequestBuilder(
+        session=session,
+        provider=provider,
+        context_builder=context_builder or ContextBuilder(),
+        request_options=request_options or MainRequestOptions(),
+        context_window=context_window,
+    )
+    mcp_activation = McpActivationTracker(frozenset(name for name in session.tool_registry.names() if name.startswith("mcp__")))
+    if observer is None:
+        observer = TurnObserver(
+            stream_event_handler=stream_event_handler,
+            tool_event_handler=tool_event_handler,
+            foreground_progress_provider=lambda: engine.foreground_progress,
+        )
+    if background_tool_names is None:
+        background_tool_names = DEFAULT_BACKGROUND_TOOL_NAMES
+    tool_executor = ToolExecutor(
+        session=session,
+        event_sink=observer,
+        cancellation_token=cancellation_token,
+        validate_tool_call=mcp_activation.validate,
+        observe_tool_result=mcp_activation.observe,
+        background_manager=background_manager,
+        background_tool_names=background_tool_names,
+    )
+    guardrails = TurnGuardrails(
+        provider=provider,
+        limits=limits or AgentLoopLimits.default(),
+        clock=clock or time.monotonic,
+    )
+    return AgentLoop(
+        session=session,
+        provider=provider,
+        context_builder=context_builder,
+        context_manager=context_manager,
+        limits=limits,
+        request_options=request_options,
+        context_window=context_window,
+        request_builder=request_builder,
+        guardrails=guardrails,
+        observer=observer,
+        mcp_activation=mcp_activation,
+        tool_executor=tool_executor,
+        background_manager=background_manager,
+        background_tool_names=background_tool_names,
+        guidance_provider=guidance_provider,
+        cancellation_token=cancellation_token,
+        stream_event_handler=stream_event_handler,
+        tool_event_handler=tool_event_handler,
+    )
 
 
 # ----------------------------------------------------------------------------
@@ -435,7 +607,7 @@ class AgentChatRunner:
     def foreground_subagent(self) -> dict[str, Any] | None:
         """当前前台 delegate 子 agent 的实时进度（无则 None），供 TUI 渲染。"""
         for loop in self.loops:
-            info = loop.foreground_subagent()
+            info = loop.foreground_progress()
             if info is not None:
                 return info
         return None

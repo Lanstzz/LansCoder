@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 
 from lanscoder.agent.session import AgentSession
-from lanscoder.agent.loop import AgentLoop
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.events import SessionEvent
 from lanscoder.context.writer import SessionEventWriter
@@ -231,7 +230,7 @@ def test_resume_service_keeps_permission_wrapper_for_project_tools(tmp_path: Pat
     assert not (tmp_path / "README.md").exists()
 
 
-def test_resume_service_restores_pending_permission_confirmation(tmp_path: Path) -> None:
+def test_resume_service_restores_pending_permission_confirmation(tmp_path: Path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     original = AgentSession.from_project(
         store=store,
@@ -257,7 +256,7 @@ def test_resume_service_restores_pending_permission_confirmation(tmp_path: Path)
         ]
     )
 
-    pending = AgentLoop(session=original, provider=provider)._run_user_turn_sync("写 README")
+    pending = make_loop(session=original, provider=provider)._run_user_turn_sync("写 README")
     assert pending.pending_input is not None
     result = ResumeService(
         store=store,
@@ -278,7 +277,7 @@ def test_resume_service_restores_pending_permission_confirmation(tmp_path: Path)
     assert "+hello" in restored_input.payload["prewrite_review"]["files"][0]["diff"]
 
 
-def test_resume_service_restores_pending_permission_even_after_grant_exists(tmp_path: Path) -> None:
+def test_resume_service_restores_pending_permission_even_after_grant_exists(tmp_path: Path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     original = AgentSession.from_project(
         store=store,
@@ -304,7 +303,7 @@ def test_resume_service_restores_pending_permission_even_after_grant_exists(tmp_
         ]
     )
 
-    pending = AgentLoop(session=original, provider=provider)._run_user_turn_sync("写 README")
+    pending = make_loop(session=original, provider=provider)._run_user_turn_sync("写 README")
     assert pending.pending_input is not None
     original.permission_manager.resolve_confirmation(
         original.pending_permission_execution.permission_request,
