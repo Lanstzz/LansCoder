@@ -1,3 +1,5 @@
+"""MCP 管理器:管理 MCP 服务器的连接生命周期、工具目录与跨线程调用,运行在独立事件循环线程。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -17,6 +19,7 @@ McpServerConfig = McpLocalServerConfig | McpRemoteServerConfig
 
 
 class McpManager:
+    """管理 MCP 服务器:连接/重连/关闭,维护状态与工具目录,支持跨线程调用工具。"""
 
     def __init__(
         self,
@@ -39,10 +42,12 @@ class McpManager:
         self._thread = threading.Thread(target=self._run_loop, name="lanscoder-mcp", daemon=True)
         self._thread.start()
         self._closed = False
+        """启动独立事件循环线程并初始化各服务器的初始状态。"""
         self._connection_thread: threading.Thread | None = None
         self._pending_futures: set[Future[object]] = set()
 
     def connect_all(self) -> None:
+        """同步连接全部启用的服务器(并行线程并等待全部完成)。"""
 
         workers = [threading.Thread(target=self._connect_one, args=(config,), daemon=True) for config in self._configs.values() if config.enabled]
         for config in self._configs.values():
@@ -54,6 +59,7 @@ class McpManager:
             worker.join()
 
     def connect_all_in_background(self) -> None:
+        """在后台线程里连接全部启用的服务器。"""
 
         with self._lock:
             if self._connection_thread is not None and self._connection_thread.is_alive():
@@ -69,6 +75,7 @@ class McpManager:
             self._connection_thread.start()
 
     def reconnect(self, name: str | None = None) -> bool:
+        """重新连接指定或全部启用的服务器。"""
 
         with self._lock:
             if self._closed:
@@ -90,6 +97,7 @@ class McpManager:
         return True
 
     def statuses(self) -> tuple[McpServerStatus, ...]:
+        """返回全部服务器的状态。"""
 
         with self._lock:
             return tuple(self._statuses[name] for name in self._configs)
@@ -100,11 +108,13 @@ class McpManager:
             return self._statuses.get(name)
 
     def tools(self) -> tuple[tuple[str, McpToolDescription], ...]:
+        """返回全部服务器发现到的工具(服务器名 + 工具描述)。"""
 
         with self._lock:
             return tuple((name, tool) for name in self._configs for tool in self._catalogs.get(name, ()))
 
     def call_tool(self, server: str, tool: str, arguments: dict[str, object]) -> object:
+        """调用指定服务器的工具,超时与失败统一转 RuntimeError。"""
 
         with self._lock:
             config = self._configs.get(server)
@@ -120,6 +130,7 @@ class McpManager:
             raise RuntimeError("MCP 工具调用失败") from error
 
     def close(self) -> None:
+        """关闭全部传输、取消待处理任务并停止事件循环线程。"""
 
         with self._lock:
             if self._closed:
@@ -144,6 +155,7 @@ class McpManager:
         self._thread.join(timeout=1)
 
     def _connect_one(self, config: McpServerConfig) -> None:
+        """连接单个服务器,带重试与状态更新。"""
         self._set_status(config.name, "connecting")
         for attempt in range(self._retry_attempts):
             if self._closed:
@@ -171,6 +183,7 @@ class McpManager:
         self._set_status(config.name, "failed", error=error)
 
     def _reconnect_one(self, config: McpServerConfig) -> None:
+        """先关闭旧传输,再重连单个服务器。"""
 
         with self._lock:
             transport = self._transports.pop(config.name, None)
@@ -183,6 +196,7 @@ class McpManager:
         self._connect_one(config)
 
     async def _initialize(self, transport: McpTransport) -> tuple[McpToolDescription, ...]:
+        """异步连接并枚举服务器工具,失败时关闭传输。"""
         try:
             await transport.connect()
             return await transport.list_tools()
@@ -191,6 +205,7 @@ class McpManager:
             raise
 
     def _resolve_config(self, config: McpServerConfig) -> McpServerConfig:
+        """把配置里的环境变量占位符解析为实际值。"""
         if isinstance(config, McpLocalServerConfig):
             return replace(
                 config,
@@ -218,6 +233,7 @@ class McpManager:
             self._statuses[name] = McpServerStatus(name, state, tool_count, error)
 
     def _submit(self, coroutine: Coroutine[object, object, object], timeout_ms: int) -> object:
+        """把协程提交到 MCP 事件循环并等待结果,带超时与取消。"""
         future: Future[object] = asyncio.run_coroutine_threadsafe(self._with_timeout(coroutine, timeout_ms), self._loop)
         with self._lock:
             self._pending_futures.add(future)
@@ -235,6 +251,7 @@ class McpManager:
 
     @staticmethod
     def _allowed_tools(config: McpServerConfig, tools: tuple[McpToolDescription, ...]) -> tuple[McpToolDescription, ...]:
+        """按 allowed_tools 通配模式过滤工具。"""
         if config.allowed_tools is None:
             return tools
         return tuple(tool for tool in tools if any(fnmatch.fnmatchcase(tool.name, pattern) for pattern in config.allowed_tools))

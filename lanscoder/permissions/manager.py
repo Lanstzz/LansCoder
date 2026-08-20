@@ -1,3 +1,5 @@
+"""权限管理器:预检权限请求、构造确认/预写审查确认,并把用户选择解析为授权决定与长期授权。"""
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -22,6 +24,7 @@ from lanscoder.permissions.types import (
 
 
 class PermissionManager:
+    """权限管理器:结合授权存储与策略做预检,构造确认 UI,并把用户选择解析为决定。"""
 
     def __init__(
         self,
@@ -31,12 +34,14 @@ class PermissionManager:
         mode: PermissionMode = PermissionMode.STANDARD,
         autonomous: bool = False,
     ) -> None:
+        """注入策略、授权存储与权限模式。"""
         self.policy = policy
         self.grants = grants or PermissionGrantStore()
         self.mode = mode
         self.autonomous = autonomous
 
     def preflight(self, request: PermissionRequest) -> PermissionDecision:
+        """预检请求:授权命中则直接用,否则交策略决策;后台自动模式拒绝需确认的请求。"""
         request = self.normalize_request(request)
         grant_decision = self.grants.matching_decision(request)
         if grant_decision is not None:
@@ -50,6 +55,7 @@ class PermissionManager:
         return decision
 
     def build_confirmation(self, request: PermissionRequest) -> UserInputRequest:
+        """构造权限确认的用户输入请求(含 deny/allow once/长期授权选项)。"""
 
         request = self.normalize_request(request)
         scope = default_scope_for_request(request, project_root=self.policy.project_root)
@@ -86,6 +92,7 @@ class PermissionManager:
         )
 
     def build_prewrite_review_confirmation(self, request: PermissionRequest) -> UserInputRequest:
+        """构造预写审查确认(应用已预览的本地修改)。"""
 
         request = self.normalize_request(request)
         return UserInputRequest(
@@ -107,6 +114,7 @@ class PermissionManager:
         )
 
     def resolve_confirmation(self, request: PermissionRequest, choice: str) -> PermissionDecision:
+        """把用户选择解析为决定;允许时可选写入长期授权。"""
 
         request = self.normalize_request(request)
         normalized, feedback = _normalize_choice(choice)
@@ -167,6 +175,7 @@ class PermissionManager:
         )
 
     def _confirmation_guard(self, request: PermissionRequest) -> PermissionDecision | None:
+        """确认前的二次守卫:授权或策略已给出明确结论时直接返回。"""
 
         grant_decision = self.grants.matching_decision(request)
         if grant_decision is not None:
@@ -178,6 +187,7 @@ class PermissionManager:
         return None
 
     def normalize_request(self, request: PermissionRequest) -> PermissionRequest:
+        """规范化请求:相对 cwd 解析为绝对,路径类请求补默认 cwd。"""
 
         if request.cwd is not None:
             if request.cwd.is_absolute():
@@ -193,12 +203,15 @@ class PermissionManager:
 
 
 class _PermissionScope:
+    """权限范围(类型 + 值),用于长期授权的粒度。"""
+
     def __init__(self, *, scope_type: PermissionScopeType, scope_value: str) -> None:
         self.scope_type = scope_type
         self.scope_value = scope_value
 
 
 def default_scope_for_request(request: PermissionRequest, *, project_root: Path | None = None) -> _PermissionScope:
+    """按请求动作推导默认的权限范围。"""
 
     if request.action in {
         PermissionAction.READ_PATH,
@@ -226,6 +239,7 @@ def default_scope_for_request(request: PermissionRequest, *, project_root: Path 
 
 
 def _path_scope_value(request: PermissionRequest, *, project_root: Path | None) -> str:
+    """把路径目标解析为绝对路径作为范围值。"""
     path = Path(request.target)
     if not path.is_absolute():
         path = (request.cwd or project_root or Path.cwd()) / path
@@ -233,6 +247,7 @@ def _path_scope_value(request: PermissionRequest, *, project_root: Path | None) 
 
 
 def _command_prefix(command: str) -> str:
+    """提取命令前缀(git 命令取前两个词)。"""
     parts = command.strip().split()
     if not parts:
         return ""
@@ -242,31 +257,37 @@ def _command_prefix(command: str) -> str:
 
 
 def _shell_command_scope(command: str) -> str:
+    """shell 范围取整条命令。"""
 
     return command.strip()
 
 
 def _git_command_scope(command: str) -> str:
+    """git 范围取命令前缀。"""
 
     return _command_prefix(command)
 
 
 def _host_scope_value(target: str) -> str:
+    """从 URL 提取 host 作为网络请求的范围值。"""
     parsed = urlparse(target)
     host = parsed.hostname or target.split("/", 1)[0].split(":", 1)[0]
     return host.rstrip(".").lower()
 
 
 def _question_for_request(request: PermissionRequest) -> str:
+    """构造权限确认的问题文本。"""
     reason = f"\n原因：{request.reason}" if request.reason else ""
     return f"允许执行权限操作 `{request.action.value}` 吗？\n目标：{request.target}{reason}"
 
 
 def _allow_always_enabled(request: PermissionRequest) -> bool:
+    """请求元数据是否允许长期授权。"""
     return bool(request.metadata.get("allow_always", True))
 
 
 def _normalize_choice(choice: str) -> tuple[PermissionConfirmationChoice | None, str]:
+    """规范化用户选择文本,支持带反馈的拒绝。"""
     normalized = choice.strip().lower()
     for prefix in ("reject_with_feedback:", "reject:"):
         if normalized.startswith(prefix):

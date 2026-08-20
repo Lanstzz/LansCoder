@@ -1,3 +1,5 @@
+"""默认权限策略:按动作与模式决定权限请求,内置路径/环境变量/git/shell/网络的安全规则。"""
+
 from __future__ import annotations
 
 import re
@@ -50,11 +52,13 @@ _SHELL_CONTROL_PATTERN = re.compile(r"(&&|\|\||\$\(|[;&|<>`\r\n])")
 
 
 class DefaultPermissionPolicy:
+    """默认权限策略:按请求动作与权限模式给出 allow/ask/deny 决定。"""
 
     def __init__(self, project_root: str | Path) -> None:
         self.project_root = Path(project_root).resolve()
 
     def decide(self, request: PermissionRequest, *, mode: PermissionMode) -> PermissionDecision:
+        """按动作分派决策:路径/环境变量/git/shell/网络/MCP 工具。"""
         if mode == PermissionMode.BYPASS:
             return self._allow("bypass 模式允许权限请求。")
         if request.action in {
@@ -78,6 +82,7 @@ class DefaultPermissionPolicy:
         return self._ask("未知权限请求需要用户确认。")
 
     def _decide_path(self, request: PermissionRequest, *, mode: PermissionMode) -> PermissionDecision:
+        """路径决策:按项目内外、敏感性与写入选型给出结论。"""
         targets = self._resolve_paths(request.target, cwd=request.cwd)
         inside_root = all(self._is_inside_project(target) for target in targets)
         sensitive = any(self._is_sensitive_path(target) for target in targets)
@@ -106,12 +111,14 @@ class DefaultPermissionPolicy:
         return self._ask("路径操作需要用户确认。")
 
     def _decide_env(self, request: PermissionRequest) -> PermissionDecision:
+        """环境变量决策:命中敏感关键字时拒绝读取。"""
         key = request.target.upper()
         if any(keyword in key for keyword in _SENSITIVE_ENV_KEYWORDS):
             return self._deny("拒绝读取或展示敏感环境变量明文。")
         return self._ask("读取环境变量需要用户确认。")
 
     def _decide_git(self, request: PermissionRequest) -> PermissionDecision:
+        """git 决策:项目内只读命令放行,含 shell 控制符需确认。"""
         command = request.target.strip()
         if _has_shell_control_operator(command):
             return self._ask("包含 shell 控制符的 git 操作需要用户确认。")
@@ -121,6 +128,7 @@ class DefaultPermissionPolicy:
         return self._ask("git 操作需要用户确认。")
 
     def _decide_shell(self, request: PermissionRequest, *, mode: PermissionMode) -> PermissionDecision:
+        """shell 决策:激进模式下项目内常见验证命令放行,高风险命令需确认。"""
         command = request.target.strip()
         if _has_shell_control_operator(command):
             return self._ask("包含 shell 控制符的命令需要用户确认。")
@@ -140,19 +148,23 @@ class DefaultPermissionPolicy:
         return path.resolve()
 
     def _resolve_paths(self, value: str, *, cwd: Path | None) -> list[Path]:
+        """把目标解析为路径列表(支持多行/逗号分隔)。"""
         values = [part.strip() for part in value.splitlines() if part.strip()]
         if not values:
             values = [part.strip() for part in value.split(", ") if part.strip()]
         return [self._resolve_path(part, cwd=cwd) for part in values or [value]]
 
     def _is_inside_project(self, path: Path) -> bool:
+        """路径是否位于项目根目录内。"""
         return path == self.project_root or self.project_root in path.parents
 
     def _request_cwd_inside_root(self, request: PermissionRequest) -> bool:
+        """请求的 cwd 是否位于项目根目录内。"""
         cwd = (request.cwd or self.project_root).resolve()
         return cwd == self.project_root or self.project_root in cwd.parents
 
     def _is_sensitive_path(self, path: Path) -> bool:
+        """路径是否敏感(.git、.env、私钥后缀)。"""
         relative_parts = []
         try:
             relative_parts = list(path.relative_to(self.project_root).parts)
@@ -176,24 +188,29 @@ class DefaultPermissionPolicy:
 
 
 def _command_matches_prefix(command: str, prefix: str) -> bool:
+    """命令是否匹配给定前缀。"""
     command = command.strip()
     prefix = prefix.strip()
     return bool(prefix) and (command == prefix or command.startswith(prefix + " "))
 
 
 def _is_aggressive_allowed_shell_command(command: str) -> bool:
+    """是否为激进模式放行的常见验证命令。"""
     return any(_command_matches_prefix(command, prefix) for prefix in _AGGRESSIVE_ALLOWED_COMMANDS)
 
 
 def _is_dangerous_shell_command(command: str) -> bool:
+    """是否为高风险 shell 命令前缀。"""
     return any(_command_matches_prefix(command, prefix) for prefix in _DANGEROUS_SHELL_PREFIXES)
 
 
 def _has_shell_control_operator(command: str) -> bool:
+    """命令是否含 shell 控制符(&&、|、$()、重定向等)。"""
     return bool(_SHELL_CONTROL_PATTERN.search(command))
 
 
 def _is_private_network_target(target: str) -> bool:
+    """目标是否为本机、内网或链路本地地址。"""
     parsed = urlparse(target)
     hostname = parsed.hostname or target.split("/", 1)[0].split(":", 1)[0]
     hostname = hostname.rstrip(".").lower()

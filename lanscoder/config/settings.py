@@ -1,3 +1,5 @@
+"""配置加载:从全局与项目 TOML 合并出 AppConfig,支持环境变量与默认路径。"""
+
 from __future__ import annotations
 
 import os
@@ -14,6 +16,7 @@ PROJECT_CONFIG_NAME = "lanscoder.toml"
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
+    """合并后的应用配置:环境快照、全局/项目 TOML 与已读取的配置路径。"""
 
     env: dict[str, str]
     project_config: dict[str, Any] | None = None
@@ -22,6 +25,7 @@ class AppConfig:
     global_config_path: Path | None = None
 
     def get_env(self, name: str, default: str | None = None) -> str | None:
+        """读取环境变量。"""
 
         return self.env.get(name, default)
 
@@ -33,6 +37,7 @@ class AppConfig:
         default: bool | None = None,
         provider_name: str,
     ) -> bool | None:
+        """按 环境变量 → provider 配置 → 默认值 的顺序取布尔配置。"""
 
         if env:
             env_value = self.get_env(env)
@@ -44,6 +49,7 @@ class AppConfig:
         return default
 
     def get_config_value(self, name: str, *, default: str | None = None) -> str | None:
+        """取字符串配置值(项目优先于全局)。"""
 
         for config in (self.project_config, self.global_config):
             value = _string_value(config, name)
@@ -52,6 +58,7 @@ class AppConfig:
         return default
 
     def mcp_config(self) -> dict[str, Any]:
+        """合并全局与项目的 MCP 服务器配置(项目覆盖全局)。"""
 
         merged: dict[str, Any] = {}
         for config in (self.global_config, self.project_config):
@@ -65,6 +72,7 @@ class AppConfig:
         return merged
 
     def model_catalog(self) -> ModelCatalog:
+        """从全局与项目配置构建模型目录。"""
 
         return build_model_catalog(
             global_config=self.global_config,
@@ -73,6 +81,7 @@ class AppConfig:
 
     @property
     def loaded_config_paths(self) -> list[Path]:
+        """返回实际读取到的配置文件路径。"""
 
         return [path for path in (self.global_config_path, self.project_config_path) if path is not None]
 
@@ -82,6 +91,7 @@ class AppConfig:
         *,
         provider_name: str | None,
     ) -> Any | None:
+        """从项目/全局配置读取指定 provider 的原始值。"""
         for config in (self.project_config, self.global_config):
             value = _provider_raw_value(config, name, provider_name=provider_name)
             if value is not None:
@@ -94,6 +104,7 @@ def load_config(
     project_root: Path | str | None = None,
     env: dict[str, str] | None = None,
 ) -> AppConfig:
+    """加载全局与项目 TOML 配置,返回合并后的 AppConfig。"""
 
     env_snapshot = dict(os.environ if env is None else env)
     root = Path(project_root or os.getcwd()).resolve()
@@ -112,6 +123,7 @@ def load_config(
 
 
 def default_global_config_path() -> Path:
+    """返回全局配置路径(优先 XDG_CONFIG_HOME)。"""
 
     config_home = os.getenv("XDG_CONFIG_HOME")
     if config_home:
@@ -120,11 +132,13 @@ def default_global_config_path() -> Path:
 
 
 def project_config_path(project_root: Path | str | None = None) -> Path:
+    """返回项目配置文件的路径。"""
 
     return Path(project_root or os.getcwd()).resolve() / PROJECT_CONFIG_NAME
 
 
 def render_default_config() -> str:
+    """渲染一份起始全局配置文件文本。"""
 
     return "\n".join(
         [
@@ -152,6 +166,7 @@ def render_default_config() -> str:
 
 
 def _read_toml_file(path: Path) -> dict[str, Any] | None:
+    """读取 TOML 文件,文件不存在时返回 None。"""
     if not path.exists():
         return None
     with path.open("rb") as handle:
@@ -160,6 +175,7 @@ def _read_toml_file(path: Path) -> dict[str, Any] | None:
 
 
 def _provider_raw_value(config: dict[str, Any] | None, name: str, *, provider_name: str | None) -> Any | None:
+    """从配置中读取指定 provider 的原始配置值。"""
     if not config or not provider_name:
         return None
     providers = config.get("providers")
@@ -170,6 +186,7 @@ def _provider_raw_value(config: dict[str, Any] | None, name: str, *, provider_na
 
 
 def _string_value(config: dict[str, Any] | None, name: str) -> str | None:
+    """读取字符串配置值。"""
     if not config:
         return None
     value = config.get(name)
@@ -179,6 +196,7 @@ def _string_value(config: dict[str, Any] | None, name: str) -> str | None:
 
 
 def _bool_value_from_raw(value: Any) -> bool:
+    """把原始值解析为布尔,无法解析时抛错。"""
     if isinstance(value, bool):
         return value
     if isinstance(value, int):

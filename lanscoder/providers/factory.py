@@ -1,3 +1,5 @@
+"""Provider 工厂:按模型档案创建对应的 ChatProvider 实例。"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -13,10 +15,13 @@ from lanscoder.providers.types import ProviderCapabilities
 
 
 class ProviderConfigError(ValueError):
+    """Provider 配置错误。"""
+
     pass
 
 
 def create_provider_for_model(profile: ModelProfile) -> ChatProvider:
+    """按模型档案创建 provider,支持 openai-compatible/custom 与预置类型。"""
 
     provider_type = profile.provider.type
     if provider_type in {"openai-compatible", "custom"}:
@@ -31,6 +36,7 @@ def _catalog_api_key(profile: ModelProfile) -> str | None:
 
 
 def _catalog_capabilities(base: ProviderCapabilities, profile: ModelProfile) -> ProviderCapabilities:
+    """用档案的 provider 配置覆盖能力(并行/流式开关)。"""
     overrides = {}
     if profile.provider.parallel_tool_calls is not None:
         overrides["supports_parallel_tool_calls"] = profile.provider.parallel_tool_calls
@@ -40,6 +46,7 @@ def _catalog_capabilities(base: ProviderCapabilities, profile: ModelProfile) -> 
 
 
 def _create_catalog_openai_compatible(profile: ModelProfile) -> ChatProvider:
+    """构建 openai-compatible provider(先校验 api_key)。"""
     api_key = _catalog_api_key(profile)
     if not api_key:
         raise ProviderConfigError(f"provider {profile.provider.id} 缺少 api_key，请在配置文件中设置")
@@ -54,6 +61,7 @@ def _create_catalog_openai_compatible(profile: ModelProfile) -> ChatProvider:
 
 
 def _create_catalog_preset(profile: ModelProfile) -> ChatProvider:
+    """按预置类型构建 provider(ollama 缺 key 时用占位)。"""
     preset = PROVIDER_PRESETS[profile.provider.type]
     api_key = _catalog_api_key(profile)
     if not api_key and preset.name == "ollama":
@@ -85,6 +93,7 @@ def _create_provider_instance(
     extra_headers: Mapping[str, str] | None = None,
     extra_body: Mapping[str, Any] | None = None,
 ) -> ChatProvider:
+    """按 kind 实例化具体的 provider 类。"""
     provider_class = {
         "openai-compatible": OpenAICompatibleProvider,
         "anthropic": AnthropicProvider,

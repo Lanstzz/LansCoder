@@ -1,3 +1,5 @@
+"""上下文窗口管理:触发时压缩上下文,先后走规则式压缩与 LLM 摘要,失败时回退到更强压缩或硬截断。"""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -41,10 +43,14 @@ ManagerStatus = Literal["success", "skipped", "failed"]
 
 
 class ProgrammaticCompactor(Protocol):
+    """规则式压缩器接口。"""
+
     def compact(self, request: CompactionRequest): ...
 
 
 class L3Compactor(Protocol):
+    """LLM 摘要压缩器接口:生成候选检查点并提交。"""
+
     def generate_candidate(self, request: LlmCompactRequest) -> LlmCompactCandidate: ...
 
     def commit_candidate(
@@ -57,6 +63,8 @@ class L3Compactor(Protocol):
 
 @dataclass(slots=True)
 class ContextCompactRequest:
+    """一次压缩请求:视图、运行时状态、预算与触发原因。"""
+
     view: SessionView
     runtime_state: SessionRuntimeState
     budget: ContextBudget
@@ -69,6 +77,8 @@ class ContextCompactRequest:
 
 @dataclass(frozen=True, slots=True)
 class ContextCompactResult:
+    """压缩结果:状态、原因、前后 token 数与压缩事件/回退记录。"""
+
     status: ManagerStatus
     reason: str
     view: SessionView
@@ -82,6 +92,8 @@ class ContextCompactResult:
 
 @dataclass(frozen=True, slots=True)
 class _CandidateOutcome:
+    """L3 候选的产出:候选、事件与压缩后视图及 token 数。"""
+
     candidate: LlmCompactCandidate
     event: LlmCompactEvent
     view: SessionView
@@ -90,12 +102,15 @@ class _CandidateOutcome:
 
 @dataclass(frozen=True, slots=True)
 class _HardTruncateOutcome:
+    """硬截断的结果状态。"""
+
     status: Literal["success", "over_budget", "nothing_to_drop"]
     result: ContextCompactResult | None = None
 
 
 @dataclass(slots=True)
 class ContextWindowManager:
+    """上下文窗口管理器:判断是否压缩,并编排 programmatic/L3/回退/硬截断等压缩路径。"""
 
     store: JsonlSessionStore
     pipeline: ProgrammaticCompactor | None = None
@@ -104,6 +119,7 @@ class ContextWindowManager:
     fallback_policy: CompactFallbackPolicy = CompactFallbackPolicy()
 
     def __post_init__(self) -> None:
+        """缺省时补全压缩配置与规则式压缩管线。"""
         if self.config is None:
             self.config = ContextCompactionConfig()
         if self.pipeline is None:
@@ -114,6 +130,7 @@ class ContextWindowManager:
             )
 
     def compact_if_needed(self, request: ContextCompactRequest) -> ContextCompactResult:
+        """入口:评估触发条件,按需压缩(programmatic → L3 → 回退)并返回结果。"""
         trigger = ContextWindowTrigger(request.trigger)
         mode = ContextCompactMode(request.mode)
         before_tokens = request.budget.input_tokens
@@ -256,6 +273,7 @@ class ContextWindowManager:
         l3_request: LlmCompactRequest,
         target_tokens: int,
     ) -> _CandidateOutcome:
+        """生成 L3 摘要候选,校验预算与工具序列后提交,返回产出。"""
         candidate = self.l3_service.generate_candidate(l3_request)
         event = candidate.event
         if event.status != "success" or candidate.checkpoint is None:
@@ -323,6 +341,7 @@ class ContextWindowManager:
         trigger: ContextWindowTrigger,
         mode: ContextCompactMode,
     ) -> _HardTruncateOutcome:
+        """L3 失败时的兜底:按最近 N 轮截断早期对话并建摘要检查点。"""
 
         messages = [message for message in view.messages if message.role != "system_meta"]
         boundary = select_compaction_boundary(
@@ -409,6 +428,7 @@ class ContextWindowManager:
         outcome: _CandidateOutcome,
         before_failure_count: int,
     ) -> ContextCompactResult:
+        """按失败原因选择更强的规则压缩或更强摘要重试。"""
         reason = outcome.event.failure_reason or outcome.event.status
         action = self.fallback_policy.action_for(reason)
         steps: list[dict[str, object]] = []
@@ -575,6 +595,7 @@ class ContextWindowManager:
         reason: str,
         fallback_steps: list[dict[str, object]] | None = None,
     ) -> ContextCompactResult:
+        """最终失败路径:先尝试硬截断,不行再记录失败。"""
 
         outcome = self._hard_truncate(
             request=request,
@@ -619,6 +640,7 @@ class ContextWindowManager:
         reason: str,
         fallback_steps: list[dict[str, object]] | None = None,
     ) -> ContextCompactResult:
+        """记录 L3 失败事件与自动失败计数,返回失败结果。"""
         event = replace(event, final_failure_reason=reason)
         self._record_l3_event(
             session_id=request.view.session_id,
@@ -651,6 +673,7 @@ class ContextWindowManager:
         request: ContextCompactRequest,
         tokens: int,
     ) -> ContextCompactResult:
+        """构造未做变更的跳过/失败结果。"""
         return ContextCompactResult(status, reason, request.view, tokens, tokens)
 
     def _record_auto_failure_if_needed(
@@ -661,6 +684,7 @@ class ContextWindowManager:
         before_failure_count: int,
         failure_reason: str,
     ) -> None:
+        """自动模式下记录失败计数(仅当本次失败未使计数增长时)。"""
         if mode != ContextCompactMode.AUTO:
             return
         if request.runtime_state.auto_compact_failure_count > before_failure_count:
@@ -673,6 +697,7 @@ class ContextWindowManager:
         request: ContextCompactRequest,
         mode: ContextCompactMode,
     ) -> None:
+        """自动模式下记录一次成功压缩。"""
         if mode == ContextCompactMode.AUTO:
             request.runtime_state.record_auto_compact_success()
 
@@ -684,6 +709,7 @@ class ContextWindowManager:
         target_tokens: int,
         event: CompactionEvent,
     ) -> None:
+        """把规则式压缩事件写入会话。"""
         SessionEventWriter(store=self.store, session_id=session_id).append_compaction_completed(
             trigger=trigger.value,
             target_tokens=target_tokens,
@@ -698,6 +724,7 @@ class ContextWindowManager:
         target_tokens: int,
         event: LlmCompactEvent,
     ) -> None:
+        """把 LLM 压缩事件写入会话。"""
         SessionEventWriter(store=self.store, session_id=session_id).append_llm_compaction_completed(
             trigger=trigger.value,
             target_tokens=target_tokens,
@@ -706,12 +733,14 @@ class ContextWindowManager:
 
 
 def _target_tokens(request: ContextCompactRequest, trigger: ContextWindowTrigger) -> int:
+    """确定压缩目标 token(优先显式目标,否则取低水位)。"""
     if request.target_tokens is not None:
         return request.target_tokens
     return request.budget.low_watermark
 
 
 def _view_with_checkpoint(view: SessionView, checkpoint: Checkpoint) -> SessionView:
+    """返回带新检查点的视图副本。"""
     return SessionView(
         session_id=view.session_id,
         messages=[AgentMessage.from_dict(message.to_dict()) for message in view.messages],
@@ -722,10 +751,12 @@ def _view_with_checkpoint(view: SessionView, checkpoint: Checkpoint) -> SessionV
 
 
 def _result_reason(*, trigger: ContextWindowTrigger, auto_reason: str) -> str:
+    """压缩结果原因:AUTO 用触发决策原因,否则用触发名。"""
     return auto_reason if trigger == ContextWindowTrigger.AUTO else trigger.value
 
 
 def _force_route_current_text_for_trigger(trigger: ContextWindowTrigger) -> bool:
+    """手动/提示过长触发时是否强制把当前文本送入压缩路由。"""
     return trigger in {ContextWindowTrigger.MANUAL, ContextWindowTrigger.PROMPT_TOO_LONG}
 
 
@@ -735,6 +766,7 @@ def _with_fallback(
     fallback_steps: list[dict[str, object]],
     final_failure_reason: str | None,
 ) -> LlmCompactEvent:
+    """给事件附加回退步骤与最终失败原因。"""
     return replace(
         event,
         fallback_steps=fallback_steps,

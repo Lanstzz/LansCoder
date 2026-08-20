@@ -1,3 +1,5 @@
+"""Agent 会话:持有会话状态、消息记录与工具注册表,提供消息追加、权限挂起恢复与视图重建。"""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -46,6 +48,7 @@ DEFAULT_BASE_RULES = "你是 LansCoder，一个本地 AI coding agent。请遵�
 
 @dataclass(slots=True)
 class PendingPermissionExecution:
+    """一次被挂起的权限确认或 ask_user 执行:记录工具调用、权限请求与待办工具调用。"""
 
     request_id: str
     tool_call: ToolCall
@@ -59,6 +62,7 @@ class PendingPermissionExecution:
 
 @dataclass(slots=True)
 class ToolPermissionPreflight:
+    """一次工具调用的权限预检结果。"""
 
     request: PermissionRequest
     decision: PermissionDecision
@@ -66,6 +70,7 @@ class ToolPermissionPreflight:
 
 @dataclass(slots=True)
 class AgentSession:
+    """单个 agent 会话:封装存储、运行时状态、工具注册表、消息写入与权限协调。"""
 
     session_id: str
     store: JsonlSessionStore
@@ -101,6 +106,7 @@ class AgentSession:
         sandbox_access: SandboxAccess | None = None,
         memory_manager: MemoryManager | None = None,
     ) -> "AgentSession":
+        """工厂:新建空会话,装配权限协调器与会话工具注册表。"""
 
         runtime_state = SessionRuntimeState(session_id=session_id)
         known_message_ids: set[str] = set()
@@ -154,6 +160,7 @@ class AgentSession:
         sandbox_access: SandboxAccess | None = None,
         memory_manager: MemoryManager | None = None,
     ) -> "AgentSession":
+        """工厂:按项目初始化会话(读取 AGENTS.md、发现技能、建项目权限管理器)。"""
 
         agents_md = read_agents_md(project_root)
         skill_catalog = discover_all_skills(project_root)
@@ -185,6 +192,7 @@ class AgentSession:
         sandbox_access: SandboxAccess | None = None,
         memory_manager: MemoryManager | None = None,
     ) -> "AgentSession":
+        """工厂:从持久化存储恢复会话(回放运行时状态、重建消息与工具注册表)。"""
 
         runtime_state = replay_runtime_state(store, session_id)
         view = store.rebuild_session_view(session_id)
@@ -229,6 +237,7 @@ class AgentSession:
         return session
 
     def restore_pending_permission_execution(self) -> PendingPermissionExecution | None:
+        """从会话尾部恢复被挂起的权限执行(权限确认或 ask_user)。"""
 
         pending = self._pending_tool_calls_from_tail()
         if len(pending) != 1:
@@ -270,6 +279,7 @@ class AgentSession:
         return restored
 
     def persist_pending_permission_kind(self, *, tool_call_id: str, review_only: bool) -> None:
+        """把工具调用的 review_only 标记持久化到消息元数据。"""
         view = self.rebuild_view()
         for message in reversed(view.messages):
             if message.role != "assistant":
@@ -290,6 +300,7 @@ class AgentSession:
         self,
         pending: PendingPermissionExecution | None = None,
     ) -> UserInputRequest | None:
+        """构造挂起权限/ask_user 的用户输入请求,供 UI 展示。"""
         pending = pending or self.pending_permission_execution
         if pending is None:
             return None
@@ -321,6 +332,7 @@ class AgentSession:
         provider_model: str = "",
         provider_capabilities: ProviderCapabilities | None = None,
     ) -> list:
+        """构建并缓存系统提示前缀,记录指纹到运行时状态。"""
 
         inputs = build_system_prompt_inputs(
             base_rules=self.base_rules,
@@ -345,6 +357,7 @@ class AgentSession:
         self.benchmark_task = task.strip()
 
     def _skill_protocol(self) -> str:
+        """返回技能使用协议的提示文本。"""
         if not self.skill_catalog.skills:
             return ""
         return (
@@ -358,16 +371,19 @@ class AgentSession:
         )
 
     def _skill_catalog_summary(self) -> str:
+        """返回技能目录的摘要文本。"""
         if not self.skill_catalog.skills:
             return ""
         return render_skill_catalog(self.skill_catalog)
 
     def refresh_skills(self, project_root: str | Path) -> SkillCatalog:
+        """重新发现项目技能并替换会话目录。"""
         new_catalog = discover_all_skills(project_root).resolved()
         self.skill_catalog = new_catalog
         return new_catalog
 
     def append_user_message(self, content: str, *, attachments: list[UserAttachment] | None = None) -> str:
+        """记录一条用户消息(含附件处理),推进轮次计数。"""
 
         prepared_attachments = prepare_attachments_for_session(
             attachments or [],
@@ -383,6 +399,7 @@ class AgentSession:
         return message_id
 
     def append_assistant_response(self, response: ChatResponse) -> str:
+        """把 assistant 响应拆成消息部件写入存储。"""
 
         message_id = new_message_id()
         parts = assistant_response_to_parts(message_id=message_id, response=response)
@@ -409,6 +426,7 @@ class AgentSession:
         provider: str,
         model: str,
     ) -> None:
+        """记录本次 provider 请求消费的任务计划投影。"""
         new_ids = sorted(set(part_ids) - self.runtime_state.consumed_tool_result_part_ids)
         if not new_ids:
             return
@@ -422,10 +440,12 @@ class AgentSession:
         self.runtime_state.consumed_tool_result_part_ids.update(new_ids)
 
     def execute_tool_call(self, tool_call: ToolCall) -> ToolResult:
+        """在注册表中执行一次工具调用。"""
 
         return self.tool_registry.execute(tool_call.name, tool_call.arguments)
 
     def execute_tool_call_after_permission_confirmation(self, tool_call: ToolCall) -> ToolResult:
+        """权限确认后执行工具调用(跳过二次权限检查)。"""
 
         if isinstance(self.tool_registry, PermissionAwareToolRegistry):
             return self.tool_registry.execute_without_permission_check(
@@ -435,6 +455,7 @@ class AgentSession:
         return self.tool_registry.execute(tool_call.name, tool_call.arguments)
 
     def append_tool_result(self, *, tool_call: ToolCall, result: ToolResult) -> str:
+        """记录一条工具结果,按工具调用 id 去重。"""
 
         with self._tool_result_lock:
             existing_message_id = self._tool_result_message_ids.get(tool_call.id)
@@ -452,6 +473,7 @@ class AgentSession:
             return tool_message_id
 
     def append_interrupted_tool_results(self) -> list[ToolCall]:
+        """为被中断的待处理工具调用补记「结果未知」的工具结果。"""
 
         with self._tool_result_lock:
             pending = self._pending_tool_calls_from_tail()
@@ -482,6 +504,7 @@ class AgentSession:
         task_id: str | None = None,
         observed_revision: int | None = None,
     ) -> str:
+        """把后台任务完成通知写入会话。"""
 
         message_id = self.writer.append_background_notification(
             content=content,
@@ -500,16 +523,19 @@ class AgentSession:
 
     @property
     def permission_mode(self) -> str:
+        """返回当前权限模式。"""
 
         if self.permission_coordinator is None:
             return "default"
         return self.permission_coordinator.mode.value
 
     def rebuild_view(self):
+        """从存储重建会话视图。"""
 
         return self.store.rebuild_session_view(self.session_id)
 
     def _pending_tool_calls_from_tail(self) -> list[tuple[ToolCall, list[ToolCall], bool | None]]:
+        """从会话尾部找出未完成的工具调用(用于中断恢复)。"""
         messages = self.rebuild_view().messages
         if not messages:
             return []
@@ -552,6 +578,7 @@ class AgentSession:
 
 
 def _tool_call_from_part(part: MessagePart) -> ToolCall:
+    """从消息部件还原 ToolCall。"""
     arguments = deepcopy(part.metadata.get("arguments", {}))
     return ToolCall(
         id=str(part.metadata["tool_call_id"]),
@@ -561,6 +588,7 @@ def _tool_call_from_part(part: MessagePart) -> ToolCall:
 
 
 def _ask_user_request_from_tool_call(tool_call: ToolCall) -> UserInputRequest | None:
+    """若工具调用是 ask_user,构造对应的用户输入请求。"""
 
     if tool_call.name != "ask_user":
         return None
@@ -579,6 +607,7 @@ def _ask_user_request_from_tool_call(tool_call: ToolCall) -> UserInputRequest | 
 
 
 def _tool_result_message_ids_from_view(view: SessionView) -> dict[str, str]:
+    """从视图构建「工具调用 id → 消息 id」映射。"""
 
     result: dict[str, str] = {}
     for message in view.messages:
@@ -594,6 +623,7 @@ def _tool_result_message_ids_from_view(view: SessionView) -> dict[str, str]:
 
 
 def _infer_turn_counter(messages: list[AgentMessage]) -> int:
+    """按用户消息数量推断轮次计数。"""
 
     return sum(1 for message in messages if message.role == "user")
 
@@ -604,4 +634,5 @@ def create_project_permission_manager(
     grants: PermissionGrantStore | None = None,
     mode: PermissionMode = PermissionMode.STANDARD,
 ) -> PermissionManager:
+    """构建项目级权限管理器(默认策略 + 授权存储)。"""
     return PermissionManager(policy=DefaultPermissionPolicy(project_root), grants=grants, mode=mode)

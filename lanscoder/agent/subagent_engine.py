@@ -1,3 +1,5 @@
+"""子代理引擎:按角色创建子会话并执行子任务;支持前台/后台运行,以及 worktree 隔离执行。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -45,6 +47,7 @@ DEFAULT_CHILD_LIMITS = AgentLoopLimits(max_tool_rounds=20, max_provider_calls=40
 
 
 class SubagentEngine:
+    """子代理执行引擎:管理子会话、角色工具集与前台进度,隔离执行时使用 worktree。"""
 
     def __init__(
         self,
@@ -61,6 +64,7 @@ class SubagentEngine:
         background_manager: BackgroundJobManager | None = None,
         child_runner_factory: Callable[..., SessionTurnRunner],
     ) -> None:
+        """注入子代理引擎依赖:存储、provider、角色工具集与子循环工厂。"""
         self.store = store
         self.provider = provider
         self.tools = list(tools)
@@ -75,15 +79,18 @@ class SubagentEngine:
         self.foreground_progress: dict[str, Any] | None = None
 
     def profile(self, role: str) -> SubagentProfile | None:
+        """按角色名返回子代理档案,未知角色返回 None。"""
         return SUBAGENT_PROFILES.get(str(role))
 
     def tools_for_role(self, role: str) -> list[Tool]:
+        """返回某角色允许的工具集(剔除 delegate)。"""
         profile = self.profile(role)
         if profile is None:
             return []
         return [tool for tool in self.tools if tool.name in profile.allowed_tool_names and tool.name != "delegate"]
 
     def run(self, request: SubagentRequest) -> SubagentResult:
+        """执行一次子代理请求:校验角色/后台限制,选择隔离或内联执行。"""
         profile = self.profile(request.role)
         if profile is None:
             return SubagentResult(
@@ -120,6 +127,7 @@ class SubagentEngine:
                 self.foreground_progress = None
 
     def _needs_worktree(self, request: SubagentRequest, *, profile: SubagentProfile) -> bool:
+        """判断是否需要用 worktree 隔离执行。"""
 
         if request.isolate_worktree:
             return True
@@ -132,6 +140,7 @@ class SubagentEngine:
         profile: SubagentProfile,
         progress_tracker: dict[str, Any] | None,
     ) -> SubagentResult:
+        """在当前工作树内联执行子代理,结束后删除子会话。"""
 
         child_session = self.create_child_session(request, profile=profile)
         started = time.monotonic()
@@ -190,6 +199,7 @@ class SubagentEngine:
         profile: SubagentProfile,
         progress_tracker: dict[str, Any] | None,
     ) -> SubagentResult:
+        """在独立 worktree 中执行子代理,汇总变更差异并清理。"""
 
         if self.project_root is None:
             return SubagentResult(
@@ -304,6 +314,7 @@ class SubagentEngine:
             )
 
     def create_child_session(self, request: SubagentRequest, *, profile: SubagentProfile) -> AgentSession:
+        """为子代理创建子会话(按后台/前台选择权限配置)。"""
         session_id = new_session_id()
         if request.run_in_background:
             permission_manager = self.permission_coordinator.child_permission_manager(
@@ -334,12 +345,14 @@ class SubagentEngine:
         return child
 
     def _delete_child_session(self, session_id: str) -> None:
+        """删除子会话(尽力而为,不打断父循环)。"""
         try:
             self.store.delete_session(session_id)
         except Exception:  # noqa: BLE001 - cleanup must never break the parent loop
             pass
 
     def _supplied_tools_for_child(self, role: str) -> list[Tool]:
+        """返回给子会话的工具集(剔除 retrieve_archive)。"""
 
         return [tool for tool in self.tools_for_role(role) if tool.name != "retrieve_archive"]
 
@@ -351,6 +364,7 @@ class SubagentEngine:
         worktree: Worktree,
         session_id: str,
     ) -> AgentSession:
+        """为 worktree 隔离创建子会话,允许变更并关闭预写审查。"""
 
         permission_manager = self.permission_coordinator.child_permission_manager(
             root=worktree.path,
@@ -378,6 +392,7 @@ class SubagentEngine:
         return child
 
     def _run_child_loop(self, child_session, prompt, tools, observer):
+        """在子会话上跑一次用户回合,返回 (结果, 运行器, 失败原因)。"""
 
         runner = self.child_runner_factory(
             session=child_session,
@@ -395,6 +410,7 @@ class SubagentEngine:
             return None, runner, str(exc)
 
     def _make_child_observer(self, progress_tracker: dict[str, Any] | None) -> TurnObserver:
+        """构造子代理观察者,把进度写入后台任务或前台跟踪器。"""
 
         def _report(state: dict[str, Any]) -> None:
             job_id = current_job_id()
@@ -409,6 +425,7 @@ class SubagentEngine:
         return TurnObserver(progress_callback=_report)
 
     def _attach_worktree_cleanup(self, manager: WorktreeManager, worktree: Worktree) -> None:
+        """把 worktree 清理挂到当前后台任务上,任务结束时移除。"""
 
         if self.background_manager is None:
             return
@@ -427,6 +444,7 @@ class SubagentEngine:
         access: SandboxAccess,
         for_registry: bool = False,
     ) -> list[Tool]:
+        """为 worktree 子会话构建按角色过滤的工具集。"""
 
         from lanscoder.tools.builtin import create_builtin_registry
 
@@ -450,6 +468,7 @@ class SubagentEngine:
         profile: SubagentProfile,
         worktree: Worktree | None = None,
     ) -> str:
+        """构造子代理提示词(角色描述、隔离说明、父摘要与任务)。"""
         hints = "\n".join(f"- {hint}" for hint in request.path_hints if str(hint).strip())
         summary = request.parent_summary.strip() if request.parent_summary else "(none provided)"
         if worktree is not None:
@@ -475,6 +494,7 @@ class SubagentEngine:
         )
 
     def _compose_isolated_summary(self, content: str, *, worktree: Worktree, diff: "WorktreeDiff") -> str:
+        """把子代理结论与 worktree 差异拼接成最终摘要。"""
         parts = [
             content,
             "",

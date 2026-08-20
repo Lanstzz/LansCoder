@@ -1,3 +1,5 @@
+"""请求构建器:把会话视图与工具定义组装为 provider 请求,并计算上下文预算与投影指纹。"""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -16,6 +18,8 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class PreparedMainRequest:
+    """一次已组装的主请求:请求对象、请求 id、投影指纹与涉及的 tool_result 部件 id。"""
+
     request: ChatRequest
     request_id: str
     projection_fingerprint: str
@@ -23,6 +27,7 @@ class PreparedMainRequest:
 
 
 class RequestBuilder:
+    """组装发给 provider 的主请求,并估算上下文预算。"""
 
     def __init__(
         self,
@@ -47,6 +52,7 @@ class RequestBuilder:
         tool_choice="auto",
         runtime_instruction=None,
     ) -> PreparedMainRequest:
+        """构建主请求:生成消息、工具定义与投影指纹。"""
         messages = self._request_messages(
             view=view,
             runtime_instruction=runtime_instruction,
@@ -72,6 +78,7 @@ class RequestBuilder:
         runtime_instruction: str | None,
         definitions,
     ) -> ContextBudget:
+        """按视图与工具定义计算上下文预算。"""
         messages = self._request_messages(
             view=view,
             runtime_instruction=runtime_instruction,
@@ -84,6 +91,7 @@ class RequestBuilder:
         )
 
     def _request_messages(self, *, view, runtime_instruction: str | None = None):
+        """生成完整消息列表:系统前缀 + 运行指令 + 任务计划快照 + 历史消息。"""
         system_prefix = self.session.build_system_prefix(
             provider_name=self._provider.name,
             provider_model=self._provider.model,
@@ -108,6 +116,7 @@ class RequestBuilder:
         )
 
     def _build_provider_messages(self, view, *, system_prefix):
+        """委托 ContextBuilder 生成最终的 provider 消息列表。"""
         return self.context_builder.build_provider_messages(
             view,
             system_prefix=system_prefix,
@@ -115,6 +124,7 @@ class RequestBuilder:
         )
 
     def _main_chat_request(self, messages, definitions, tool_choice) -> ChatRequest:
+        """组装 ChatRequest 并并入请求选项。"""
         return ChatRequest(
             messages=messages,
             tools=definitions,
