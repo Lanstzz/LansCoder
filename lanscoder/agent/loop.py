@@ -616,15 +616,6 @@ class AgentLoop:
         self.session.append_assistant_response(response)
         return AgentTurnResult(status=AgentTurnStatus.COMPLETED, response=response)
 
-    # ----------------------------------------------------------------------------
-    # _continue_tool_loop_from_response — 工具循环的内循环体
-    # ----------------------------------------------------------------------------
-    # 给定一个已包含 tool_calls 的 response，持续执行工具并回问模型，
-    # 直到模型不再调用工具 / 命中轮次上限 / 需要用户输入。
-    #
-    # 关键顺序：必须先写 assistant tool_call，再写对应 tool_result。
-    # 这是 provider 消息序列的合法性要求——OpenAI/Anthropic 都要求每条 tool result
-    # 前面必须有对应的 assistant tool_call，否则下一次 complete 会报 400。
     async def _run_task_plan_reconciliation_if_needed(
         self,
         response: ChatResponse,
@@ -646,6 +637,15 @@ class AgentLoop:
         self._task_plan_reconciliation_attempted = True
         return instruction
 
+    # ----------------------------------------------------------------------------
+    # _continue_tool_loop_from_response — 工具循环的内循环体
+    # ----------------------------------------------------------------------------
+    # 给定一个已包含 tool_calls 的 response，持续执行工具并回问模型，
+    # 直到模型不再调用工具 / 命中轮次上限 / 需要用户输入。
+    #
+    # 关键顺序：必须先写 assistant tool_call，再写对应 tool_result。
+    # 这是 provider 消息序列的合法性要求——OpenAI/Anthropic 都要求每条 tool result
+    # 前面必须有对应的 assistant tool_call，否则下一次 complete 会报 400。
     async def _continue_tool_loop_from_response(
         self,
         response: ChatResponse,
@@ -854,7 +854,7 @@ class AgentLoop:
         """薄访问器：暴露当前 loop 视角的工具 schema。
 
         runtime 的 context_budget 依赖它，避免在 runtime 再造一份 augment/MCP 激活过滤
-        逻辑；后续 MCP 激活追踪上移到独立协调器后，runtime 改从组装根取同一份定义。
+        逻辑。
         """
 
         return self._provider_tool_definitions()

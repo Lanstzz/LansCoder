@@ -470,8 +470,8 @@ class AgentChatRunner:
     def resume_with_user_input(self, request_id: str, answer: str) -> ChatResponse:
         """恢复等待中的权限确认。
 
-        普通 `ask_user` 后续仍走新的用户消息；权限确认必须先补齐原 tool_call 的
-        tool_result，所以 UI 通过这个入口把用户选择交回 agent loop。
+        权限确认必须先补齐原 tool_call 的 tool_result，所以 UI 通过这个入口把用户选择
+        交回 agent loop。
         """
 
         return asyncio.run(self.aresume_with_user_input(request_id, answer))

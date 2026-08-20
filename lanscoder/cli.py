@@ -216,7 +216,6 @@ def main(
 # 通过 create_cli_app() 拿到组装好的 App，再用 app.chat_runner（即
 # AgentChatRunner）跑一个 turn。
 # ★ 想跟踪 "一个 turn 怎么跑"：入口是 AgentChatRunner.run_user_turn()
-#   → 见 lanscoder/agent/chat_runner.py
 # benchmark 模式走特殊分支 run_benchmark_turn()，bypass 权限。
 # ----------------------------------------------------------------------------
 def run_single_turn(config: CliConfig) -> str:
