@@ -7,7 +7,8 @@ from pathlib import Path
 from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.loop import AgentLoop
 from lanscoder.agent.session import AgentSession
-from lanscoder.agent.subagent import SubagentRequest, SubagentRunner
+from lanscoder.agent.subagent import SubagentRunner
+from lanscoder.subagent.types import SubagentRequest
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import ChatRequest, ChatResponse, ProviderCapabilities, ToolCall, ToolDefinition
@@ -248,7 +249,8 @@ def test_isolated_coder_writes_only_in_worktree(tmp_path) -> None:
     from lanscoder.permissions.manager import PermissionManager
     from lanscoder.permissions.policy import DefaultPermissionPolicy
     from lanscoder.permissions.types import PermissionMode
-    from lanscoder.agent.subagent import SubagentRequest, SubagentRunner
+    from lanscoder.agent.subagent import SubagentRunner
+    from lanscoder.subagent.types import SubagentRequest
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -307,7 +309,8 @@ def test_isolated_coder_can_delete_inside_worktree_without_parent_delete(tmp_pat
     from lanscoder.permissions.manager import PermissionManager
     from lanscoder.permissions.policy import DefaultPermissionPolicy
     from lanscoder.permissions.types import PermissionMode
-    from lanscoder.agent.subagent import SubagentRequest, SubagentRunner
+    from lanscoder.agent.subagent import SubagentRunner
+    from lanscoder.subagent.types import SubagentRequest
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -354,7 +357,8 @@ def test_isolated_coder_dangerous_shell_is_denied_not_waiting(tmp_path) -> None:
     """A dangerous shell in a background coder is auto-DENIED (not paused), so the
     child keeps running instead of surfacing waiting_for_user_input."""
 
-    from lanscoder.agent.subagent import SubagentRequest, SubagentRunner
+    from lanscoder.agent.subagent import SubagentRunner
+    from lanscoder.subagent.types import SubagentRequest
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -487,7 +491,8 @@ def test_background_coder_uses_worktree_and_leaves_parent_untouched(tmp_path) ->
 def test_isolated_coder_without_git_repo_returns_error(tmp_path) -> None:
     """When isolation is requested but the project is not a git repo, fail cleanly."""
 
-    from lanscoder.agent.subagent import SubagentRequest, SubagentRunner
+    from lanscoder.agent.subagent import SubagentRunner
+    from lanscoder.subagent.types import SubagentRequest
 
     provider = FakeProvider([])
     runner = SubagentRunner(

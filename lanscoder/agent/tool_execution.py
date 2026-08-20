@@ -34,7 +34,7 @@ from lanscoder.tools.permission_results import make_permission_denied_result, ma
 from lanscoder.tools.review import build_prewrite_review, supports_prewrite_review
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from lanscoder.tools.types import ToolResult, make_error_result
-from lanscoder.tools.delegate import role_allows_background, role_requires_worktree
+from lanscoder.subagent.types import role_allows_background, role_requires_worktree
 from lanscoder.agent.worktree import WorktreeManager
 
 PARALLEL_READONLY_TOOL_NAMES = frozenset(
