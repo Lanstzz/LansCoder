@@ -482,6 +482,67 @@ def test_background_delegate_cancel_aborts_child(tmp_path) -> None:
     assert job.status == "cancelled"
 
 
+def test_background_delegate_cancel_keeps_job_error_clear(tmp_path) -> None:
+    """A cancelled background job must not be framed as a failure.
+
+    When the child subagent raises AgentCancelledError straight out of the job
+    function (nothing swallows it), the production BackgroundJobManager._run
+    path must finish the job as cancelled with no error — never
+    '后台任务执行失败：Agent turn was interrupted.'
+    """
+
+    store = JsonlSessionStore(tmp_path)
+    manager = BackgroundJobManager()
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingProvider(FakeProvider):
+        def complete(self, request: ChatRequest) -> ChatResponse:
+            if (
+                request.tools == []
+                and request.tool_choice == "none"
+                and request.max_tokens == 512
+            ):
+                return super().complete(request)
+            started.set()
+            if not release.wait(5):
+                raise AssertionError("release gate was not opened")
+            return ChatResponse(
+                provider="fake", model="fake-model", content="child done"
+            )
+
+    runner = SubagentRunner(
+        store=store,
+        provider=BlockingProvider([]),
+        tools=[_tool("view")],
+        background_manager=manager,
+    )
+
+    def job_func() -> ToolResult:
+        # Deliberately do NOT catch AgentCancelledError: the production _run
+        # path must treat it as an interrupt, not a failure.
+        runner.run(
+            SubagentRequest(
+                role="researcher",
+                task="background task",
+                parent_session_id="p_bg",
+            )
+        )
+        return make_text_result("delegate", "done")
+
+    try:
+        job = manager.start(job_func, tool_name="delegate")
+        assert started.wait(5), "background child should start and block on its provider"
+        manager.cancel(job.id)
+        release.set()
+        assert manager.wait(timeout=5) is True
+    finally:
+        manager.shutdown()
+
+    assert job.status == "cancelled"
+    assert job.error is None
+
+
 def test_background_delegate_returns_placeholder_and_notification(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     manager = BackgroundJobManager()

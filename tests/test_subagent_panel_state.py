@@ -67,6 +67,32 @@ def test_build_rows_labels_cancelling_jobs() -> None:
     assert rows[0].cancel_requested is True
 
 
+def test_build_rows_marks_foreground_cancelling_when_requested() -> None:
+    fg = {
+        "label": "researcher",
+        "started_at": 0.0,
+        "provider_calls": 0,
+        "total_tokens": 0,
+        "cancel_requested": True,
+    }
+    rows = build_rows(fg, [])
+    assert rows[0].id == FG_ID
+    assert rows[0].status == "cancelling"
+    assert rows[0].cancel_requested is True
+
+
+def test_build_rows_foreground_running_when_cancel_not_requested() -> None:
+    fg = {
+        "label": "researcher",
+        "started_at": 0.0,
+        "provider_calls": 0,
+        "total_tokens": 0,
+    }
+    rows = build_rows(fg, [])
+    assert rows[0].status == "running"
+    assert rows[0].cancel_requested is False
+
+
 def test_move_selection_clamps_at_edges() -> None:
     rows = [_row(FG_ID), _row("bg_0001")]
     assert move_selection(rows, None, "down") == FG_ID

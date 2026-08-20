@@ -215,6 +215,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._activity_frame = 0
         self._subagent_selected: str | None = None
         self._subagent_select_mode = False
+        self._foreground_cancel_requested = False
         self._pending_user_input: str | None = None
         self._pending_user_attachments: list[UserAttachment] | None = None
         self.transcript = TuiTranscript()
@@ -274,7 +275,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         foreground = None
         if self.chat_runner is not None:
             manager = getattr(self.chat_runner, "background_manager", None)
-            foreground = getattr(self.chat_runner, "foreground_subagent", lambda: None)()
+            foreground = self._effective_foreground(getattr(self.chat_runner, "foreground_subagent", lambda: None)())
         try:
             panel = self.query_one("#subagent-panel")
         except Exception:
@@ -294,13 +295,16 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         now = time.monotonic()
         lines_by_id: dict[str, str] = {}
         if foreground is not None:
-            lines_by_id[FG_ID] = _format_subagent_line(
+            line = _format_subagent_line(
                 label=foreground.get("label") or "delegate",
                 elapsed=now - foreground["started_at"],
                 calls=foreground.get("provider_calls", 0),
                 tokens=foreground.get("total_tokens", 0),
                 indicator=indicator,
             )
+            if foreground.get("cancel_requested"):
+                line = f"{line} · cancelling"
+            lines_by_id[FG_ID] = line
         for job in jobs:
             progress = job.progress or {}
             line = _format_subagent_line(
@@ -351,11 +355,19 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         foreground = None
         if self.chat_runner is not None:
             manager = getattr(self.chat_runner, "background_manager", None)
-            foreground = getattr(self.chat_runner, "foreground_subagent", lambda: None)()
+            foreground = self._effective_foreground(getattr(self.chat_runner, "foreground_subagent", lambda: None)())
         jobs = manager.active_jobs() if manager is not None else []
         return build_rows(foreground, jobs)
 
+    def _effective_foreground(self, foreground: dict[str, Any] | None) -> dict[str, Any] | None:
+        if foreground is None or not self._foreground_cancel_requested:
+            return foreground
+        return {**foreground, "cancel_requested": True}
+
     def _sync_subagent_selection(self, rows: list[SubagentRow]) -> None:
+        if not any(row.id == FG_ID for row in rows):
+            # 前台子 agent 已结束：停止标记不再有意义。
+            self._foreground_cancel_requested = False
         if self._subagent_selected is not None and not any(row.id == self._subagent_selected for row in rows):
             self._subagent_selected = None
             self._subagent_select_mode = False
@@ -755,6 +767,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if target == FG_ID:
             cancel = getattr(self.chat_runner, "cancel_current_turn", None)
             if cancel is not None:
+                self._foreground_cancel_requested = True
                 cancel()
             return
         manager = getattr(self.chat_runner, "background_manager", None) if self.chat_runner is not None else None

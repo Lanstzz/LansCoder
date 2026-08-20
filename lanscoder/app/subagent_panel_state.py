@@ -27,13 +27,14 @@ class SubagentRow:
 def build_rows(foreground: dict[str, Any] | None, jobs: list[Any]) -> list[SubagentRow]:
     rows: list[SubagentRow] = []
     if foreground is not None:
+        cancel_requested = bool(foreground.get("cancel_requested", False))
         rows.append(
             SubagentRow(
                 id=FG_ID,
                 label=foreground.get("label") or "delegate",
-                status="running",
+                status="cancelling" if cancel_requested else "running",
                 cancellable=True,
-                cancel_requested=False,
+                cancel_requested=cancel_requested,
             )
         )
     for job in jobs:

@@ -485,6 +485,9 @@ async def test_subagent_panel_x_stops_foreground_turn() -> None:
         assert app._subagent_selected == "fg"
         await pilot.press("x")
         assert fake.interrupted_turns == 1
+        app._refresh_subagent_progress()
+        fg_row = next(s for s in app.query_one("#subagent-panel").query("Static") if s.id == "subagent-row-fg")
+        assert "cancelling" in fg_row.content
         await pilot.press("escape")
         assert app._subagent_select_mode is False
 
