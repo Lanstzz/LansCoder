@@ -12,7 +12,7 @@ from lanscoder.tools.types import Tool
 TOOL_DESCRIPTIONS: dict[str, str] = {
     "ls": ("List entries in a workspace directory. Use for quick directory inspection; " "returns names and file/dir types, not file contents."),
     "view": ("Read a UTF-8 text file by line range. Use this instead of shell commands " "like cat, head, tail, or sed when inspecting file contents."),
-    "grep": ("Search file contents for literal text inside the workspace. Use this to " "find symbols, strings, and call sites before editing."),
+    "grep": ("Search file contents with a regex pattern inside the workspace. Uses ripgrep " "regex syntax (e.g. \"log.*Error\", \"foo|bar\"). Use this to find symbols, strings, " "and call sites before editing."),
     "glob": ("Find workspace paths with a glob pattern. Use this to locate files by name " "or extension; use grep when you need to search file contents."),
     "tree": ("Show a bounded directory tree. Use this for orientation when you need the " "project layout, not for reading file contents."),
     "git_status": ("Show concise git working tree status. Use before or after edits to see " "changed files without reading diffs."),

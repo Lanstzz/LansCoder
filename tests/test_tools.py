@@ -46,7 +46,7 @@ def test_builtin_tool_descriptions_are_agent_facing_english(tmp_path):
     assert descriptions["view"].startswith("Read a UTF-8 text file")
     assert "Use this instead of shell commands like cat" in descriptions["view"]
     assert descriptions["grep"].startswith("Search file contents")
-    assert "literal text" in descriptions["grep"]
+    assert "regex" in descriptions["grep"]
     assert descriptions["apply_patch"].startswith("Apply a structured patch")
     assert "Prefer this for multi-file edits" in descriptions["apply_patch"]
     assert descriptions["shell"].startswith("Run a shell command")

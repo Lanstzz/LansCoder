@@ -160,6 +160,30 @@ def test_grep_finds_matching_lines(tmp_path):
     assert result.data["results"][0]["line"] == 2
 
 
+def test_grep_uses_regex_pattern(tmp_path):
+    source = tmp_path / "app.py"
+    source.write_text("def connect():\n    return None\n\ndef disconnect():\n    pass\n", encoding="utf-8")
+    registry = create_builtin_registry(tmp_path)
+
+    result = registry.execute("grep", {"pattern": "connect|disconnect", "include": "*.py"})
+
+    assert result.ok is True
+    paths = [(entry["path"], entry["line"]) for entry in result.data["results"]]
+    assert ("app.py", 1) in paths
+    assert ("app.py", 4) in paths
+
+
+def test_grep_reports_invalid_regex(tmp_path):
+    source = tmp_path / "app.py"
+    source.write_text("hello\n", encoding="utf-8")
+    registry = create_builtin_registry(tmp_path)
+
+    result = registry.execute("grep", {"pattern": "[unclosed", "include": "*.py"})
+
+    assert result.ok is False
+    assert "无效的正则表达式" in result.error
+
+
 def test_grep_with_rg_filters_sensitive_environment(tmp_path, monkeypatch):
     source = tmp_path / "lanscoder.py"
     source.write_text("LansCoder agent\n", encoding="utf-8")
