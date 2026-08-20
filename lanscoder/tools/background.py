@@ -6,10 +6,29 @@
 
 from __future__ import annotations
 
-from lanscoder.agent.background import BackgroundJobManager
+from typing import Any, Protocol
+
 from lanscoder.providers.types import ToolDefinition
 from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils.schema import object_schema, property_schema
+
+
+class BackgroundJob(Protocol):
+    """tools 层用到的最小后台任务表面（具体实现在 lanscoder.agent.background）。"""
+
+    id: str
+    status: str
+    cancel_requested: bool
+
+    def snapshot(self) -> dict[str, Any]: ...
+
+
+class BackgroundJobManager(Protocol):
+    """tools 层用到的最小后台任务管理器表面。"""
+
+    def get(self, job_id: str, *, session_id: str | None = None) -> BackgroundJob | None: ...
+    def list(self, *, session_id: str | None = None) -> list[BackgroundJob]: ...
+    def cancel(self, job_id: str, *, session_id: str | None = None) -> BackgroundJob | None: ...
 
 
 def create_background_status_tool(
