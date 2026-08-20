@@ -1,3 +1,5 @@
+"""工具执行器:逐条执行工具调用,做权限预检、后台派发、并行只读批量执行并派发执行事件。"""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -62,6 +64,7 @@ BYPASS_PARALLEL_TOOL_NAMES = PARALLEL_READONLY_TOOL_NAMES | frozenset(
 
 @dataclass(frozen=True, slots=True)
 class ToolExecutionEvent:
+    """一次工具执行事件:类型、工具调用、结果与权限/预写审查信息。"""
 
     kind: Literal[
         "prewrite_review",
@@ -80,10 +83,13 @@ class ToolExecutionEvent:
 
 @dataclass(slots=True)
 class ToolExecutionState:
+    """工具执行的挂起状态(等待用户输入的请求)。"""
+
     pending_input: UserInputRequest | None = None
 
 
 class ToolExecutor:
+    """执行模型返回的工具调用序列:权限预检、后台/并行调度,并向观察者派发事件。"""
 
     def __init__(
         self,
@@ -97,6 +103,7 @@ class ToolExecutor:
         background_manager: BackgroundJobManager | None = None,
         background_tool_names: frozenset[str] | None = None,
     ) -> None:
+        """注入执行器依赖:会话、权限协调器、事件出口与后台管理器。"""
         self.session = session
         self._permission_coordinator = permission_coordinator
         self._event_sink = event_sink
@@ -128,6 +135,7 @@ class ToolExecutor:
         permission_request: PermissionRequest | None = None,
         prewrite_review: dict[str, object] | None = None,
     ) -> None:
+        """构造并派发单个工具执行事件到事件出口。"""
         self._event_sink.on_tool_event(
             ToolExecutionEvent(
                 kind=kind,
@@ -139,6 +147,7 @@ class ToolExecutor:
         )
 
     def execute_interactive(self, tool_calls: list[ToolCall]) -> ToolExecutionState:
+        """主入口:遍历工具调用,走校验/权限/后台/并行分支,遇等待输入时提前返回。"""
 
         state = ToolExecutionState()
         tool_calls, self._background_request = self._normalize_background_controls(tool_calls)
@@ -219,6 +228,7 @@ class ToolExecutor:
         return state
 
     async def execute_interactive_async(self, tool_calls: list[ToolCall]) -> ToolExecutionState:
+        """在线程池中运行 execute_interactive。"""
 
         return await anyio.to_thread.run_sync(self.execute_interactive, tool_calls)
 
@@ -226,6 +236,7 @@ class ToolExecutor:
         self,
         tool_calls: list[ToolCall],
     ) -> tuple[list[ToolCall], dict[str, tuple[str | None, str | None]]]:
+        """剥离后台控制字段,返回清洗后的调用与后台请求映射。"""
 
         cleaned: list[ToolCall] = []
         requested: dict[str, tuple[str | None, str | None]] = {}
@@ -246,6 +257,7 @@ class ToolExecutor:
         label: str | None,
         task_id: str | None,
     ) -> ToolResult:
+        """把工具调用派发为后台任务,返回占位结果。"""
 
         if self._background_manager is None:
             return make_error_result(
@@ -316,6 +328,7 @@ class ToolExecutor:
         return TaskPlanService(store=self.session.store, writer=self.session.writer)
 
     def _validate_background_task_id(self, tool_name: str, task_id: str | None) -> int | ToolResult | None:
+        """校验后台任务引用的 task_id 是否有效,返回计划修订号或错误。"""
         if task_id is None:
             return None
         plan = self._task_plan_service().current()
@@ -337,6 +350,7 @@ class ToolExecutor:
         return plan.revision
 
     def _mark_background_task_completed(self, task_id: str, *, observed_revision: int | None) -> str:
+        """把后台任务完成状态回写到任务计划(带冲突重试)。"""
 
         service = self._task_plan_service()
         for _ in range(3):
@@ -370,18 +384,21 @@ class ToolExecutor:
         return f"TaskPlan task {task_id!r} was not updated because the plan changed concurrently."
 
     def _delegate_call_allows_background(self, tool_call: ToolCall) -> bool:
+        """delegate 调用的角色是否允许后台执行。"""
         arguments = tool_call.arguments
         if not isinstance(arguments, dict):
             return False
         return role_allows_background(str(arguments.get("role") or ""))
 
     def _delegate_call_requires_worktree(self, tool_call: ToolCall) -> bool:
+        """delegate 调用的角色是否要求 worktree 隔离。"""
         arguments = tool_call.arguments
         if not isinstance(arguments, dict):
             return False
         return role_requires_worktree(str(arguments.get("role") or ""))
 
     def _worktree_isolation_available(self) -> bool:
+        """判断当前项目是否具备 worktree 隔离能力。"""
         manager = self._permission_coordinator.permission_manager
         if manager is None:
             return False
@@ -392,6 +409,7 @@ class ToolExecutor:
         tool_call: ToolCall,
         deferred_tool_calls: list[ToolCall],
     ) -> PreparedPermission:
+        """为工具调用做权限准备,返回预检结果。"""
 
         return self._permission_coordinator.prepare(tool_call, deferred_tool_calls)
 
@@ -402,6 +420,7 @@ class ToolExecutor:
         *,
         deferred_tool_calls: list[ToolCall] | None = None,
     ) -> UserInputRequest | None:
+        """记录工具结果;遇到 ask_user 则挂起并返回输入请求。"""
 
         pending_input = user_input_request_from_tool_result(
             result,
@@ -421,12 +440,14 @@ class ToolExecutor:
         return None
 
     def parallel_readonly_batch_end(self, tool_calls: list[ToolCall], start: int) -> int:
+        """找出从 start 起连续可并行执行的工具调用边界。"""
         end = start
         while end < len(tool_calls) and self.can_execute_in_parallel(tool_calls[end]):
             end += 1
         return end
 
     def can_execute_in_parallel(self, tool_call: ToolCall) -> bool:
+        """判断单个工具调用能否并行执行。"""
         if self._permission_coordinator.requires_bypass_review(tool_call):
             return False
         if tool_call.id in self._background_request:
@@ -437,12 +458,14 @@ class ToolExecutor:
         return preflight is None or preflight.decision.kind == PermissionDecisionKind.ALLOW
 
     def parallel_tool_names_for_current_mode(self) -> frozenset[str]:
+        """按当前权限模式返回可并行执行的工具集合。"""
         manager = self._permission_coordinator.permission_manager
         if manager is not None and manager.mode == PermissionMode.BYPASS:
             return BYPASS_PARALLEL_TOOL_NAMES
         return PARALLEL_READONLY_TOOL_NAMES
 
     def execute_single(self, tool_call: ToolCall) -> ToolResult:
+        """单线程执行一个工具调用并派发 started/finished 事件。"""
         self._check_cancelled()
         self._emit_event("started", tool_call)
         with cancellation_context(self.cancellation_token):
@@ -452,6 +475,7 @@ class ToolExecutor:
         return result
 
     def execute_parallel_readonly_batch(self, tool_calls: list[ToolCall]) -> list[ToolResult]:
+        """用线程池并行执行一批只读工具调用。"""
         self._check_cancelled()
         for tool_call in tool_calls:
             self._emit_event("started", tool_call)
@@ -463,16 +487,19 @@ class ToolExecutor:
         return results
 
     def execute_with_cancellation_context(self, tool_call: ToolCall) -> ToolResult:
+        """带取消上下文执行一次工具调用。"""
         self._check_cancelled()
         with cancellation_context(self.cancellation_token):
             return self.session.execute_tool_call(tool_call)
 
     def execute_after_permission_with_cancellation_context(self, tool_call: ToolCall) -> ToolResult:
+        """权限确认后带取消上下文执行工具调用。"""
         self._check_cancelled()
         with cancellation_context(self.cancellation_token):
             return self.session.execute_tool_call_after_permission_confirmation(tool_call)
 
     def permission_input_request_from_pending(self, pending: PendingPermissionExecution) -> UserInputRequest:
+        """从挂起权限执行构造用户输入请求,缺失时抛错。"""
         confirmation = self.session.pending_permission_input_request(pending)
         if confirmation is None:
             raise RuntimeError("permission confirmation requires a pending request and permission manager")

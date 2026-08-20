@@ -1,3 +1,5 @@
+"""Agent 主循环:编排「构建请求 → 调 provider → 执行工具 → 结算」的多轮循环,直至完成或触达限制。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -42,6 +44,7 @@ from lanscoder.tools.types import ToolResult
 
 
 class AgentLoop:
+    """驱动一次会话用户回合的引擎;编排工具执行、权限恢复、上下文压缩与后台任务通知。"""
 
     def __init__(
         self,
@@ -66,6 +69,7 @@ class AgentLoop:
         background_manager: BackgroundJobManager | None = None,
         background_tool_names: frozenset[str] | None = None,
     ) -> None:
+        """注入循环依赖:会话、provider、请求构建、护栏、观察者、工具执行器与权限恢复处理器。"""
         self.session = session
         self.tool_settlement = ToolCallSettlement(session)
         self.task_plan_policy = TaskPlanPolicy(session)
@@ -123,18 +127,21 @@ class AgentLoop:
         attachments: list[UserAttachment] | None = None,
         streaming: bool = False,
     ) -> AgentTurnResult:
+        """用户回合入口:按 streaming 选择流式或异步执行路径。"""
 
         if streaming:
             return await self._run_user_turn_streaming(content, attachments=attachments)
         return await self._run_user_turn_async(content, attachments=attachments)
 
     async def run_nudge_turn(self, *, streaming: bool = False) -> AgentTurnResult:
+        """引导回合入口:按 streaming 选择路径,用于消费后台任务完成事件。"""
 
         if streaming:
             return await self._run_nudge_turn_streaming()
         return await self._run_nudge_turn_async()
 
     def replace_cancellation_token(self, token: CancellationToken | None) -> None:
+        """替换取消令牌,并同步到工具执行器与观察者。"""
 
         self.cancellation_token = token
         self.tool_executor.cancellation_token = token
@@ -149,6 +156,7 @@ class AgentLoop:
         *,
         attachments: list[UserAttachment] | None = None,
     ) -> AgentTurnResult:
+        """同步包装:在新事件循环中执行一次用户回合。"""
 
         return asyncio.run(self._run_user_turn_async(content, attachments=attachments))
 
@@ -158,6 +166,7 @@ class AgentLoop:
         *,
         attachments: list[UserAttachment] | None = None,
     ) -> AgentTurnResult:
+        """异步用户回合:有挂起权限时直接等待输入,否则记录用户消息并进入工具循环。"""
 
         if self.session.pending_permission_execution is not None:
             pending = self.session.pending_permission_execution
@@ -176,10 +185,12 @@ class AgentLoop:
         )
 
     def _run_nudge_turn_sync(self) -> AgentTurnResult:
+        """同步包装:在新事件循环中执行引导回合。"""
 
         return asyncio.run(self._run_nudge_turn_async())
 
     async def _run_nudge_turn_async(self) -> AgentTurnResult:
+        """异步引导回合:无挂起权限执行或后台完成时提前返回,否则进入工具循环。"""
 
         if self.session.pending_permission_execution is not None:
             pending = self.session.pending_permission_execution
@@ -204,16 +215,19 @@ class AgentLoop:
         *,
         streaming: bool = False,
     ) -> AgentTurnResult:
+        """携带用户输入恢复被挂起的回合(权限确认或 ask_user)。"""
 
         if streaming:
             return await self._resume_with_user_input_streaming(request_id, answer)
         return await self._resume_with_user_input_async(request_id, answer)
 
     def _resume_with_user_input_sync(self, request_id: str, answer: str) -> AgentTurnResult:
+        """同步包装:在新事件循环中恢复被挂起的回合。"""
 
         return asyncio.run(self._resume_with_user_input_async(request_id, answer))
 
     async def _resume_with_user_input_async(self, request_id: str, answer: str) -> AgentTurnResult:
+        """异步恢复回合:先做超时/取消检查,委托权限恢复处理器,需要时继续工具循环。"""
 
         try:
             self.guardrails.check_timeout()
@@ -233,6 +247,7 @@ class AgentLoop:
         )
 
     async def _resume_with_user_input_streaming(self, request_id: str, answer: str) -> AgentTurnResult:
+        """流式版恢复回合:复用挂起循环并继续流式工具循环。"""
 
         try:
             self.guardrails.check_timeout()
@@ -256,6 +271,7 @@ class AgentLoop:
         *,
         attachments: list[UserAttachment] | None = None,
     ) -> AgentTurnResult:
+        """流式用户回合:记录用户消息并进入流式工具循环。"""
 
         self.last_stream_events = []
         if self.session.pending_permission_execution is not None:
@@ -276,6 +292,7 @@ class AgentLoop:
         )
 
     async def _run_nudge_turn_streaming(self) -> AgentTurnResult:
+        """流式引导回合:消费后台任务完成事件。"""
 
         self.last_stream_events = []
         if self.session.pending_permission_execution is not None:
@@ -296,6 +313,7 @@ class AgentLoop:
         )
 
     def _record_resumed_tool_round(self) -> None:
+        """记录一次恢复的工具轮次,供轮次上限判定。"""
 
         self._tool_rounds_completed += 1
 
@@ -306,6 +324,7 @@ class AgentLoop:
         runtime_instruction: str | None = None,
         streaming: bool,
     ) -> ChatResponse:
+        """执行一次「调用 provider 拿响应」:构建请求、预检护栏/取消,支持同步或流式。"""
         prepared = self._prepare_main_provider_request(
             tool_choice=tool_choice,
             runtime_instruction=runtime_instruction,
@@ -345,6 +364,7 @@ class AgentLoop:
         runtime_instruction: str | None = None,
         streaming: bool,
     ) -> ChatResponse:
+        """带恢复的一次调用:可重试错误重试一次,提示过长则先压缩上下文再重试。"""
         retryable_failures = 0
         while True:
             try:
@@ -375,6 +395,7 @@ class AgentLoop:
                 )
 
     async def _run_tool_loop(self, complete_once, *, initial_tool_choice="auto") -> AgentTurnResult:
+        """核心工具循环:反复「调模型 → 执行工具」直到无工具调用、轮次上限或等待输入。"""
 
         guardrail_stop = False
         try:
@@ -415,9 +436,11 @@ class AgentLoop:
 
     @staticmethod
     def _pending_turn_result(pending_input: UserInputRequest) -> AgentTurnResult:
+        """构造等待用户输入的回合金结果。"""
         return AgentTurnResult(status=AgentTurnStatus.WAITING_FOR_USER_INPUT, pending_input=pending_input)
 
     def _complete_turn(self, response: ChatResponse) -> AgentTurnResult:
+        """把响应追加到会话并返回完成结果。"""
         self.session.append_assistant_response(response)
         return AgentTurnResult(status=AgentTurnStatus.COMPLETED, response=response)
 
@@ -427,6 +450,7 @@ class AgentLoop:
         complete_once,
         tool_rounds: int,
     ) -> tuple[ChatResponse, UserInputRequest | None, int]:
+        """回合结束前按需做一次任务计划对齐的额外调用。"""
         instruction = self._final_reconciliation_instruction()
         if instruction is None:
             return response, None, tool_rounds
@@ -434,6 +458,7 @@ class AgentLoop:
         return await self._continue_tool_loop_from_response(response, complete_once, tool_rounds)
 
     def _final_reconciliation_instruction(self) -> str | None:
+        """返回最终对齐指令,每个回合只允许执行一次。"""
         if self._task_plan_reconciliation_attempted:
             return None
         instruction = self.task_plan_policy.final_reconciliation_instruction()
@@ -448,6 +473,7 @@ class AgentLoop:
         complete_once,
         tool_rounds: int,
     ) -> tuple[ChatResponse, UserInputRequest | None, int]:
+        """从一条响应继续工具循环:执行工具调用直到无调用、轮次上限或等待输入。"""
         while response.tool_calls:
             self._check_cancelled()
             if self.max_tool_rounds is not None and tool_rounds >= self.max_tool_rounds:
@@ -467,12 +493,15 @@ class AgentLoop:
         return response, None, tool_rounds
 
     def _append_interrupted_tool_results(self) -> None:
+        """把被打断的工具结果以 interrupted 事件补记到会话。"""
         self._emit_settlements("interrupted", self.tool_settlement.append_interrupted_tail())
 
     def _repair_interrupted_tool_calls_before_provider_request(self) -> None:
+        """发请求前修复上次可能被中断的工具调用记录。"""
         self._emit_settlements("interrupted", self.tool_settlement.repair_before_provider_request())
 
     def _emit_settlements(self, kind, settlements) -> None:
+        """向观察者派发一组工具结算事件。"""
         for settlement in settlements:
             self._emit_tool_event(kind, settlement.tool_call, result=settlement.result)
 
@@ -493,6 +522,7 @@ class AgentLoop:
         permission_request: PermissionRequest | None = None,
         prewrite_review: dict[str, object] | None = None,
     ) -> None:
+        """构造并派发单个工具执行事件到观察者。"""
         self._observer.on_tool_event(
             ToolExecutionEvent(
                 kind=kind,
@@ -509,6 +539,7 @@ class AgentLoop:
         tool_choice="auto",
         runtime_instruction: str | None = None,
     ) -> PreparedMainRequest:
+        """组装发给 provider 的主请求:必要时先触发上下文压缩。"""
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
         self._append_pending_guidance()
@@ -546,6 +577,7 @@ class AgentLoop:
         )
 
     def _record_projection_consumed(self, prepared: PreparedMainRequest) -> None:
+        """记录本次请求消费的任务计划投影。"""
         self.session.record_provider_projection_consumed(
             request_id=prepared.request_id,
             projection_fingerprint=prepared.projection_fingerprint,
@@ -555,6 +587,7 @@ class AgentLoop:
         )
 
     def _report_progress(self, response: ChatResponse) -> None:
+        """累计 token 并向观察者上报护栏调用计数与总 token。"""
         usage = response.usage
         if usage is not None and usage.total_tokens is not None:
             self._total_tokens += usage.total_tokens
@@ -569,6 +602,7 @@ class AgentLoop:
         trigger: ContextWindowTrigger,
         runtime_instruction: str | None = None,
     ):
+        """按触发原因评估并执行上下文压缩。"""
 
         if self.context_manager is None:
             return None
@@ -595,12 +629,14 @@ class AgentLoop:
         )
 
     def _compact_for_prompt_too_long(self, *, runtime_instruction: str | None = None):
+        """为「提示过长」错误触发一次上下文压缩。"""
         return self._compact_if_needed(
             trigger=ContextWindowTrigger.PROMPT_TOO_LONG,
             runtime_instruction=runtime_instruction,
         )
 
     def _provider_tool_definitions(self):
+        """返回提供给 provider 的工具定义(剔除隐藏与未激活 MCP 工具)。"""
 
         capabilities = getattr(self.provider, "capabilities", None)
         if capabilities is not None and not capabilities.supports_tools:
@@ -619,6 +655,7 @@ class AgentLoop:
         return self._provider_tool_definitions()
 
     def _augment_tool_definition(self, definition):
+        """给后台工具的定义附加后台控制参数。"""
 
         if self.background_manager is None:
             return definition
@@ -630,6 +667,7 @@ class AgentLoop:
         return self._observer.foreground_progress()
 
     def _begin_turn(self, *, new_user_turn: bool = True) -> None:
+        """开启新回合:清理 MCP 激活、重置护栏与轮次计数。"""
         if new_user_turn:
             self._mcp_activation.clear()
             self.guardrails.begin_turn()
@@ -637,6 +675,7 @@ class AgentLoop:
             self._tool_rounds_completed = 0
 
     def _append_pending_guidance(self) -> None:
+        """把待发送的运行指引追加为用户消息。"""
         if self.guidance_provider is None:
             return
         guidance_items = self.guidance_provider()
@@ -646,6 +685,7 @@ class AgentLoop:
                 self.session.append_user_message(text)
 
     def _append_background_notifications(self) -> None:
+        """把已完成的后台任务以通知形式追加进会话。"""
 
         if self.background_manager is None:
             return
@@ -663,10 +703,12 @@ class AgentLoop:
         return self.cancellation_token is not None and self.cancellation_token.is_cancelled
 
     def _check_cancelled(self) -> None:
+        """若已请求取消则抛异常中断当前流程。"""
         if self.cancellation_token is not None:
             self.cancellation_token.raise_if_cancelled()
 
     def _drop_unsupported_tool_calls(self, response: ChatResponse) -> ChatResponse:
+        """当 provider 不支持工具时剥离 tool_calls 并附带告警。"""
 
         capabilities = getattr(self.provider, "capabilities", None)
         if capabilities is None or capabilities.supports_tools or not response.tool_calls:
@@ -685,10 +727,12 @@ class AgentLoop:
         )
 
     def _drop_unsupported_tool_call_stream_events(self) -> None:
+        """从流事件里剥离工具调用相关事件。"""
         if not self.last_stream_events:
             return
         self.last_stream_events = [event for event in self.last_stream_events if event.kind not in {"tool_call_started", "tool_call_delta", "tool_call_completed"}]
 
     def _tool_round_limit_response(self, response: ChatResponse) -> ChatResponse:
+        """构造触达工具轮次上限时的响应。"""
 
         return self.guardrails.limit_response(AgentLoopStopReason.TOOL_ROUND_LIMIT, raw=response.raw)

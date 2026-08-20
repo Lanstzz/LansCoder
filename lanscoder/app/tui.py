@@ -1,3 +1,5 @@
+"""Textual TUI 应用层主体:输入提交、流式渲染、子agent 进度面板、权限/ask_user 交互及各类选择器。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -102,17 +104,21 @@ def _format_subagent_line(
     tokens: int,
     indicator: str,
 ) -> str:
+    """格式化单个子agent 的进度行(耗时 + 调用数 + token)。"""
     token_str = f"{tokens / 1000:.1f}k" if tokens >= 1000 else str(tokens)
     return f"{indicator} {label} · {elapsed:.0f}s · {calls} calls · {token_str} tokens"
 
 
 @dataclass(slots=True)
 class _ActiveChatTurn:
+    """当前正在进行的聊天回合标识:回合 id 与代际 token。"""
+
     id: str
     token: int
 
 
 class LansCoderApp(LansCoderViewMixin, App[None]):
+    """Textual 主应用:组合 topbar/输出区/任务计划面板/输入区/子agent 面板,承载全部 TUI 交互。"""
 
     CSS_PATH = "tui.tcss"
     ALLOW_SELECT = True
@@ -145,6 +151,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         config: LansCoderTuiConfig | None = None,
         on_shutdown: Callable[[], None] | None = None,
     ) -> None:
+        """初始化全部 TUI 状态:流式渲染缓冲、子agent 面板、选择器、附件与回合代际。"""
         super().__init__()
         self.command_handler = command_handler
         self.chat_runner = chat_runner
@@ -212,6 +219,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self.task_plan_panel_state = TuiTaskPlanPanelState()
 
     def compose(self) -> ComposeResult:
+        """按 Textual 布局 yield 各 UI 组件:topbar、输出区、任务计划面板、输入区、子agent 面板。"""
         yield Static(self._topbar_text(), id="topbar", classes="topbar")
         with Vertical(id="main"):
             yield VerticalScroll(id="output")
@@ -229,6 +237,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             yield Vertical(id="subagent-panel", classes="hidden")
 
     def on_mount(self) -> None:
+        """挂载后初始化标题、欢迎页、斜杠命令补全、焦点与子agent 完成回调。"""
         self.title = self.config.title
         self._refresh_session_subtitle()
         self._show_welcome()
@@ -250,12 +259,14 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                 mgr.set_on_job_completed(self._on_subagent_completed)
 
     def on_app_focus(self) -> None:
+        """应用获得焦点时把焦点还给输入区。"""
         try:
             self.set_focus(self.query_one("#input"))
         except Exception:
             pass
 
     def _refresh_subagent_progress(self) -> None:
+        """定时刷新子agent 进度面板:同步前台/后台任务行,超出上限时折叠显示。"""
         manager = None
         foreground = None
         if self.chat_runner is not None:
@@ -347,6 +358,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return {**foreground, "cancel_requested": True}
 
     def _sync_subagent_selection(self, rows: list[SubagentRow]) -> None:
+        """按当前行集合校正选中状态,失配时退出选择模式。"""
         if not any(row.id == FG_ID for row in rows):
             self._foreground_cancel_requested = False
         if self._subagent_selected is not None and not any(row.id == self._subagent_selected for row in rows):
@@ -357,6 +369,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self.call_from_thread(self._handle_subagent_completed, job)
 
     def _handle_subagent_completed(self, job) -> None:
+        """子agent 完成后写入 UI 结果行,空闲时补发一次引导回合。"""
         if not getattr(self, "is_mounted", False):
             return
         label = job.label or job.tool_name
@@ -373,7 +386,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             self._submit_nudge_turn()
 
     def _has_pending_background_completions(self) -> bool:
-
+        """判断当前会话是否有待处理的后台任务完成事件。"""
         if self.chat_runner is None:
             return False
         manager = getattr(self.chat_runner, "background_manager", None)
@@ -387,6 +400,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return bool(peek(session_id=session_id))
 
     def set_slash_commands(self, commands: list[tuple[str, str]]) -> None:
+        """注入斜杠命令列表并刷新补全组件。"""
         self._slash_commands = commands
         try:
             suggest = self.query_one("#slash-suggest", SlashSuggest)
@@ -399,6 +413,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._refresh_welcome_layout()
 
     def on_unmount(self) -> None:
+        """卸载时停止动画并触发关闭回调(只触发一次)。"""
         self._stop_welcome_particles()
         self._stop_provider_glow()
         if not self._shutdown_called and self._on_shutdown is not None:
@@ -406,6 +421,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             self._on_shutdown()
 
     async def _submit_composer(self) -> None:
+        """处理输入框提交:记录历史、处理数字选择/斜杠命令/附件,最后发起聊天回合。"""
         input_widget = self.query_one("#input", TextArea)
         text = input_widget.text.strip()
         input_widget.clear()
@@ -449,6 +465,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._submit_chat_text(text, attachments=attachments)
 
     def _submit_manual_compact(self, text: str) -> None:
+        """手动 /compact:校验空闲且无重复任务后启动压缩 worker。"""
         if self._chat_busy:
             self._write_line("Chat is still running. Please wait before compacting context.", kind=TuiEntryKind.SYSTEM)
             return
@@ -460,6 +477,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._compact_worker = self.run_worker(self._run_manual_compact_command(text))
 
     async def _run_manual_compact_command(self, text: str) -> None:
+        """在线程池里执行 /compact 命令并刷新输出与活动状态。"""
         try:
             assert self.command_handler is not None
             result = await anyio.to_thread.run_sync(self.command_handler.handle, text)
@@ -480,6 +498,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._set_activity("done")
 
     async def on_composer_text_area_submitted(self, event: ComposerTextArea.Submitted) -> None:
+        """输入区提交事件:有选择器时先选中,否则走提交流程。"""
         event.stop()
         if self._picker is not None:
             self._picker_select_index(self._picker.selected_index)
@@ -487,6 +506,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         await self._submit_composer()
 
     async def on_event(self, event: events.Event) -> None:
+        """事件入口:子agent 选择模式下先拦截按键交给专用处理。"""
         if isinstance(event, Key) and not event.is_forwarded and self._subagent_select_mode:
             if self._handle_subagent_select_key(event):
                 event.stop()
@@ -495,6 +515,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         await super().on_event(event)
 
     def on_key(self, event: Key) -> None:
+        """按键处理:选择器/子agent 选择、Esc 中断、方向键回顾输入历史。"""
         if self._picker is not None and self._handle_picker_key(event):
             event.stop()
             event.prevent_default()
@@ -529,6 +550,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         input_widget.cursor_location = input_widget.document.end
 
     async def action_copy_output_or_quit(self) -> None:
+        """Ctrl+C:优先复制选中文本,无选中时退出应用。"""
 
         focused = self.focused
         if isinstance(focused, TextArea) and focused.selected_text:
@@ -543,11 +565,13 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             await result
 
     def copy_to_clipboard(self, text: str) -> None:
+        """复制到剪贴板;macOS 上额外用 pbcopy 兜底。"""
         super().copy_to_clipboard(text)
         if platform.system() == "Darwin":
             subprocess.run(["pbcopy"], input=text, text=True, check=False)
 
     def on_click(self, event: events.Click) -> None:
+        """点击子agent 行时选中并进入选择模式。"""
         widget_id = getattr(event.widget, "id", None)
         if isinstance(widget_id, str) and widget_id.startswith("subagent-row-"):
             self._subagent_selected = widget_id[len("subagent-row-") :]
@@ -556,6 +580,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             event.stop()
 
     def on_paste(self, event: Paste) -> None:
+        """粘贴事件:输入区聚焦时尝试把剪贴板内容转为附件。"""
 
         focused = getattr(self, "focused", None)
         if getattr(focused, "id", None) != "input":
@@ -565,6 +590,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             event.prevent_default()
 
     def _paste_composer_clipboard_image(self) -> bool:
+        """把剪贴板图片作为附件暂存(无文本粘贴时的路径)。"""
 
         focused = getattr(self, "focused", None)
         if getattr(focused, "id", None) != "input":
@@ -579,6 +605,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         )
 
     def _stage_paste_attachments(self, paste_text: str | None) -> bool:
+        """解析并去重暂存粘贴的附件,写入附件提示行。"""
         try:
             attachments = resolve_paste_attachments(paste_text)
         except (OSError, ValueError) as exc:
@@ -600,6 +627,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return self._chat_turn_token
 
     def _begin_active_chat_turn(self) -> int:
+        """开启新聊天回合:分配代际 token 并记录起始指标。"""
         token = self._next_chat_turn_token()
         self._start_turn_metrics()
         self._active_chat_turn = _ActiveChatTurn(
@@ -609,6 +637,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return token
 
     def _resume_active_chat_turn(self) -> int:
+        """为挂起回合分配新 token 继续,无活跃回合时新建。"""
         active_turn = self._active_chat_turn
         if active_turn is not None:
             token = self._next_chat_turn_token()
@@ -625,6 +654,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return self._active_chat_turn is not None
 
     def _finish_chat_turn(self, token: int) -> None:
+        """回合收尾:刷新任务计划面板、解除忙状态,必要时续发排队/引导回合。"""
         if not self._is_current_chat_turn(token):
             return
         self._refresh_task_plan_panel_from_current_session()
@@ -646,6 +676,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return
 
     def _handle_escape_interrupt(self) -> bool:
+        """Esc 双重打断窗口:第一次提示,窗口内再按则中断当前回合。"""
         if not self._chat_busy:
             self._last_escape_at = 0.0
             return False
@@ -659,6 +690,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return True
 
     def _interrupt_chat_turn(self) -> None:
+        """取消当前回合:取消 provider 与 worker,清空流缓冲并复位动画。"""
         self._chat_turn_token += 1
         self._discard_stream_deltas()
         cancel_current_turn = getattr(self.chat_runner, "cancel_current_turn", None)
@@ -682,6 +714,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._input_history_index = None
 
     def _handle_subagent_select_key(self, event: Key) -> bool:
+        """子agent 选择模式的按键:上/下移动、x 停止、Esc 退出。"""
         if event.key == "escape":
             self._exit_subagent_selection()
             return True
@@ -710,6 +743,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._refresh_subagent_progress()
 
     def _stop_selected_subagent(self) -> None:
+        """停止选中的子agent:前台走取消回合,后台走管理器取消。"""
         rows = self._subagent_rows()
         target = stop_target(rows, self._subagent_selected)
         if target is None:
@@ -725,6 +759,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             manager.cancel(target)
 
     def _recall_input_history(self, direction: str) -> str | None:
+        """按方向键在输入历史中回溯,返回应加载的文本。"""
         if not self._input_history:
             return None
         if direction == "up":
@@ -744,6 +779,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return None
 
     def _submit_chat_text(self, text: str, *, attachments: list[UserAttachment] | None = None) -> None:
+        """核心提交入口:忙态排队消息,处理挂起的权限/ask_user,否则启动新回合。"""
         if self.chat_runner is None:
             self._write_line("普通聊天入口尚未接入 AgentLoop。", kind=TuiEntryKind.ERROR)
             return
@@ -800,6 +836,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._chat_worker = self.run_worker(self._run_chat_turn(text, token, attachments=attachments))
 
     def _submit_nudge_turn(self) -> None:
+        """空闲时补发一次引导回合,处理后台任务完成。"""
 
         if self.chat_runner is None or self._chat_busy:
             return
@@ -808,6 +845,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._chat_worker = self.run_worker(self._run_nudge_turn(token))
 
     def _handle_command_action(self, action: dict[str, Any] | None, *, output: str = "") -> bool:
+        """按命令动作分派 UI 行为:提交聊天、换会话、打开各类选择器、回放会话等。"""
         if not action:
             return False
         action_type = action.get("type")
@@ -893,6 +931,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return False
 
     def _handle_picker_key(self, event: Key) -> bool:
+        """选择器按键:上/下移动、Enter 选中、Esc 取消。"""
         picker = self._picker
         if picker is None:
             return False
@@ -926,6 +965,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return True
 
     def _picker_select_index(self, index: int) -> None:
+        """选中选择器某项:构造命令交给命令处理器并刷新输出。"""
         picker = self._picker
         if picker is None or self.command_handler is None:
             return
@@ -968,6 +1008,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         input_widget.focus()
 
     def _replace_last_command_output(self, text: str) -> None:
+        """就地更新最后一条命令输出行,找不到时追加新行。"""
         for entry in reversed(self.transcript.entries):
             if entry.kind == TuiEntryKind.COMMAND:
                 entry.body = text
@@ -987,6 +1028,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._remove_output_children()
 
     def _rerender_transcript(self) -> None:
+        """按 transcript 记录重建输出区内容。"""
         entries = list(self.transcript.entries)
         self.transcript = TuiTranscript()
         self._remove_output_children()
@@ -1008,6 +1050,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                     remove()
 
     def _replay_current_session(self) -> None:
+        """把当前会话历史回放到输出区,并同步挂起的输入。"""
         current_session = self.current_session
         if current_session is None:
             return
@@ -1063,6 +1106,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._write_pending_input()
 
     async def _resume_permission_turn(self, request_id: str, answer: str, token: int) -> None:
+        """携带权限/ask_user 答案恢复挂起回合,装好流与工具事件处理器。"""
         previous_stream_handler = None
         previous_tool_handler = None
         try:
@@ -1093,6 +1137,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         *,
         attachments: list[UserAttachment] | None = None,
     ) -> None:
+        """启动一次新聊天回合:装事件处理器、调用 chat_runner 并写回响应。"""
         previous_stream_handler = None
         previous_tool_handler = None
         try:
@@ -1122,6 +1167,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             self._write_chat_response(response)
 
     async def _run_nudge_turn(self, token: int) -> None:
+        """启动一次引导回合(处理后台完成)并写回响应。"""
         previous_stream_handler = None
         previous_tool_handler = None
         try:
@@ -1151,6 +1197,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             self._write_chat_response(response)
 
     def _write_chat_response(self, response) -> None:
+        """把回合响应写入输出:去重流式缓冲、过滤工具行,按内容类型渲染。"""
         self._drain_stream_deltas()
         display_lines = list(getattr(self.chat_runner, "last_display_lines", []) or [])
         content = getattr(response, "content", "")
@@ -1180,6 +1227,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._refresh_session_subtitle()
 
     def _show_activity_animation(self, kind: str, detail: str) -> None:
+        """启动底部活动动画,按 kind 决定帧集。"""
         self._activity_animation_kind = kind
         self._activity_animation_detail = detail
         self._activity_frame_index = 0

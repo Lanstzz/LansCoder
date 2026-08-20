@@ -1,3 +1,5 @@
+"""应用组合根:按配置装配 provider、会话、工具、MCP、命令处理器与 TUI 应用,返回可运行实例。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -49,6 +51,7 @@ from lanscoder.utils.sandbox_access import SandboxAccess
 
 
 class McpManagerLike(Protocol):
+    """McpManager 的最小接口,便于在测试中替换真实实现。"""
 
     def connect_all(self) -> None: ...
 
@@ -66,6 +69,7 @@ class McpManagerLike(Protocol):
 
 
 class McpToolProvider:
+    """把基础工具与 MCP 发现到的工具合并为最终工具集;查询延迟到运行时以便热更新。"""
 
     def __init__(self, base_tools: list[Tool], manager: McpManagerLike, *, include_mcp: bool) -> None:
         self._base_tools = list(base_tools)
@@ -73,6 +77,7 @@ class McpToolProvider:
         self._include_mcp = include_mcp
 
     def __call__(self) -> list[Tool]:
+        """返回合并后的工具列表;MCP 工具逐个适配去重,并附上工具搜索入口。"""
         tools = list(self._base_tools)
         if not self._include_mcp:
             return tools
@@ -115,6 +120,7 @@ def create_lanscoder_app(
     model_spec: str | None = None,
     compact_config: ContextCompactionConfig | None = None,
 ) -> LansCoderApp:
+    """应用工厂:解析配置、装配全部组件并返回可运行的 LansCoderApp。"""
 
     project_path = Path(project_root)
     resolved_data_root = Path(data_root) if data_root is not None else project_path / ".lanscoder"
@@ -292,6 +298,7 @@ def create_lanscoder_app(
 
 
 def _should_use_streaming(provider: ChatProvider, config: AppConfig) -> bool:
+    """按 provider 能力与配置决定是否启用流式响应。"""
     if not bool(getattr(getattr(provider, "capabilities", None), "supports_streaming", False)):
         return False
     configured = config.get_provider_bool("streaming", env="LANSCODER_STREAMING", provider_name=provider.name)
@@ -301,6 +308,8 @@ def _should_use_streaming(provider: ChatProvider, config: AppConfig) -> bool:
 
 
 class RuntimeModelSwitcher:
+    """运行时模型切换:按模型规格重建 provider 并热替换到 chat_runner。"""
+
     def __init__(
         self,
         *,
@@ -317,13 +326,16 @@ class RuntimeModelSwitcher:
         self._state_store = state_store
 
     def current_model(self) -> ModelState:
+        """返回当前生效的 provider/model。"""
         provider = self._chat_runner.provider
         return ModelState(provider=provider.name, model=provider.model)
 
     def model_choices(self) -> list[ModelState]:
+        """返回目录中全部模型去重后的选择列表。"""
         return _unique_model_states([ModelState(provider=profile.provider_id, model=profile.model_id) for profile in self._catalog.list()])
 
     def switch_model(self, spec: str) -> ModelState:
+        """按规格切换模型并持久化选择,返回新模型状态。"""
         selected_provider, model = _parse_model_spec(spec)
         if selected_provider is None:
             raise ValueError("模型目录模式需要使用 <provider>/<model>")
@@ -334,6 +346,7 @@ class RuntimeModelSwitcher:
         return self._apply_profile(profile, persist=True)
 
     def _apply_profile(self, profile: ModelProfile, *, persist: bool) -> ModelState:
+        """落地模型档案:重建 provider、更新 chat_runner 与压缩器,按需记录选择。"""
         try:
             provider = create_provider_for_model(profile)
         except ProviderConfigError as error:
@@ -351,6 +364,7 @@ class RuntimeModelSwitcher:
 
 
 def _main_request_options(profile: ModelProfile | None) -> MainRequestOptions:
+    """从模型档案构建请求选项,无档案时用默认值。"""
     if profile is None:
         return MainRequestOptions()
     request = profile.request
@@ -367,6 +381,7 @@ def _initial_model_profile(
     model_spec: str | None,
     state: ModelSelectionState,
 ) -> ModelProfile:
+    """确定初始模型档案:按 model_spec → 默认 → 上次选择 → 目录首个 依次回退。"""
     for ref in (model_spec, catalog.default_ref, state.last_selected):
         if ref and catalog.get(ref):
             return catalog.require(ref)
@@ -377,6 +392,7 @@ def _initial_model_profile(
 
 
 def _parse_model_spec(spec: str) -> tuple[str | None, str]:
+    """解析模型规格为 (provider, model),provider 可缺省。"""
     value = spec.strip()
     if not value or any(character.isspace() for character in value):
         raise ValueError("usage: /model <model> or /model <provider>/<model>")
@@ -389,6 +405,7 @@ def _parse_model_spec(spec: str) -> tuple[str | None, str]:
 
 
 def _unique_model_states(states: list[ModelState]) -> list[ModelState]:
+    """按 (provider, model) 去重模型状态列表。"""
     unique: list[ModelState] = []
     seen: set[tuple[str, str]] = set()
     for state in states:

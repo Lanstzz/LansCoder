@@ -1,3 +1,5 @@
+"""上下文命令处理器:实现 /context、/compact、/compact status 三个斜杠命令。"""
+
 from __future__ import annotations
 
 from lanscoder.utils.text import display_value
@@ -14,6 +16,8 @@ from lanscoder.context.token_budget import ContextBudget
 
 
 class SessionLike(Protocol):
+    """会话的最小接口:可重建视图并暴露运行时状态。"""
+
     session_id: str
     runtime_state: SessionRuntimeState
     current_turn: int
@@ -22,11 +26,15 @@ class SessionLike(Protocol):
 
 
 class BudgetProvider(Protocol):
+    """按会话视图提供上下文预算的调用签名。"""
+
     def __call__(self, view: SessionView) -> ContextBudget: ...
 
 
 @dataclass(frozen=True, slots=True)
 class CommandResult:
+    """斜杠命令处理结果:是否已处理、输出文本与后续 UI 动作。"""
+
     handled: bool
     output: str = ""
     action: dict[str, Any] | None = None
@@ -34,6 +42,7 @@ class CommandResult:
 
 @dataclass(slots=True)
 class ContextCommandHandler:
+    """处理上下文相关斜杠命令:检查上下文状态、手动触发压缩。"""
 
     session: SessionLike
     budget_provider: BudgetProvider
@@ -41,6 +50,7 @@ class ContextCommandHandler:
     inspector: ContextInspector = ContextInspector()
 
     def commands(self) -> list[tuple[str, str]]:
+        """声明支持的斜杠命令及其帮助文案。"""
         return [
             ("/context", "Inspect context state."),
             ("/compact status", "Show compaction status."),
@@ -48,6 +58,7 @@ class ContextCommandHandler:
         ]
 
     def handle(self, text: str) -> CommandResult:
+        """按规范化命令分派到检查/压缩分支,未知命令返回未处理。"""
         command = text.strip()
         if not command.startswith("/"):
             return CommandResult(handled=False)
@@ -67,6 +78,7 @@ class ContextCommandHandler:
         return CommandResult(handled=False)
 
     def _inspect(self) -> ContextInspectionReport:
+        """对当前会话做上下文检查并返回报告。"""
         view = self.session.rebuild_view()
         return self.inspector.inspect(
             view,
@@ -75,6 +87,7 @@ class ContextCommandHandler:
         )
 
     def _manual_compact(self) -> str:
+        """手动触发上下文压缩,返回结果文本。"""
         if self.context_manager is None:
             return "Manual compact unavailable: context manager is not configured"
 
@@ -98,6 +111,7 @@ class ContextCommandHandler:
 
 
 def _render_context_report(report: ContextInspectionReport) -> str:
+    """把上下文检查报告渲染为多行文本。"""
     lines = [
         f"Session: {report.session_id}",
         f"Model window: {report.context_window} ({report.context_window_source})",
@@ -118,6 +132,7 @@ def _render_context_report(report: ContextInspectionReport) -> str:
 
 
 def _render_compact_status(report: ContextInspectionReport) -> str:
+    """把压缩状态报告渲染为多行文本。"""
     lines = [
         f"Auto compact: {report.auto_compact_status}",
         f"Disabled until: {display_value(report.auto_compact_disabled_until)}",
@@ -137,6 +152,7 @@ def _render_compact_status(report: ContextInspectionReport) -> str:
 
 
 def _manual_target_tokens(budget: ContextBudget) -> int | None:
+    """按预算计算手动压缩目标 token,输入过小时返回 None 表示不压缩。"""
     if budget.input_tokens <= 2_000:
         return None
     proposed = min(budget.low_watermark - 1, int(budget.input_tokens * 0.6))
@@ -145,4 +161,5 @@ def _manual_target_tokens(budget: ContextBudget) -> int | None:
 
 
 def _is_noop_compact(result: ContextCompactResult) -> bool:
+    """判断一次压缩是否无操作:事件标记 noop 且前后 token 数不变。"""
     return result.programmatic_event is not None and result.programmatic_event.noop and result.l3_event is None and result.before_tokens == result.after_tokens

@@ -1,3 +1,5 @@
+"""上下文构建:把会话视图投影为发给 provider 的消息列表,处理检查点摘要与裁剪。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,10 +12,13 @@ from lanscoder.providers.types import ChatMessage, ContentPart, ToolCall
 
 
 class InvalidCheckpointBoundaryError(ValueError):
+    """检查点边界无效(尾部起点缺失或孤儿工具结果)。"""
+
     pass
 
 
 class ContextBuilder:
+    """把会话视图投影为 provider 消息,按最新检查点折叠早期对话。"""
 
     def build_provider_messages(
         self,
@@ -23,6 +28,7 @@ class ContextBuilder:
         checkpoint: Checkpoint | None = None,
         store_root: Path | None = None,
     ) -> list[ChatMessage]:
+        """主入口:系统前缀 + 检查点摘要 + 尾部消息,投影为 ChatMessage 列表。"""
         active_checkpoint = checkpoint or CheckpointIndex(view.checkpoints).latest()
         messages = list(system_prefix or [])
         if active_checkpoint is not None:
@@ -44,6 +50,7 @@ class ContextBuilder:
         return messages
 
     def projected_tool_result_part_ids(self, view: SessionView) -> tuple[str, ...]:
+        """返回当前投影会包含的 tool_result 部件 id,用于消费标记。"""
 
         checkpoint = CheckpointIndex(view.checkpoints).latest()
         tail = _collapse_identical_adjacent_duplicate_tool_calls(self._tail_messages(view, checkpoint=checkpoint))
@@ -56,6 +63,7 @@ class ContextBuilder:
         *,
         checkpoint: Checkpoint | None,
     ) -> list[AgentMessage]:
+        """取检查点之后的尾部消息并校验边界。"""
         if checkpoint is None:
             return view.messages
 
@@ -75,6 +83,7 @@ class ContextBuilder:
         preserve_trimmed_text: bool = False,
         store_root: Path | None = None,
     ) -> list[ChatMessage]:
+        """把单条会话消息投影为 provider 消息(按角色区分处理)。"""
         if message.role == "system_meta":
             return []
 
@@ -110,6 +119,7 @@ def _project_assistant_message(
     *,
     preserve_trimmed_text: bool = False,
 ) -> ChatMessage:
+    """把 assistant 消息投影为含文本与工具调用的 ChatMessage。"""
 
     text_parts = [part.content for part in message.parts if part.kind == "text" and (preserve_trimmed_text or _is_visible_text_part(part)) and part.content]
     tool_calls = [
@@ -125,6 +135,7 @@ def _project_assistant_message(
 
 
 def _project_tool_part(part: MessagePart) -> ChatMessage:
+    """把工具结果部件投影为 tool 消息。"""
 
     return ChatMessage(
         role="tool",
@@ -135,6 +146,7 @@ def _project_tool_part(part: MessagePart) -> ChatMessage:
 
 
 def _validate_tail_boundary(messages: list[AgentMessage]) -> None:
+    """校验检查点尾部不以孤儿工具结果开头。"""
     if not messages:
         return
     first = messages[0]
@@ -145,10 +157,12 @@ def _validate_tail_boundary(messages: list[AgentMessage]) -> None:
 
 
 def _join_visible_text(parts: list[MessagePart], *, preserve_trimmed_text: bool = False) -> str:
+    """拼接消息中可见的文本部件。"""
     return "\n".join(part.content for part in parts if part.kind in {"text", "file", "archive_placeholder"} and (preserve_trimmed_text or _is_visible_text_part(part)) and part.content)
 
 
 def _has_trimmed_text(messages: list[AgentMessage]) -> bool:
+    """判断消息中是否含有被压缩裁剪的文本。"""
     return any(part.kind == "text" and part.metadata.get("compaction_state") == "trimmed" for message in messages for part in message.parts)
 
 
@@ -157,6 +171,7 @@ def _is_visible_text_part(part: MessagePart) -> bool:
 
 
 def _collapse_identical_adjacent_duplicate_tool_calls(messages: list[AgentMessage]) -> list[AgentMessage]:
+    """折叠相邻且完全相同的重复工具调用消息。"""
 
     collapsed: list[AgentMessage] = []
     for message in messages:
@@ -168,6 +183,7 @@ def _collapse_identical_adjacent_duplicate_tool_calls(messages: list[AgentMessag
 
 
 def _duplicate_tool_call_signature(message: AgentMessage) -> tuple[tuple[str, ...], tuple[tuple[str, str, object], ...]] | None:
+    """计算消息的重复工具调用签名,非工具消息返回 None。"""
     if message.role != "assistant":
         return None
     text = tuple(part.content for part in message.parts if part.kind == "text")
@@ -188,6 +204,7 @@ def _duplicate_tool_call_signature(message: AgentMessage) -> tuple[tuple[str, ..
 
 
 def _with_basis_message_id(message_id: str, content: str) -> str:
+    """在用户消息前嵌入 basis_message_id 标记。"""
     return f"[context: basis_message_id={message_id}]\n{content}"
 
 
@@ -197,6 +214,7 @@ def _project_user_content_parts(
     content: str,
     store_root: Path | None,
 ) -> list[ContentPart] | None:
+    """投影用户消息内容,并附加可加载的内嵌图片部件。"""
 
     content_parts = [ContentPart(type="text", text=content)]
     for part in parts:
@@ -222,6 +240,7 @@ def _project_user_content_parts(
 
 
 def _attachment_path(part: MessagePart, *, store_root: Path | None) -> Path | None:
+    """把相对附件路径解析为存储内的绝对路径(须在 root 内且存在)。"""
     relative_path = part.metadata.get("path")
     if store_root is None or not isinstance(relative_path, str):
         return None

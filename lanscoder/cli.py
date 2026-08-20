@@ -1,3 +1,5 @@
+"""CLI 入口:解析命令行参数,分派到 Textual TUI、交互 REPL、单次运行或 config/mcp 子命令。"""
+
 from __future__ import annotations
 from lanscoder.app.ports import ChatRunnerLike
 
@@ -17,6 +19,8 @@ from lanscoder.permissions.types import PermissionMode
 
 @dataclass(frozen=True, slots=True)
 class CliConfig:
+    """一次命令行调用的全部参数;由 main 组装并传给 create_cli_app。"""
+
     project_root: Path
     data_root: Path | None
     session_id: str | None
@@ -32,6 +36,7 @@ CliRunner = Callable[[CliConfig], str]
 
 
 def read_message(message: str | None, *, stdin_text: str | None = None) -> str:
+    """取用户消息:优先 --message,否则读 stdin 并去除首尾空白。"""
 
     if message is not None:
         return message.strip()
@@ -40,6 +45,7 @@ def read_message(message: str | None, *, stdin_text: str | None = None) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构建 argparse 解析器,注册 config/mcp 子命令与各运行模式选项。"""
     parser = argparse.ArgumentParser(description="Run a single LansCoder user turn.")
     subparsers = parser.add_subparsers(dest="command")
     config_parser = subparsers.add_parser("config", help="Inspect or initialize LansCoder configuration.")
@@ -90,6 +96,7 @@ def main(
     runner: CliRunner | None = None,
     stdin_text: str | None = None,
 ) -> int:
+    """CLI 主入口:按参数分派到 TUI、REPL、单次运行或 config/mcp 子命令,返回进程退出码。"""
     parser = build_parser()
     args, extras = parser.parse_known_args(argv)
     if extras:
@@ -171,6 +178,7 @@ def main(
 
 
 def run_single_turn(config: CliConfig) -> str:
+    """构建应用并执行一次用户回合,返回模型的回复文本。"""
     if config.benchmark:
         return run_benchmark_turn(config)
     app = create_cli_app(config)
@@ -179,6 +187,7 @@ def run_single_turn(config: CliConfig) -> str:
 
 
 def run_benchmark_turn(config: CliConfig) -> str:
+    """以基准模式运行单次回合:绕过权限、关闭预写审查并套用 SWE-lite 限制。"""
 
     app = create_cli_app(config)
     app.current_session.set_permission_mode(PermissionMode.BYPASS)
@@ -190,6 +199,7 @@ def run_benchmark_turn(config: CliConfig) -> str:
 
 
 def create_cli_app(config: CliConfig):
+    """经应用工厂组装应用,再套用 CLI 的工具轮次上限与 reasoning_effort 覆盖。"""
     app = create_lanscoder_app(
         project_root=config.project_root,
         data_root=config.data_root,
@@ -211,6 +221,7 @@ def create_cli_app(config: CliConfig):
 
 
 def run_config_command(args: argparse.Namespace) -> int:
+    """处理 config 子命令(path/init/show),打印结果并返回退出码。"""
     command = args.config_command or "show"
     project_root = Path(args.project)
     if command == "path":
@@ -250,6 +261,7 @@ def run_config_command(args: argparse.Namespace) -> int:
 
 
 def run_mcp_command(args: argparse.Namespace) -> int:
+    """处理 mcp 子命令(add/list/remove),读写全局 MCP 配置存储。"""
 
     if args.mcp_command is None:
         print("error: choose mcp add, list, or remove", file=sys.stderr)
@@ -303,6 +315,7 @@ def run_mcp_command(args: argparse.Namespace) -> int:
 
 
 def _key_values(values: list[str], option: str) -> dict[str, str]:
+    """把 KEY=VALUE 形式的参数列表解析为字典,格式错误时抛 McpConfigStoreError。"""
     result: dict[str, str] = {}
     for value in values:
         key, separator, content = value.partition("=")
@@ -313,6 +326,7 @@ def _key_values(values: list[str], option: str) -> dict[str, str]:
 
 
 def _effective_model(config) -> str:
+    """返回生效的默认模型引用,未配置时给出占位文本。"""
     catalog = config.model_catalog()
     if catalog.default_ref:
         return catalog.default_ref
@@ -321,11 +335,13 @@ def _effective_model(config) -> str:
 
 
 def _effective_provider(config) -> str:
+    """返回生效模型的 provider id。"""
     profile = _effective_profile(config)
     return profile.provider.id if profile is not None else "<not configured>"
 
 
 def _effective_profile(config):
+    """取配置的默认模型档案,无默认时回退到第一个档案。"""
     catalog = config.model_catalog()
     profile = catalog.get(catalog.default_ref) if catalog.default_ref else None
     if profile is None and catalog.profiles:
@@ -334,11 +350,13 @@ def _effective_profile(config):
 
 
 def _effective_base_url(config) -> str:
+    """返回 provider 的 base_url,未设置时提示改用 provider 默认。"""
     profile = _effective_profile(config)
     return profile.provider.base_url if profile and profile.provider.base_url else "<provider default>"
 
 
 def _effective_parallel_tool_calls(config) -> str:
+    """读取并行工具调用配置并返回 "true"/"false" 文本。"""
     profile = _effective_profile(config)
     if profile is None:
         return "false"
@@ -352,6 +370,7 @@ def _effective_parallel_tool_calls(config) -> str:
 
 
 def _benchmark_limits(max_tool_rounds: int | None) -> AgentLoopLimits:
+    """基准模式限制:默认 SWE-lite,可被 --max-tool-rounds 覆盖。"""
     base = AgentLoopLimits.swe_lite()
     if max_tool_rounds is None:
         return base
@@ -364,6 +383,7 @@ def run_repl(
     *,
     auto_approve: bool = False,
 ) -> None:
+    """逐行交互循环:每行发起用户回合,处理挂起的权限/ask_user 输入,支持 auto_approve。"""
     source = iter(lines) if lines is not None else _stdin_lines()
     pending = None
     for raw_line in source:
@@ -412,6 +432,7 @@ def run_repl(
 
 
 def _stdin_lines():
+    """逐行产出用户输入;优先用 prompt_toolkit,否则退化为 input()。"""
     prompt = _create_prompt_session()
     if prompt is not None:
         while True:
@@ -429,6 +450,7 @@ def _stdin_lines():
 
 
 def _create_prompt_session():
+    """创建 prompt_toolkit 会话以支持输入历史;依赖缺失时返回 None。"""
     try:
         from prompt_toolkit import PromptSession
         from prompt_toolkit.history import InMemoryHistory
@@ -450,6 +472,7 @@ def _pending_kind(pending: object) -> str:
 
 
 def _permission_choice_for_text(text: str, pending: object) -> str | None:
+    """把用户输入解析为权限选项 id 或拒绝反馈,无法匹配时返回 None。"""
     normalized = text.strip().lower().replace(" ", "_")
     raw = text.strip()
     if raw.lower().startswith(("reject:", "reject_with_feedback:")):
@@ -489,6 +512,7 @@ def _permission_choice_for_text(text: str, pending: object) -> str | None:
 
 
 def _permission_options_text(pending: object) -> str:
+    """渲染权限确认的编号选项列表供 REPL 展示。"""
     question = _pending_question(pending)
     options = _permission_options(pending)
     option_lines = [f"  {index}. {_option_label(option)}" + (f" ({_option_id(option)})" if _option_id(option) != _option_label(option) else "") for index, option in enumerate(options, start=1)]
@@ -508,6 +532,7 @@ def _permission_options_text(pending: object) -> str:
 
 
 def _permission_choice_help_text(pending: object) -> str:
+    """生成权限选择的编号提示语(如 "Please choose 1, 2, 3.")。"""
     count = len(_permission_options(pending)) or 3
     choices = ", ".join(str(index) for index in range(1, count + 1))
     return f"Please choose {choices}."
@@ -530,6 +555,7 @@ def _option_label(option: object) -> str:
 
 
 def _ask_user_prompt_text(pending: object) -> str:
+    """渲染 ask_user 挂起输入的问题与编号选项文本。"""
     question = _pending_question(pending)
     options = _permission_options(pending)
     if not options:
@@ -539,6 +565,7 @@ def _ask_user_prompt_text(pending: object) -> str:
 
 
 def _ask_user_choice_for_text(text: str, pending: object) -> str | None:
+    """解析 ask_user 的选择文本,匹配时返回对应选项标签。"""
     normalized = text.strip().lower().replace(" ", "_")
     for index, option in enumerate(_permission_options(pending), start=1):
         label = _option_label(option)
@@ -554,6 +581,7 @@ def _ask_user_choice_for_text(text: str, pending: object) -> str | None:
 
 
 def _positive_int(value: str) -> int:
+    """argparse 参数类型校验:必须为正整数,否则抛参数错误。"""
     parsed = int(value)
     if parsed < 1:
         raise argparse.ArgumentTypeError("must be a positive integer")

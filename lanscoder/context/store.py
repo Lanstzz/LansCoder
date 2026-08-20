@@ -1,3 +1,5 @@
+"""JSONL 会话存储:以追加日志持久化会话事件,并按事件序列重建会话视图。"""
+
 from __future__ import annotations
 
 import json
@@ -24,18 +26,23 @@ EVENT_ROLE_MAP = {
 
 
 class SessionStoreCorruptError(ValueError):
+    """会话存储损坏(事件或任务计划校验失败)。"""
+
     pass
 
 
 class JsonlSessionStore:
+    """JSONL 会话存储:追加事件、重建视图,支持按消息截断与删除会话。"""
 
     def __init__(self, root: str | Path) -> None:
+        """初始化存储根目录与会话目录。"""
         self.root = Path(root)
         self.sessions_dir = self.root / "sessions"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
 
     def append_event(self, event: SessionEvent) -> None:
+        """追加一条事件到会话文件,并更新会话索引。"""
         with self._lock:
             path = self._session_path(event.session_id)
             with path.open("a", encoding="utf-8") as file:
@@ -46,6 +53,7 @@ class JsonlSessionStore:
             SessionIndex(self.root).update_event(event)
 
     def list_events(self, session_id: str) -> list[SessionEvent]:
+        """读取会话的全部事件。"""
         with self._lock:
             path = self._session_path(session_id)
             if not path.exists():
@@ -59,12 +67,14 @@ class JsonlSessionStore:
             return events
 
     def rebuild_session_view(self, session_id: str) -> SessionView:
+        """按事件序列重建会话视图。"""
         view = SessionView(session_id=session_id)
         for sequence, event in enumerate(self.list_events(session_id), start=1):
             self._apply_event(view, event, sequence=sequence)
         return view
 
     def original_user_message_texts(self, session_id: str) -> dict[str, str]:
+        """返回各 user 消息的原始文本映射。"""
 
         texts: dict[str, str] = {}
         for event in self.list_events(session_id):
@@ -80,6 +90,7 @@ class JsonlSessionStore:
         return self.sessions_dir / f"{session_id}.jsonl"
 
     def truncate_before_message(self, session_id: str, message_id: str) -> int:
+        """把会话截断到某条 user 消息之前(用于回退到历史点)。"""
         with self._lock:
             path = self._session_path(session_id)
             if not path.exists():
@@ -123,6 +134,7 @@ class JsonlSessionStore:
             return len(retained_lines)
 
     def delete_session(self, session_id: str) -> bool:
+        """删除会话文件、归档目录并重建索引。"""
         with self._lock:
             path = self._session_path(session_id)
             if not path.exists():
@@ -139,6 +151,7 @@ class JsonlSessionStore:
             return True
 
     def _apply_event(self, view: SessionView, event: SessionEvent, *, sequence: int) -> None:
+        """把单个事件应用到视图。"""
         if event.type in {"session_created", "session_metadata_updated"}:
             view.metadata = merge_metadata_patch(view.metadata, event.payload)
             view.metadata["session_id"] = event.session_id
@@ -169,6 +182,7 @@ class JsonlSessionStore:
 
 
 def _message_from_event(event: SessionEvent, *, role: str) -> AgentMessage:
+    """从事件构造 AgentMessage。"""
     payload = event.payload
     message_id = str(payload["message_id"])
     parts = _parts_from_payload(payload.get("parts", []), message_id=message_id)
@@ -183,6 +197,7 @@ def _message_from_event(event: SessionEvent, *, role: str) -> AgentMessage:
 
 
 def _parts_from_payload(parts: Iterable[dict[str, object]], *, message_id: str) -> list[MessagePart]:
+    """从事件载荷构造消息部件列表。"""
     result: list[MessagePart] = []
     for part in parts:
         data = dict(part)
@@ -192,6 +207,7 @@ def _parts_from_payload(parts: Iterable[dict[str, object]], *, message_id: str) 
 
 
 def _checkpoint_payload(event: SessionEvent, *, sequence: int) -> dict[str, object]:
+    """补齐检查点载荷的缺省字段。"""
     payload: dict[str, object] = dict(event.payload)
     payload.setdefault("created_at", event.created_at)
     payload.setdefault("session_id", event.session_id)
@@ -200,6 +216,7 @@ def _checkpoint_payload(event: SessionEvent, *, sequence: int) -> dict[str, obje
 
 
 def _apply_compaction_replacements(view: SessionView, event: SessionEvent) -> None:
+    """把压缩事件的部件替换应用到视图。"""
     event_payload = event.payload.get("event")
     if not isinstance(event_payload, dict):
         return
@@ -231,6 +248,7 @@ def _apply_compaction_replacements(view: SessionView, event: SessionEvent) -> No
 
 
 def _apply_message_part_metadata_update(view: SessionView, event: SessionEvent) -> None:
+    """把消息部件的元数据更新应用到视图。"""
     message_id = str(event.payload.get("message_id") or "")
     part_id = str(event.payload.get("part_id") or "")
     metadata = event.payload.get("metadata")
@@ -246,6 +264,7 @@ def _apply_message_part_metadata_update(view: SessionView, event: SessionEvent) 
 
 
 def _apply_task_plan_payload(view: SessionView, event: SessionEvent) -> None:
+    """校验并应用任务计划更新事件。"""
     try:
         plan = TaskPlan.from_dict(event.payload.get("snapshot"))  # type: ignore[arg-type]
         validate_plan(plan)
