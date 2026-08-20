@@ -25,7 +25,6 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
 from functools import partial
 from typing import Any, Literal
 
@@ -35,8 +34,9 @@ from lanscoder.runtime.cancellation import AgentCancelledError, CancellationToke
 from lanscoder.runtime.user_input import UserInputRequest
 from lanscoder.agent.ports import ContextManagerLike
 from lanscoder.agent.loop_limits import AgentLoopLimits, AgentLoopStopReason
+from lanscoder.agent.request_builder import PreparedMainRequest, RequestBuilder
 from lanscoder.agent.session import AgentSession, PendingPermissionExecution
-from lanscoder.agent.task_plan_policy import TaskPlanPolicy, render_current_task_plan_snapshot
+from lanscoder.agent.task_plan_policy import TaskPlanPolicy
 from lanscoder.agent.tool_execution import ToolExecutionEvent, ToolExecutor
 from lanscoder.agent.tool_settlement import ToolCallSettlement
 from lanscoder.agent.background import (
@@ -50,14 +50,12 @@ from lanscoder.agent.user_input import (
     AgentTurnStatus,
 )
 from lanscoder.context.context_builder import ContextBuilder
-from lanscoder.context.identity import new_request_id, stable_json_hash
 from lanscoder.context.manager import ContextCompactRequest, ContextWindowTrigger
-from lanscoder.context.token_budget import ContextBudget, build_context_budget
 from lanscoder.input.attachments import UserAttachment
 from lanscoder.permissions.types import PermissionDecision, PermissionDecisionKind, PermissionRequest
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.errors import ProviderError, ProviderErrorKind
-from lanscoder.providers.types import ChatMessage, ChatRequest, ChatResponse, ChatStreamEvent, MainRequestOptions, ToolCall
+from lanscoder.providers.types import ChatResponse, ChatStreamEvent, MainRequestOptions, ToolCall
 from lanscoder.tools.permission_results import (
     make_permission_denied_result,
     make_prewrite_review_failed_result,
@@ -68,24 +66,6 @@ from lanscoder.agent.subagent import SubagentRunner
 from lanscoder.tools.delegate import create_delegate_tool
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
-
-
-# ============================================================================
-# PreparedMainRequest — 一次 provider 请求的准备结果
-# ============================================================================
-# 把"构造 provider 请求"和"真正调用 provider"拆开，便于在调用前后做追踪/去重/诊断。
-# - request: 最终交给 provider.complete() 的 ChatRequest
-# - request_id: 用于追踪这一次调用，写入 session 的 provider_projection_consumed 记录
-# - projection_fingerprint: 消息+工具定义的哈希，用于诊断"同一份投影被调用了几次"
-# - tool_result_part_ids: 本次投影消费了哪些 tool_result part，便于后续 compact 判断哪些
-#   tool_result 已经"被模型看过了"，可以安全压缩
-# ============================================================================
-@dataclass(frozen=True, slots=True)
-class PreparedMainRequest:
-    request: ChatRequest
-    request_id: str
-    projection_fingerprint: str
-    tool_result_part_ids: tuple[str, ...]
 
 
 class AgentLoop:
@@ -119,6 +99,7 @@ class AgentLoop:
         cancellation_token: CancellationToken | None = None,
         request_options: MainRequestOptions | None = None,
         context_window: int | None = None,
+        request_builder: RequestBuilder | None = None,
         background_manager: BackgroundJobManager | None = None,
         background_tool_names: frozenset[str] | None = None,
         enable_delegate_tool: bool = True,
@@ -139,8 +120,16 @@ class AgentLoop:
         # -------- 阶段 2：上下文投影 (projection) 与压缩 (compact) --------
         # context_builder: 把 session 视图投影成 provider 能理解的 messages
         # context_manager: 当投影超过 context_window 时，触发 compact（摘要/裁剪）
+        # request_builder: 唯一的主请求构造入口；未显式注入时用与本 loop 相同的依赖兜底构造
         self.context_builder = context_builder or ContextBuilder()
         self.context_manager = context_manager
+        self.request_builder = request_builder or RequestBuilder(
+            session=session,
+            provider=provider,
+            context_builder=context_builder or ContextBuilder(),
+            request_options=request_options or MainRequestOptions(),
+            context_window=context_window,
+        )
 
         # -------- 阶段 3：循环上限控制 (limits) --------
         # max_tool_rounds: 一次 turn 最多允许模型调用多少轮工具，防止无限循环
@@ -623,14 +612,6 @@ class AgentLoop:
     #   4. provider.complete / provider.astream：实际调用模型 API
     #   5. _record_projection_consumed：记录本次投影被哪些 tool_result part 消费，
     #      便于后续 compact 判断哪些 tool_result 已经”被模型看过了”
-    def _main_chat_request(self, messages, definitions, tool_choice) -> ChatRequest:
-        return ChatRequest(
-            messages=messages,
-            tools=definitions,
-            tool_choice=tool_choice,
-            **self.request_options.as_chat_request_kwargs(),
-        )
-
     async def _complete_once(
         self,
         *,
@@ -905,11 +886,11 @@ class AgentLoop:
     #      让模型能感知到长时任务的进展。
     #   5. _provider_tool_definitions：从 session.tool_registry 取出当前可用工具的 schema。
     #   6. session.rebuild_view()：从 JSONL 重建当前会话视图（messages 列表）。
-    #   7. _context_budget_for_view：计算当前视图占用的 token 预算。
+    #   7. request_builder.context_budget_for_view：计算当前视图占用的 token 预算。
     #   8. context_manager.compact_if_needed：如果预算超窗，触发自动 compact
     #      （摘要旧消息 / 裁剪 tool_result），再 rebuild 一次视图。
-    #   9. _request_messages：把视图投影成 provider 能理解的 messages 列表。
-    #  10. 构造 ChatRequest 并返回 PreparedMainRequest（含 request_id / fingerprint）。
+    #   9. request_builder.build：投影 messages、组装 ChatRequest，返回 PreparedMainRequest
+    #      （含 request_id / fingerprint / 已消费 tool_result part ids）。
     def _prepare_main_provider_request(
         self,
         *,
@@ -922,7 +903,7 @@ class AgentLoop:
         self._append_background_notifications()
         definitions = self._provider_tool_definitions()
         view = self.session.rebuild_view()
-        budget = self._context_budget_for_view(
+        budget = self.request_builder.context_budget_for_view(
             view,
             runtime_instruction=runtime_instruction,
             definitions=definitions,
@@ -933,7 +914,7 @@ class AgentLoop:
                     view=view,
                     runtime_state=self.session.runtime_state,
                     budget=budget,
-                    estimate_budget=lambda candidate: self._context_budget_for_view(
+                    estimate_budget=lambda candidate: self.request_builder.context_budget_for_view(
                         candidate,
                         runtime_instruction=runtime_instruction,
                         definitions=definitions,
@@ -945,22 +926,11 @@ class AgentLoop:
             if result.status == "success":
                 view = self.session.rebuild_view()
 
-        messages = self._request_messages(
-            view=view,
+        return self.request_builder.build(
+            view,
+            definitions=definitions,
+            tool_choice=tool_choice,
             runtime_instruction=runtime_instruction,
-        )
-        request = self._main_chat_request(messages, definitions, tool_choice)
-        return PreparedMainRequest(
-            request=request,
-            request_id=new_request_id(),
-            projection_fingerprint=stable_json_hash(
-                {
-                    "messages": [asdict(message) for message in messages],
-                    "tools": [asdict(definition) for definition in definitions],
-                },
-                length=24,
-            ),
-            tool_result_part_ids=self.context_builder.projected_tool_result_part_ids(view),
         )
 
     def _record_projection_consumed(self, prepared: PreparedMainRequest) -> None:
@@ -997,31 +967,6 @@ class AgentLoop:
             "total_tokens": self._total_tokens,
         }
 
-    def _context_budget_for_view(
-        self,
-        view,
-        *,
-        runtime_instruction: str | None,
-        definitions,
-    ) -> ContextBudget:
-        messages = self._request_messages(
-            view=view,
-            runtime_instruction=runtime_instruction,
-        )
-        return build_context_budget(
-            messages=messages,
-            tools=definitions,
-            context_window=self.context_window,
-            max_output_tokens=self.request_options.max_tokens,
-        )
-
-    def context_budget_for_view(self, view) -> ContextBudget:
-        return self._context_budget_for_view(
-            view,
-            runtime_instruction=None,
-            definitions=self._provider_tool_definitions(),
-        )
-
     def _compact_if_needed(
         self,
         *,
@@ -1038,7 +983,7 @@ class AgentLoop:
             return None
         definitions = self._provider_tool_definitions()
         view = self.session.rebuild_view()
-        budget = self._context_budget_for_view(
+        budget = self.request_builder.context_budget_for_view(
             view,
             runtime_instruction=runtime_instruction,
             definitions=definitions,
@@ -1048,7 +993,7 @@ class AgentLoop:
                 view=view,
                 runtime_state=self.session.runtime_state,
                 budget=budget,
-                estimate_budget=lambda candidate: self._context_budget_for_view(
+                estimate_budget=lambda candidate: self.request_builder.context_budget_for_view(
                     candidate,
                     runtime_instruction=runtime_instruction,
                     definitions=definitions,
@@ -1062,38 +1007,6 @@ class AgentLoop:
         return self._compact_if_needed(
             trigger=ContextWindowTrigger.PROMPT_TOO_LONG,
             runtime_instruction=runtime_instruction,
-        )
-
-    def _build_provider_messages(self, view, *, system_prefix):
-        return self.context_builder.build_provider_messages(
-            view,
-            system_prefix=system_prefix,
-            store_root=self.session.store.root,
-        )
-
-    def _request_messages(self, *, view=None, runtime_instruction: str | None = None):
-        resolved_view = view or self.session.rebuild_view()
-        system_prefix = self.session.build_system_prefix(
-            provider_name=self.provider.name,
-            provider_model=self.provider.model,
-            provider_capabilities=getattr(self.provider, "capabilities", None),
-        )
-        if runtime_instruction:
-            system_prefix = [
-                *system_prefix,
-                ChatMessage(role="system", content=runtime_instruction),
-            ]
-        if resolved_view.task_plan is not None:
-            system_prefix = [
-                *system_prefix,
-                ChatMessage(
-                    role="system",
-                    content=render_current_task_plan_snapshot(resolved_view.task_plan),
-                ),
-            ]
-        return self._build_provider_messages(
-            resolved_view,
-            system_prefix=system_prefix,
         )
 
     def _provider_tool_definitions(self):
@@ -1110,6 +1023,15 @@ class AgentLoop:
                 continue
             definitions.append(self._augment_tool_definition(definition))
         return definitions
+
+    def _loop_tool_definitions(self):
+        """薄访问器：暴露当前 loop 视角的工具 schema。
+
+        runtime 的 context_budget 依赖它，避免在 runtime 再造一份 augment/MCP 激活过滤
+        逻辑；后续 MCP 激活追踪上移到独立协调器后，runtime 改从组装根取同一份定义。
+        """
+
+        return self._provider_tool_definitions()
 
     def _augment_tool_definition(self, definition):
         """给后台可用工具的 schema 附加 run_in_background/background_label 控制字段。

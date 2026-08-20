@@ -34,7 +34,9 @@ import anyio
 
 from lanscoder.runtime.cancellation import CancellationToken
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
+from lanscoder.agent._builders import create_agent_loop
 from lanscoder.agent.loop import AgentLoop, ToolExecutionEvent
+from lanscoder.agent.request_builder import RequestBuilder
 from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.session import AgentSession
@@ -127,6 +129,8 @@ class AgentChatRunner:
     use_streaming: bool = False
     request_options: MainRequestOptions = field(default_factory=MainRequestOptions)
     context_window: int | None = None
+    loop: AgentLoop | None = None
+    request_builder: RequestBuilder | None = None
     loops: list[AgentLoop] = field(default_factory=list)
     last_display_lines: list[str] = field(default_factory=list)
     last_stream_events: list[ChatStreamEvent] = field(default_factory=list)
@@ -374,8 +378,27 @@ class AgentChatRunner:
         return self.tools_provider() if self.tools_provider is not None else self.tools
 
     def context_budget(self, view):
-        loop = self.loops[-1] if self.loops else self._create_loop(CancellationToken())
-        return loop.context_budget_for_view(view)
+        builder = self.request_builder
+        if builder is None:
+            builder = RequestBuilder(
+                session=self.current_session.session,
+                provider=self.provider,
+                context_builder=self.context_builder or ContextBuilder(),
+                request_options=self.request_options or MainRequestOptions(),
+                context_window=self.context_window,
+            )
+            self.request_builder = builder
+        definitions = self.loop._loop_tool_definitions() if self.loop is not None else self._registry_tool_definitions()
+        return builder.context_budget_for_view(view, runtime_instruction=None, definitions=definitions)
+
+    def _registry_tool_definitions(self):
+        """从 session 工具注册表取可见 schema（无 loop 的 augment/MCP 激活过滤）。
+
+        MCP 激活过滤（只暴露已激活的 mcp__ 工具）在缝 6 引入 McpActivationTracker 后由
+        组装根接入，runtime 不需要再造一份过滤逻辑。
+        """
+
+        return [d for d in self.current_session.session.tool_registry.definitions() if d.name not in HIDDEN_TOOL_STATUS_NAMES]
 
     # ------------------------------------------------------------------
     # AgentLoop 工厂 (per-turn loop factory)
@@ -403,7 +426,9 @@ class AgentChatRunner:
         }
         if streaming:
             kwargs["stream_event_handler"] = self.stream_event_handler
-        loop = AgentLoop(**kwargs)
+        loop = create_agent_loop(**kwargs)
+        self.loop = loop
+        self.request_builder = loop.request_builder
         self.loops.append(loop)
         return loop
 
