@@ -8,10 +8,17 @@ from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.loop import AgentLoop
 from lanscoder.agent.session import AgentSession
 from lanscoder.agent.subagent import SubagentRunner
-from lanscoder.subagent.types import SubagentRequest
+from lanscoder.subagent.types import SubagentRequest, SubagentResult
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.base import ChatProvider
-from lanscoder.providers.types import ChatRequest, ChatResponse, ProviderCapabilities, TokenUsage, ToolCall, ToolDefinition
+from lanscoder.providers.types import (
+    ChatRequest,
+    ChatResponse,
+    ProviderCapabilities,
+    TokenUsage,
+    ToolCall,
+    ToolDefinition,
+)
 from lanscoder.tools.types import Tool, ToolResult, make_text_result
 
 
@@ -30,8 +37,16 @@ class FakeProvider(ChatProvider):
         return "fake-model"
 
     def complete(self, request: ChatRequest) -> ChatResponse:
-        if request.tools == [] and request.tool_choice == "none" and request.max_tokens == 512:
-            return ChatResponse(provider="fake", model="fake-model", content='{"decision":"uncertain","basis_message_id":"msg"}')
+        if (
+            request.tools == []
+            and request.tool_choice == "none"
+            and request.max_tokens == 512
+        ):
+            return ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content='{"decision":"uncertain","basis_message_id":"msg"}',
+            )
         self.requests.append(request)
         return self.responses.pop(0)
 
@@ -61,7 +76,13 @@ def _create_task_plan(session: AgentSession, *, task_id: str) -> None:
         {
             "mode": "linear",
             "expected_revision": 0,
-            "tasks": [{"id": task_id, "content": "Run delegated work", "status": "in_progress"}],
+            "tasks": [
+                {
+                    "id": task_id,
+                    "content": "Run delegated work",
+                    "status": "in_progress",
+                }
+            ],
         },
     )
     assert result.ok is True
@@ -72,7 +93,13 @@ def test_subagent_runner_filters_tools_by_profile(tmp_path) -> None:
     runner = SubagentRunner(
         store=JsonlSessionStore(tmp_path),
         provider=provider,
-        tools=[_tool("view"), _tool("grep"), _tool("write"), _tool("delegate"), _tool("shell")],
+        tools=[
+            _tool("view"),
+            _tool("grep"),
+            _tool("write"),
+            _tool("delegate"),
+            _tool("shell"),
+        ],
     )
 
     assert [tool.name for tool in runner.tools_for_role("reviewer")] == ["view", "grep"]
@@ -83,7 +110,9 @@ def test_subagent_runner_filters_tools_by_profile(tmp_path) -> None:
 
 def test_child_session_is_metadata_tagged(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    runner = SubagentRunner(store=store, provider=FakeProvider([]), tools=[_tool("view")])
+    runner = SubagentRunner(
+        store=store, provider=FakeProvider([]), tools=[_tool("view")]
+    )
 
     child = runner.create_child_session(
         SubagentRequest(
@@ -103,8 +132,12 @@ def test_child_session_is_metadata_tagged(tmp_path) -> None:
 
 def test_subagent_run_restricts_child_tools_and_deletes_session(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="child done")])
-    runner = SubagentRunner(store=store, provider=provider, tools=[_tool("view"), _tool("delegate")])
+    provider = FakeProvider(
+        [ChatResponse(provider="fake", model="fake-model", content="child done")]
+    )
+    runner = SubagentRunner(
+        store=store, provider=provider, tools=[_tool("view"), _tool("delegate")]
+    )
 
     result = runner.run(
         SubagentRequest(
@@ -118,7 +151,9 @@ def test_subagent_run_restricts_child_tools_and_deletes_session(tmp_path) -> Non
     assert result.ok is True
     assert result.summary == "child done"
     # The child request excludes delegate and includes the profile's tools.
-    assert "delegate" not in [definition.name for definition in provider.requests[0].tools]
+    assert "delegate" not in [
+        definition.name for definition in provider.requests[0].tools
+    ]
     assert "view" in [definition.name for definition in provider.requests[0].tools]
     # The finished child session is removed from disk and the resume index.
     assert not store._session_path(result.child_session_id).exists()
@@ -130,12 +165,18 @@ def test_subagent_run_restricts_child_tools_and_deletes_session(tmp_path) -> Non
 
 def test_agent_loop_registers_delegate_and_foreground_returns_summary(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="child summary")])
-    session = AgentSession.create(store=store, session_id="parent_delegate", tools=[_tool("view")])
+    provider = FakeProvider(
+        [ChatResponse(provider="fake", model="fake-model", content="child summary")]
+    )
+    session = AgentSession.create(
+        store=store, session_id="parent_delegate", tools=[_tool("view")]
+    )
     AgentLoop(session=session, provider=provider)
 
     assert "delegate" in session.tool_registry.names()
-    result = session.tool_registry.execute("delegate", {"role": "researcher", "task": "read docs"})
+    result = session.tool_registry.execute(
+        "delegate", {"role": "researcher", "task": "read docs"}
+    )
 
     assert result.ok is True
     assert result.data["role"] == "researcher"
@@ -155,10 +196,14 @@ def test_foreground_delegate_result_includes_usage_and_elapsed(tmp_path) -> None
             )
         ]
     )
-    session = AgentSession.create(store=store, session_id="parent_usage", tools=[_tool("view")])
+    session = AgentSession.create(
+        store=store, session_id="parent_usage", tools=[_tool("view")]
+    )
     AgentLoop(session=session, provider=provider)
 
-    result = session.tool_registry.execute("delegate", {"role": "researcher", "task": "read docs"})
+    result = session.tool_registry.execute(
+        "delegate", {"role": "researcher", "task": "read docs"}
+    )
 
     assert result.ok is True
     assert result.data["total_tokens"] == 2500
@@ -170,15 +215,22 @@ def test_foreground_delegate_result_includes_usage_and_elapsed(tmp_path) -> None
 
 def test_foreground_progress_callback_writes_to_runner_tracker(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    runner = SubagentRunner(store=store, provider=FakeProvider([]), tools=[_tool("view")])
-    runner.foreground_progress = {"label": "researcher", "started_at": 0.0, "provider_calls": 0, "total_tokens": 0}
+    runner = SubagentRunner(
+        store=store, provider=FakeProvider([]), tools=[_tool("view")]
+    )
+    tracker = {
+        "label": "researcher",
+        "started_at": 0.0,
+        "provider_calls": 0,
+        "total_tokens": 0,
+    }
 
-    callback = runner._make_progress_callback()
+    callback = runner._make_progress_callback(tracker)
 
     assert callback is not None
     callback({"provider_calls": 2, "total_tokens": 1500})
-    assert runner.foreground_progress["provider_calls"] == 2
-    assert runner.foreground_progress["total_tokens"] == 1500
+    assert tracker["provider_calls"] == 2
+    assert tracker["total_tokens"] == 1500
 
 
 def test_background_delegate_does_not_expose_foreground_tracker(tmp_path) -> None:
@@ -188,10 +240,16 @@ def test_background_delegate_does_not_expose_foreground_tracker(tmp_path) -> Non
 
     class ProbeProvider(FakeProvider):
         def complete(self, request):
-            if request.tools == [] and request.tool_choice == "none" and request.max_tokens == 512:
+            if (
+                request.tools == []
+                and request.tool_choice == "none"
+                and request.max_tokens == 512
+            ):
                 return super().complete(request)
             observed.append(runner.foreground_progress)
-            return ChatResponse(provider="fake", model="fake-model", content="child done")
+            return ChatResponse(
+                provider="fake", model="fake-model", content="child done"
+            )
 
     manager = BackgroundJobManager()
     runner = SubagentRunner(
@@ -202,7 +260,11 @@ def test_background_delegate_does_not_expose_foreground_tracker(tmp_path) -> Non
     )
 
     def job_func() -> ToolResult:
-        runner.run(SubagentRequest(role="researcher", task="inspect", parent_session_id="parent_1"))
+        runner.run(
+            SubagentRequest(
+                role="researcher", task="inspect", parent_session_id="parent_1"
+            )
+        )
         return make_text_result("delegate", "done")
 
     job = manager.start(job_func, tool_name="delegate")
@@ -212,8 +274,90 @@ def test_background_delegate_does_not_expose_foreground_tracker(tmp_path) -> Non
         manager.shutdown()
 
     assert observed, "child provider must run as part of the background job"
-    assert observed[0] is None  # no phantom foreground tracker inside a background delegate
-    assert job.progress, "background progress must go to the job, not a foreground tracker"
+    assert (
+        observed[0] is None
+    )  # no phantom foreground tracker inside a background delegate
+    assert job.progress, (
+        "background progress must go to the job, not a foreground tracker"
+    )
+
+
+def test_foreground_delegate_survives_background_delegate_finish(tmp_path) -> None:
+    """Regression: a background delegate completing while a foreground delegate is
+    mid-run must not crash the foreground subagent ('NoneType' object has no
+    attribute 'update') nor wipe its progress tracker."""
+
+    fg_started = threading.Event()
+    release_fg = threading.Event()
+
+    class GatedProvider(FakeProvider):
+        def complete(self, request: ChatRequest) -> ChatResponse:
+            if (
+                request.tools == []
+                and request.tool_choice == "none"
+                and request.max_tokens == 512
+            ):
+                return super().complete(request)
+            # 第一个非 certainty 调用必然属于前台子 agent：前台先启动并在此阻塞，
+            # 后台 job 直到 fg_started 置位后才开始。
+            if self._gate_active:
+                self._gate_active = False
+                fg_started.set()
+                if not release_fg.wait(5):
+                    raise AssertionError("foreground release gate was not opened")
+            return ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="child done",
+                usage=TokenUsage(input_tokens=5, output_tokens=5, total_tokens=100),
+            )
+
+    store = JsonlSessionStore(tmp_path)
+    manager = BackgroundJobManager()
+    provider = GatedProvider([])
+    provider._gate_active = True
+    runner = SubagentRunner(
+        store=store,
+        provider=provider,
+        tools=[_tool("view")],
+        background_manager=manager,
+    )
+    foreground_results: list[SubagentResult] = []
+
+    def fg_func() -> None:
+        foreground_results.append(
+            runner.run(
+                SubagentRequest(
+                    role="researcher", task="foreground task", parent_session_id="p_fg"
+                )
+            )
+        )
+
+    fg_thread = threading.Thread(target=fg_func)
+    fg_thread.start()
+    assert fg_started.wait(5), (
+        "foreground delegate should start and block on its provider"
+    )
+
+    def bg_func() -> ToolResult:
+        runner.run(
+            SubagentRequest(
+                role="researcher", task="background task", parent_session_id="p_bg"
+            )
+        )
+        return make_text_result("delegate", "done")
+
+    try:
+        manager.start(bg_func, tool_name="delegate")
+        assert manager.wait(timeout=5) is True
+    finally:
+        manager.shutdown()
+
+    release_fg.set()
+    fg_thread.join(10)
+    assert not fg_thread.is_alive(), "foreground delegate should complete after release"
+    assert foreground_results and foreground_results[0].ok is True
+    assert "Subagent failed" not in foreground_results[0].summary
 
 
 def test_background_delegate_returns_placeholder_and_notification(tmp_path) -> None:
@@ -223,18 +367,26 @@ def test_background_delegate_returns_placeholder_and_notification(tmp_path) -> N
 
     def child_response() -> ChatResponse:
         gate.wait(5)
-        return ChatResponse(provider="fake", model="fake-model", content="background child done")
+        return ChatResponse(
+            provider="fake", model="fake-model", content="background child done"
+        )
 
     class BlockingProvider(FakeProvider):
         def complete(self, request: ChatRequest) -> ChatResponse:
-            if request.tools == [] and request.tool_choice == "none" and request.max_tokens == 512:
+            if (
+                request.tools == []
+                and request.tool_choice == "none"
+                and request.max_tokens == 512
+            ):
                 return super().complete(request)
             self.requests.append(request)
             return child_response()
 
     provider = BlockingProvider([])
     try:
-        session = AgentSession.create(store=store, session_id="parent_bg_delegate", tools=[_tool("view")])
+        session = AgentSession.create(
+            store=store, session_id="parent_bg_delegate", tools=[_tool("view")]
+        )
         loop = AgentLoop(session=session, provider=provider, background_manager=manager)
         _create_task_plan(session, task_id="research_a")
         session.append_user_message("start")
@@ -245,11 +397,23 @@ def test_background_delegate_returns_placeholder_and_notification(tmp_path) -> N
             run_in_background=True,
             task_id="research_a",
         )
-        session.append_assistant_response(ChatResponse(provider="fake", model="fake-model", content="", tool_calls=[call], finish_reason="tool_calls"))
+        session.append_assistant_response(
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[call],
+                finish_reason="tool_calls",
+            )
+        )
 
         state = loop.tool_executor.execute_interactive([call])
         assert state.pending_input is None
-        tool_result = [message for message in session.rebuild_view().messages if message.role == "tool"][0].parts[0]
+        tool_result = [
+            message
+            for message in session.rebuild_view().messages
+            if message.role == "tool"
+        ][0].parts[0]
         assert tool_result.metadata["data"]["background_job_id"] == "bg_0001"
         assert tool_result.metadata["data"]["task_id"] == "research_a"
         assert tool_result.metadata["data"]["observed_revision"] == 1
@@ -257,7 +421,12 @@ def test_background_delegate_returns_placeholder_and_notification(tmp_path) -> N
         gate.set()
         assert manager.wait(timeout=5) is True
         loop._append_background_notifications()
-        notifications = [message.parts[0].content for message in session.rebuild_view().messages if message.role == "notification" and "<task_notification>" in message.parts[0].content]
+        notifications = [
+            message.parts[0].content
+            for message in session.rebuild_view().messages
+            if message.role == "notification"
+            and "<task_notification>" in message.parts[0].content
+        ]
         assert len(notifications) == 1
         assert "<task_id>research_a</task_id>" in notifications[0]
         assert "background child done" in notifications[0]
@@ -283,16 +452,35 @@ def test_coder_delegate_background_rejected_without_git_repo(tmp_path) -> None:
     manager = BackgroundJobManager()
     provider = FakeProvider([])
     try:
-        session = AgentSession.create(store=store, session_id="parent_coder_bg", tools=[_tool("view")])
+        session = AgentSession.create(
+            store=store, session_id="parent_coder_bg", tools=[_tool("view")]
+        )
         loop = AgentLoop(session=session, provider=provider, background_manager=manager)
         session.append_user_message("start")
-        call = _delegate_call("call_delegate", role="coder", task="edit files", run_in_background=True)
-        session.append_assistant_response(ChatResponse(provider="fake", model="fake-model", content="", tool_calls=[call], finish_reason="tool_calls"))
+        call = _delegate_call(
+            "call_delegate", role="coder", task="edit files", run_in_background=True
+        )
+        session.append_assistant_response(
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[call],
+                finish_reason="tool_calls",
+            )
+        )
 
         loop.tool_executor.execute_interactive([call])
-        tool_result = [message for message in session.rebuild_view().messages if message.role == "tool"][0].parts[0]
+        tool_result = [
+            message
+            for message in session.rebuild_view().messages
+            if message.role == "tool"
+        ][0].parts[0]
         assert tool_result.metadata["ok"] is False
-        assert tool_result.metadata["data"]["background_rejected"] == "worktree_unavailable"
+        assert (
+            tool_result.metadata["data"]["background_rejected"]
+            == "worktree_unavailable"
+        )
         assert manager.list() == []
     finally:
         manager.shutdown()
@@ -302,7 +490,9 @@ def _init_git_repo(root) -> None:
     import subprocess
 
     def _git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", *args], cwd=root, check=True, capture_output=True, text=True
+        )
 
     _git("init", "-q")
     _git("config", "user.email", "t@t.co")
@@ -313,7 +503,9 @@ def _init_git_repo(root) -> None:
 
 
 def _write_call(call_id: str, path: str, content: str) -> ToolCall:
-    return ToolCall(id=call_id, name="write", arguments={"path": path, "content": content})
+    return ToolCall(
+        id=call_id, name="write", arguments={"path": path, "content": content}
+    )
 
 
 def test_isolated_coder_writes_only_in_worktree(tmp_path) -> None:
@@ -341,11 +533,15 @@ def test_isolated_coder_writes_only_in_worktree(tmp_path) -> None:
                 tool_calls=[write_call],
                 finish_reason="tool_calls",
             ),
-            ChatResponse(provider="fake", model="fake-model", content="Implemented newfile.py"),
+            ChatResponse(
+                provider="fake", model="fake-model", content="Implemented newfile.py"
+            ),
         ]
     )
     store = JsonlSessionStore(repo / ".fc_sessions")
-    permission_manager = PermissionManager(policy=DefaultPermissionPolicy(repo), mode=PermissionMode.STANDARD)
+    permission_manager = PermissionManager(
+        policy=DefaultPermissionPolicy(repo), mode=PermissionMode.STANDARD
+    )
     runner = SubagentRunner(
         store=store,
         provider=provider,
@@ -376,7 +572,9 @@ def test_isolated_coder_writes_only_in_worktree(tmp_path) -> None:
     assert not store._session_path(result.child_session_id).exists()
 
 
-def test_isolated_coder_can_delete_inside_worktree_without_parent_delete(tmp_path) -> None:
+def test_isolated_coder_can_delete_inside_worktree_without_parent_delete(
+    tmp_path,
+) -> None:
     """DELETE_PATH is allowed only in the isolated worktree, never in the parent tree."""
 
     from lanscoder.permissions.manager import PermissionManager
@@ -399,7 +597,9 @@ def test_isolated_coder_can_delete_inside_worktree_without_parent_delete(tmp_pat
                 tool_calls=[delete_call],
                 finish_reason="tool_calls",
             ),
-            ChatResponse(provider="fake", model="fake-model", content="Deleted seed.txt"),
+            ChatResponse(
+                provider="fake", model="fake-model", content="Deleted seed.txt"
+            ),
         ]
     )
     runner = SubagentRunner(
@@ -407,7 +607,9 @@ def test_isolated_coder_can_delete_inside_worktree_without_parent_delete(tmp_pat
         provider=provider,
         tools=[],
         project_root=repo,
-        permission_manager=PermissionManager(policy=DefaultPermissionPolicy(repo), mode=PermissionMode.STANDARD),
+        permission_manager=PermissionManager(
+            policy=DefaultPermissionPolicy(repo), mode=PermissionMode.STANDARD
+        ),
     )
 
     result = runner.run(
@@ -446,7 +648,11 @@ def test_isolated_coder_dangerous_shell_is_denied_not_waiting(tmp_path) -> None:
                 tool_calls=[shell_call],
                 finish_reason="tool_calls",
             ),
-            ChatResponse(provider="fake", model="fake-model", content="rm was denied; leaving the file."),
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="rm was denied; leaving the file.",
+            ),
         ]
     )
     runner = SubagentRunner(
@@ -519,10 +725,16 @@ def test_background_coder_uses_worktree_and_leaves_parent_untouched(tmp_path) ->
         ]
     )
     store = JsonlSessionStore(repo / ".fc_sessions")
-    permission_manager = PermissionManager(policy=DefaultPermissionPolicy(repo), mode=PermissionMode.STANDARD)
+    permission_manager = PermissionManager(
+        policy=DefaultPermissionPolicy(repo), mode=PermissionMode.STANDARD
+    )
     manager = BackgroundJobManager()
     try:
-        session = AgentSession.create(store=store, session_id="parent_bg_coder", permission_manager=permission_manager)
+        session = AgentSession.create(
+            store=store,
+            session_id="parent_bg_coder",
+            permission_manager=permission_manager,
+        )
         loop = AgentLoop(session=session, provider=provider, background_manager=manager)
         _create_task_plan(session, task_id="impl")
         session.append_user_message("start")
@@ -544,14 +756,23 @@ def test_background_coder_uses_worktree_and_leaves_parent_untouched(tmp_path) ->
         )
 
         loop.tool_executor.execute_interactive([call])
-        tool_result = [message for message in session.rebuild_view().messages if message.role == "tool"][0].parts[0]
+        tool_result = [
+            message
+            for message in session.rebuild_view().messages
+            if message.role == "tool"
+        ][0].parts[0]
         assert tool_result.metadata["ok"] is True
         assert tool_result.metadata["data"]["background_job_id"] == "bg_0001"
         assert tool_result.metadata["data"].get("background_rejected") is None
 
         assert manager.wait(timeout=10) is True
         loop._append_background_notifications()
-        notifications = [message.parts[0].content for message in session.rebuild_view().messages if message.role == "notification" and "<task_notification>" in message.parts[0].content]
+        notifications = [
+            message.parts[0].content
+            for message in session.rebuild_view().messages
+            if message.role == "notification"
+            and "<task_notification>" in message.parts[0].content
+        ]
         assert len(notifications) == 1
         assert "bg_new.py" in notifications[0]
         assert "<task_id>impl</task_id>" in notifications[0]
