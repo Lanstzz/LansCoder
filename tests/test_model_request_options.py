@@ -8,6 +8,7 @@ from lanscoder.agent.session import AgentSession
 from lanscoder.app.runtime import AgentChatRunner, CurrentSessionState
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.base import ChatProvider
+from lanscoder.providers.errors import ProviderError, ProviderErrorKind
 from lanscoder.providers.types import (
     ChatRequest,
     ChatResponse,
@@ -56,7 +57,7 @@ def test_main_sync_request_inherits_selected_model_options(tmp_path) -> None:
     )
     session.append_user_message("检查 README")
 
-    loop._complete_once()
+    loop._complete_once_sync()
 
     request = provider.requests[-1]
     assert request.temperature == 0.2
@@ -110,3 +111,60 @@ def test_chat_runner_passes_context_window_to_agent_loop(tmp_path) -> None:
 
     assert loop.context_window == 128_000
     assert loop.request_options.max_tokens == 8_192
+
+
+class RetryableOnceProvider(ChatProvider):
+    """complete 第一次抛 retryable 错误，之后成功；astream 委托给 base。"""
+
+    def __init__(self, base: RecordingProvider) -> None:
+        self._base = base
+        self._failures = 0
+
+    @property
+    def name(self) -> str:
+        return self._base.name
+
+    @property
+    def model(self) -> str:
+        return self._base.model
+
+    def complete(self, request: ChatRequest) -> ChatResponse:
+        self._base.requests.append(request)
+        if self._failures == 0:
+            self._failures += 1
+            raise ProviderError(ProviderErrorKind.SERVER_ERROR, "boom")
+        return ChatResponse(provider=self.name, model=self.model, content="ok")
+
+    async def astream(self, request: ChatRequest):
+        async for event in self._base.astream(request):
+            yield event
+
+
+def test_unified_complete_once_sync_mode_returns_provider_response(tmp_path) -> None:
+    provider = RecordingProvider()
+    session = _session(tmp_path)
+    loop = AgentLoop(session=session, provider=provider)
+    session.append_user_message("hi")
+    response = asyncio.run(loop._complete_once(streaming=False))
+    assert response.content == "ok"
+
+
+def test_unified_complete_once_streaming_mode_collects_events(tmp_path) -> None:
+    provider = RecordingProvider()
+    session = _session(tmp_path)
+    loop = AgentLoop(session=session, provider=provider)
+    session.append_user_message("hi")
+    response = asyncio.run(loop._complete_once(streaming=True))
+    assert response.content == "ok"
+    assert [e.kind for e in loop.last_stream_events] == ["message_completed"]
+
+
+def test_unified_recovery_retries_retryable_error_once_for_sync_mode(tmp_path) -> None:
+    # 关键新行为（spec 4.3）：非流式也获得 retryable 重试
+    base = RecordingProvider()
+    session = _session(tmp_path)
+    loop = AgentLoop(session=session, provider=RetryableOnceProvider(base))
+    session.append_user_message("hi")
+    response = asyncio.run(loop._complete_once_with_recovery(streaming=False))
+    assert response.content == "ok"
+    assert loop.provider_call_count == 2
