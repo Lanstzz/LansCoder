@@ -41,8 +41,9 @@ from lanscoder.agent.loop import AgentLoop, ToolExecutionEvent
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.mcp_activation import McpActivationTracker
 from lanscoder.agent.observer import TurnObserver
+from lanscoder.agent.permission_resume import PermissionResumeHandler
 from lanscoder.agent.request_builder import RequestBuilder
-from lanscoder.agent.session import AgentSession
+from lanscoder.agent.session import AgentSession, SessionPendingStore
 from lanscoder.agent.subagent_engine import SubagentEngine
 from lanscoder.agent.tool_execution import ToolExecutor
 from lanscoder.agent.user_input import AgentTurnStatus
@@ -203,7 +204,15 @@ def create_agent_loop(
         limits=limits or AgentLoopLimits.default(),
         clock=clock or time.monotonic,
     )
-    return AgentLoop(
+    permission_resume = PermissionResumeHandler(
+        pending_store=SessionPendingStore(session),
+        provider=provider,
+        tool_executor=tool_executor,
+        observer=observer,
+        session=session,
+        on_tool_round_completed=lambda: None,
+    )
+    loop = AgentLoop(
         session=session,
         provider=provider,
         context_builder=context_builder,
@@ -216,6 +225,7 @@ def create_agent_loop(
         observer=observer,
         mcp_activation=mcp_activation,
         tool_executor=tool_executor,
+        permission_resume=permission_resume,
         background_manager=background_manager,
         background_tool_names=background_tool_names,
         guidance_provider=guidance_provider,
@@ -223,6 +233,10 @@ def create_agent_loop(
         stream_event_handler=stream_event_handler,
         tool_event_handler=tool_event_handler,
     )
+    # handler 先以 no-op 构造（此时 loop 尚不存在），loop 构造完成后把工具轮次
+    # 计数回调绑到 loop 私有方法，避免 handler 反向依赖 loop。
+    permission_resume.set_tool_round_callback(loop._record_resumed_tool_round)
+    return loop
 
 
 # ----------------------------------------------------------------------------

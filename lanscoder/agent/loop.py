@@ -36,8 +36,9 @@ from lanscoder.agent.loop_limits import AgentLoopLimits, AgentLoopStopReason, _A
 from lanscoder.agent.guardrails import TurnGuardrails
 from lanscoder.agent.mcp_activation import McpActivationTracker
 from lanscoder.agent.observer import TurnObserver
+from lanscoder.agent.permission_resume import PermissionResumeHandler
 from lanscoder.agent.request_builder import PreparedMainRequest, RequestBuilder
-from lanscoder.agent.session import AgentSession, PendingPermissionExecution
+from lanscoder.agent.session import AgentSession
 from lanscoder.agent.task_plan_policy import TaskPlanPolicy
 from lanscoder.agent.tool_execution import ToolExecutionEvent, ToolExecutor
 from lanscoder.agent.tool_settlement import ToolCallSettlement
@@ -54,17 +55,12 @@ from lanscoder.agent.user_input import (
 from lanscoder.context.context_builder import ContextBuilder
 from lanscoder.context.manager import ContextCompactRequest, ContextWindowTrigger
 from lanscoder.input.attachments import UserAttachment
-from lanscoder.permissions.types import PermissionDecision, PermissionDecisionKind, PermissionRequest
+from lanscoder.permissions.types import PermissionRequest
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.errors import ProviderError, ProviderErrorKind
 from lanscoder.providers.types import ChatResponse, ChatStreamEvent, MainRequestOptions, ToolCall
-from lanscoder.tools.permission_results import (
-    make_permission_denied_result,
-    make_prewrite_review_failed_result,
-    make_prewrite_review_stale_result,
-)
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
-from lanscoder.tools.types import ToolResult, make_text_result
+from lanscoder.tools.types import ToolResult
 
 
 class AgentLoop:
@@ -95,6 +91,7 @@ class AgentLoop:
         observer: TurnObserver,
         mcp_activation: McpActivationTracker,
         tool_executor: ToolExecutor,
+        permission_resume: PermissionResumeHandler,
         stream_event_handler: Callable[[ChatStreamEvent], None] | None = None,
         tool_event_handler: Callable[[ToolExecutionEvent], None] | None = None,
         guidance_provider: Callable[[], list[str]] | None = None,
@@ -154,11 +151,13 @@ class AgentLoop:
         # validate/observe 交给 ToolExecutor，避免 ToolExecutor↔loop 构造顺序环（P0）。
         self._mcp_activation = mcp_activation
 
-        # -------- 阶段 7：TurnObserver + ToolExecutor（必需注入，无兜底）--------
+        # -------- 阶段 7：TurnObserver + ToolExecutor + PermissionResumeHandler（必需注入，无兜底）--------
         # observer 收敛 progress/stream/tool 三个事件回调；ToolExecutor 经 event_sink 消费
-        # 工具事件，validate/observe 由 tracker 提供。两者都由组装根构造后注入。
+        # 工具事件，validate/observe 由 tracker 提供；permission_resume 负责权限/ask_user
+        # 恢复子流程。三者都由组装根构造后注入。
         self._observer = observer
         self.tool_executor = tool_executor
+        self.permission_resume = permission_resume
 
     # ----------------------------------------------------------------------------
     # handler 属性 — 透传给 observer（runtime _resume_turn 的 setter 重绑形状）
@@ -333,9 +332,10 @@ class AgentLoop:
 
         权限确认与 ask_user 都走这里（统一 pending 协议）：
           1. 校验超时 / 取消 / pending 状态存在
-          2. _append_permission_resume_result：按答复决定 allow / deny / 预览过期，
-             并续跑同批次剩余工具（deferred batch continuation）；若剩余里又有工具
-             需要用户输入，链式返回新的 pending
+          2. permission_resume.handle：按答复决定 allow / deny / 预览过期，并续跑
+             同批次剩余工具（deferred batch continuation）。返回的三值判别式决定
+             下一步——continue 重新进入工具循环，wait_for_input / finished 直接返回
+             携带的 AgentTurnResult
           3. _begin_turn(new_user_turn=False)：重置 turn 计时但不重置 turn 序号
           4. 进入 _run_tool_loop 继续工具循环
 
@@ -351,9 +351,9 @@ class AgentLoop:
             return self._complete_turn(self.guardrails.limit_response(exc.reason))
         except AgentCancelledError:
             return self._complete_turn(self.guardrails.interrupted_response())
-        result = await self._append_permission_resume_result(request_id, answer)
-        if result is not None:
-            return result
+        outcome = await self.permission_resume.handle(request_id, answer)
+        if outcome.kind != "continue":
+            return outcome.result
         self._begin_turn(new_user_turn=False)
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
@@ -371,9 +371,9 @@ class AgentLoop:
             return self._complete_turn(self.guardrails.limit_response(exc.reason))
         except AgentCancelledError:
             return self._complete_turn(self.guardrails.interrupted_response())
-        result = await self._append_permission_resume_result(request_id, answer)
-        if result is not None:
-            return result
+        outcome = await self.permission_resume.handle(request_id, answer)
+        if outcome.kind != "continue":
+            return outcome.result
         self._begin_turn(new_user_turn=False)
         self._check_cancelled()
         return await self._run_tool_loop(
@@ -431,165 +431,10 @@ class AgentLoop:
             partial(self._complete_once_with_recovery, streaming=True),
         )
 
-    async def _append_permission_resume_result(self, request_id: str, answer: str) -> AgentTurnResult | None:
-        """用回答恢复一个暂停的权限/ask_user。
+    def _record_resumed_tool_round(self) -> None:
+        """权限恢复续跑剩余工具后递增工具轮次计数（组装根经 set_tool_round_callback 绑定）。"""
 
-        返回 AgentTurnResult 表示本轮必须立即结束（请求不存在，或延迟批次续跑时又
-        遇到需要用户输入的工具，链式再暂停）；返回 None 表示整批执行完毕，调用方
-        继续进入工具循环。
-        """
-
-        pending = self._pending_permission_for_resume(request_id)
-        if isinstance(pending, AgentTurnResult):
-            return pending
-        result = self._prepare_permission_resume(pending, answer)
-        if result is None:
-            result = await anyio.to_thread.run_sync(self._execute_resumed_permission_tool_call, pending)
-            self._emit_finished_permission_resume(pending, result)
-        chained = await self._finish_permission_resume(pending, result)
-        if chained is not None:
-            return self._pending_turn_result(chained)
-        return None
-
-    def _pending_permission_for_resume(
-        self,
-        request_id: str,
-    ) -> PendingPermissionExecution | AgentTurnResult:
-        pending = self.session.pending_permission_execution
-        if pending is None or pending.request_id != request_id:
-            return AgentTurnResult(
-                status=AgentTurnStatus.COMPLETED,
-                response=ChatResponse(
-                    provider=self.provider.name,
-                    model=self.provider.model,
-                    content="没有找到可恢复的权限确认请求。",
-                    finish_reason="error",
-                ),
-            )
-        if pending.kind == "permission_confirmation" and self.session.permission_manager is None:
-            return AgentTurnResult(
-                status=AgentTurnStatus.COMPLETED,
-                response=ChatResponse(
-                    provider=self.provider.name,
-                    model=self.provider.model,
-                    content="当前会话没有权限管理器，无法恢复权限确认。",
-                    finish_reason="error",
-                ),
-            )
-        return pending
-
-    def _prepare_permission_resume(
-        self,
-        pending: PendingPermissionExecution,
-        answer: str,
-    ) -> ToolResult | None:
-        if pending.kind == "ask_user":
-            # ask_user 的回答就是最终 tool_result，无需执行工具（暂停时已 emit
-            # started/finished，这里不重复 emit）。问题保存在 ask_user_request 里，
-            # 供模型与转录参考。
-            return make_text_result(
-                "ask_user",
-                answer,
-                question=str(pending.ask_user_request.question if pending.ask_user_request is not None else ""),
-                answer=answer,
-            )
-        result = self._blocked_permission_resume_result(pending, answer)
-        if result is not None:
-            self._emit_tool_event(
-                "denied",
-                pending.tool_call,
-                result=result,
-                permission_request=pending.permission_request,
-            )
-            return result
-        self._emit_tool_event(
-            "started",
-            pending.tool_call,
-            permission_request=pending.permission_request,
-        )
-        self._check_cancelled()
-        return None
-
-    def _execute_resumed_permission_tool_call(self, pending: PendingPermissionExecution) -> ToolResult:
-        # 用户同意后使用 session 保存的原始 tool_call，不能相信 UI 回传的参数。
-        return self.tool_executor.execute_after_permission_with_cancellation_context(pending.tool_call)
-
-    def _emit_finished_permission_resume(
-        self,
-        pending: PendingPermissionExecution,
-        result: ToolResult,
-    ) -> None:
-        self._emit_tool_event(
-            "finished",
-            pending.tool_call,
-            result=result,
-            permission_request=pending.permission_request,
-        )
-
-    async def _finish_permission_resume(self, pending: PendingPermissionExecution, result: ToolResult) -> UserInputRequest | None:
-        """写回已恢复工具的 result，续跑同批次剩余工具。
-
-        剩余工具（``deferred_tool_calls``）作为新一批交给 ToolExecutor 继续执行：
-        - 全部跑完：返回 None，调用方进入工具循环回问模型。
-        - 又有工具需要用户输入：返回链式 pending，本轮立即暂停等下一次回答。
-        """
-        self.session.pending_permission_execution = None
-        self.session.append_tool_result(tool_call=pending.tool_call, result=result)
         self._tool_rounds_completed += 1
-        if not pending.deferred_tool_calls:
-            return None
-        execution = await self.tool_executor.execute_interactive_async(pending.deferred_tool_calls)
-        return execution.pending_input
-
-    def _resolve_pending_confirmation(
-        self,
-        pending: PendingPermissionExecution,
-        answer: str,
-    ):
-        if not pending.review_only:
-            return self.session.permission_manager.resolve_confirmation(pending.permission_request, answer)
-        normalized = answer.strip().lower()
-        if normalized in {"allow_once", "allow", "once", "2"}:
-            current = self.session.preflight_tool_call_permission(pending.tool_call)
-            if current is not None and current.decision.kind == PermissionDecisionKind.DENY:
-                return current.decision
-            return PermissionDecision(kind=PermissionDecisionKind.ALLOW, reason="用户批准应用已预览的修改。")
-        if normalized in {"deny", "no", "1"} or normalized.startswith(("reject:", "reject_with_feedback:")):
-            return self.session.permission_manager.resolve_confirmation(pending.permission_request, answer)
-        return PermissionDecision(
-            kind=PermissionDecisionKind.DENY,
-            reason=f"未知写前预览选择：{answer}",
-        )
-
-    def _blocked_permission_resume_result(
-        self,
-        pending: PendingPermissionExecution,
-        answer: str,
-    ) -> ToolResult | None:
-        decision = self._resolve_pending_confirmation(pending, answer)
-        if decision.kind == PermissionDecisionKind.DENY:
-            return make_permission_denied_result(
-                tool_name=pending.tool_call.name,
-                request=pending.permission_request,
-                decision=decision,
-            )
-        if pending.prewrite_review is None:
-            return None
-        if not pending.prewrite_review.ok:
-            return make_prewrite_review_failed_result(
-                tool_name=pending.tool_call.name,
-                request=pending.permission_request,
-                error=pending.prewrite_review.error or "未知错误",
-            )
-        if pending.prewrite_review.is_current(
-            self.session.permission_manager.policy.project_root,
-            access=self.session.sandbox_access,
-        ):
-            return None
-        return make_prewrite_review_stale_result(
-            tool_name=pending.tool_call.name,
-            request=pending.permission_request,
-        )
 
     # ============================================================================
     # _complete_once — 单次 provider 调用（不处理工具循环）
