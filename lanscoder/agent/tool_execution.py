@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from lanscoder.agent.observer import ToolEventSink
 
 from lanscoder.runtime.cancellation import CancellationToken, cancellation_context
+from lanscoder.agent.permission import PermissionCoordinator, PreparedPermission
 from lanscoder.agent.session import AgentSession, PendingPermissionExecution
 from lanscoder.agent.background import (
     BackgroundCapacityError,
@@ -33,8 +34,6 @@ from lanscoder.planning.service import TaskPlanService
 from lanscoder.runtime.user_input import UserInputRequest, user_input_request_from_tool_result
 from lanscoder.permissions.types import PermissionDecisionKind, PermissionMode, PermissionRequest
 from lanscoder.providers.types import ToolCall
-from lanscoder.tools.permission_results import make_permission_denied_result, make_prewrite_review_failed_result
-from lanscoder.tools.review import build_prewrite_review, supports_prewrite_review
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from lanscoder.tools.types import ToolResult, make_error_result
 from lanscoder.subagent.types import role_allows_background, role_requires_worktree
@@ -95,13 +94,6 @@ class ToolExecutionState:
     pending_input: UserInputRequest | None = None
 
 
-@dataclass(slots=True)
-class _PermissionPreparation:
-    result: ToolResult | None = None
-    pending_input: UserInputRequest | None = None
-    permission_request: PermissionRequest | None = None
-
-
 class ToolExecutor:
     """Execute tool batches for one AgentSession."""
 
@@ -109,6 +101,7 @@ class ToolExecutor:
         self,
         *,
         session: AgentSession,
+        permission_coordinator: PermissionCoordinator,
         event_sink: ToolEventSink,
         cancellation_token: CancellationToken | None,
         validate_tool_call: Callable[[ToolCall], ToolResult | None] | None = None,
@@ -117,6 +110,7 @@ class ToolExecutor:
         background_tool_names: frozenset[str] | None = None,
     ) -> None:
         self.session = session
+        self._permission_coordinator = permission_coordinator
         self._event_sink = event_sink
         self.cancellation_token = cancellation_token
         self._validate_tool_call = validate_tool_call
@@ -208,6 +202,12 @@ class ToolExecutor:
                 )
                 state.pending_input = permission.pending_input
                 return state
+            if permission.prewrite_review is not None:
+                self._emit_event(
+                    "prewrite_review",
+                    tool_call,
+                    prewrite_review=permission.prewrite_review,
+                )
 
             # 权限已放行（ALLOW 或无预检）。此时才允许把请求转入后台，确保绝不后台执行
             # 需要用户确认的工具。
@@ -425,7 +425,7 @@ class ToolExecutor:
         return role_requires_worktree(str(arguments.get("role") or ""))
 
     def _worktree_isolation_available(self) -> bool:
-        manager = self.session.permission_manager
+        manager = self._permission_coordinator.permission_manager
         if manager is None:
             return False
         return WorktreeManager(manager.policy.project_root).available()
@@ -434,36 +434,10 @@ class ToolExecutor:
         self,
         tool_call: ToolCall,
         deferred_tool_calls: list[ToolCall],
-    ) -> _PermissionPreparation:
+    ) -> PreparedPermission:
         """Resolve preflight outcomes before any local tool side effect."""
 
-        preflight = self.session.preflight_tool_call_permission(tool_call)
-        if preflight is None:
-            return _PermissionPreparation()
-        if preflight.decision.kind == PermissionDecisionKind.DENY:
-            return _PermissionPreparation(
-                result=make_permission_denied_result(
-                    tool_name=tool_call.name,
-                    request=preflight.request,
-                    decision=preflight.decision,
-                ),
-                permission_request=preflight.request,
-            )
-        review_only = preflight.decision.kind == PermissionDecisionKind.ALLOW and self.requires_prewrite_review(tool_call)
-        if preflight.decision.kind == PermissionDecisionKind.ASK or review_only:
-            pending = self.store_pending_permission_request(
-                tool_call=tool_call,
-                request=preflight.request,
-                deferred_tool_calls=deferred_tool_calls,
-                review_only=review_only,
-            )
-            if isinstance(pending, ToolResult):
-                return _PermissionPreparation(result=pending, permission_request=preflight.request)
-            return _PermissionPreparation(pending_input=pending, permission_request=preflight.request)
-        return _PermissionPreparation(
-            result=self._prepare_bypass_mutation(tool_call, preflight=preflight),
-            permission_request=preflight.request,
-        )
+        return self._permission_coordinator.prepare(tool_call, deferred_tool_calls)
 
     def _record_result(
         self,
@@ -485,7 +459,7 @@ class ToolExecutor:
             tool_name=tool_call.name,
         )
         if pending_input is not None:
-            self.store_pending_ask_user(
+            self._permission_coordinator.store_pending_ask_user(
                 tool_call=tool_call,
                 deferred_tool_calls=deferred_tool_calls or [],
                 user_input_request=pending_input,
@@ -503,58 +477,21 @@ class ToolExecutor:
         return end
 
     def can_execute_in_parallel(self, tool_call: ToolCall) -> bool:
-        if self.requires_bypass_prewrite_review(tool_call):
+        if self._permission_coordinator.requires_bypass_review(tool_call):
             return False
         if tool_call.id in self._background_request:
             # 请求后台化的调用不能被并行只读批次吞掉；它要走单独的后台调度分支。
             return False
         if tool_call.name not in self.parallel_tool_names_for_current_mode():
             return False
-        preflight = self.session.preflight_tool_call_permission(tool_call)
+        preflight = self._permission_coordinator.preflight(tool_call)
         return preflight is None or preflight.decision.kind == PermissionDecisionKind.ALLOW
 
     def parallel_tool_names_for_current_mode(self) -> frozenset[str]:
-        if self.session.permission_manager is not None and self.session.permission_manager.mode == PermissionMode.BYPASS:
+        manager = self._permission_coordinator.permission_manager
+        if manager is not None and manager.mode == PermissionMode.BYPASS:
             return BYPASS_PARALLEL_TOOL_NAMES
         return PARALLEL_READONLY_TOOL_NAMES
-
-    def requires_prewrite_review(self, tool_call: ToolCall) -> bool:
-        manager = self.session.permission_manager
-        return self.session.require_prewrite_review and (manager is None or manager.mode != PermissionMode.BYPASS) and supports_prewrite_review(tool_call.name)
-
-    def requires_bypass_prewrite_review(self, tool_call: ToolCall) -> bool:
-        manager = self.session.permission_manager
-        return (
-            self.session.require_prewrite_review
-            and manager is not None
-            and manager.mode == PermissionMode.BYPASS
-            and self.session.tool_registry.get(tool_call.name) is not None
-            and supports_prewrite_review(tool_call.name)
-        )
-
-    def _prepare_bypass_mutation(
-        self,
-        tool_call: ToolCall,
-        *,
-        preflight,
-    ) -> ToolResult | None:
-        if not self.requires_bypass_prewrite_review(tool_call):
-            return None
-        if preflight is None:
-            return None
-        review = build_prewrite_review(
-            self.session.permission_manager.policy.project_root,
-            tool_call,
-            access=self.session.sandbox_access,
-        )
-        if not review.ok:
-            return make_prewrite_review_failed_result(
-                tool_name=tool_call.name,
-                request=preflight.request,
-                error=review.error or "未知错误",
-            )
-        self._emit_event("prewrite_review", tool_call, prewrite_review=review.to_payload())
-        return None
 
     def execute_single(self, tool_call: ToolCall) -> ToolResult:
         self._check_cancelled()
@@ -585,84 +522,6 @@ class ToolExecutor:
         self._check_cancelled()
         with cancellation_context(self.cancellation_token):
             return self.session.execute_tool_call_after_permission_confirmation(tool_call)
-
-    def store_pending_permission_request(
-        self,
-        *,
-        tool_call: ToolCall,
-        request: PermissionRequest,
-        deferred_tool_calls: list[ToolCall],
-        review_only: bool = False,
-    ) -> UserInputRequest | ToolResult:
-        if self.session.permission_manager is None:
-            raise RuntimeError("permission confirmation requires a permission manager")
-
-        confirmation = self.session.permission_manager.build_prewrite_review_confirmation(request) if review_only else self.session.permission_manager.build_confirmation(request)
-        prewrite_review = None
-        if supports_prewrite_review(tool_call.name):
-            prewrite_review = build_prewrite_review(
-                self.session.permission_manager.policy.project_root,
-                tool_call,
-                access=self.session.sandbox_access,
-            )
-            if not prewrite_review.ok:
-                return make_prewrite_review_failed_result(
-                    tool_name=tool_call.name,
-                    request=request,
-                    error=prewrite_review.error or "未知错误",
-                )
-            confirmation.payload["prewrite_review"] = prewrite_review.to_payload()
-        # UI 会看到 confirmation.payload，但恢复时不信任 UI 回传的 tool_call。真实 tool_call
-        # 保存在 session.pending_permission_execution 中，避免前端篡改参数后执行。
-        trusted_tool_call = ToolCall(
-            id=tool_call.id,
-            name=tool_call.name,
-            arguments=deepcopy(tool_call.arguments),
-        )
-        confirmation.payload["pending_tool_call"] = {
-            "id": trusted_tool_call.id,
-            "name": trusted_tool_call.name,
-            "arguments": deepcopy(trusted_tool_call.arguments),
-        }
-        self.session.pending_permission_execution = PendingPermissionExecution(
-            request_id=request.id,
-            tool_call=trusted_tool_call,
-            permission_request=request,
-            prewrite_review=prewrite_review,
-            review_only=review_only,
-            deferred_tool_calls=list(deferred_tool_calls),
-        )
-        self.session.persist_pending_permission_kind(
-            tool_call_id=trusted_tool_call.id,
-            review_only=review_only,
-        )
-        return confirmation
-
-    def store_pending_ask_user(
-        self,
-        *,
-        tool_call: ToolCall,
-        deferred_tool_calls: list[ToolCall],
-        user_input_request: UserInputRequest,
-    ) -> None:
-        """为 ask_user 暂停建立统一 pending 状态。
-
-        ask_user 工具本身不产生持久副作用，回答由 resume 阶段合成 tool_result 写入。
-        这里把提问请求与同批次剩余工具一起保存，回答后继续执行剩余工具。
-        """
-
-        trusted_tool_call = ToolCall(
-            id=tool_call.id,
-            name=tool_call.name,
-            arguments=deepcopy(tool_call.arguments),
-        )
-        self.session.pending_permission_execution = PendingPermissionExecution(
-            request_id=user_input_request.id,
-            tool_call=trusted_tool_call,
-            kind="ask_user",
-            deferred_tool_calls=list(deferred_tool_calls),
-            ask_user_request=user_input_request,
-        )
 
     def permission_input_request_from_pending(self, pending: PendingPermissionExecution) -> UserInputRequest:
         confirmation = self.session.pending_permission_input_request(pending)

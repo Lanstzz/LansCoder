@@ -41,9 +41,9 @@ from lanscoder.agent.loop import AgentLoop, ToolExecutionEvent
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.mcp_activation import McpActivationTracker
 from lanscoder.agent.observer import TurnObserver
-from lanscoder.agent.permission_resume import PermissionResumeHandler
+from lanscoder.agent.permission_resume import CoordinatorPendingStore, PermissionResumeHandler
 from lanscoder.agent.request_builder import RequestBuilder
-from lanscoder.agent.session import AgentSession, SessionPendingStore
+from lanscoder.agent.session import AgentSession
 from lanscoder.agent.subagent_engine import SubagentEngine
 from lanscoder.agent.tool_execution import ToolExecutor
 from lanscoder.agent.user_input import AgentTurnStatus
@@ -149,7 +149,8 @@ def create_agent_loop(
             request_options=request_options,
         )
 
-    project_root = session.permission_manager.policy.project_root if session.permission_manager is not None else None
+    coordinator = session.permission_coordinator
+    project_root = coordinator.permission_manager.policy.project_root if coordinator.permission_manager is not None else None
     engine = SubagentEngine(
         store=session.store,
         provider=provider,
@@ -157,8 +158,7 @@ def create_agent_loop(
         project_root=project_root,
         agents_md=session.agents_md,
         skill_catalog=session.skill_catalog,
-        permission_manager=session.permission_manager,
-        sandbox_access=session.sandbox_access,
+        permission_coordinator=coordinator,
         request_options=request_options,
         limits=limits,
         background_manager=background_manager,
@@ -192,6 +192,7 @@ def create_agent_loop(
         background_tool_names = DEFAULT_BACKGROUND_TOOL_NAMES
     tool_executor = ToolExecutor(
         session=session,
+        permission_coordinator=coordinator,
         event_sink=observer,
         cancellation_token=cancellation_token,
         validate_tool_call=mcp_activation.validate,
@@ -205,11 +206,12 @@ def create_agent_loop(
         clock=clock or time.monotonic,
     )
     permission_resume = PermissionResumeHandler(
-        pending_store=SessionPendingStore(session),
+        pending_store=CoordinatorPendingStore(coordinator),
         provider=provider,
         tool_executor=tool_executor,
         observer=observer,
         session=session,
+        permission_coordinator=coordinator,
         on_tool_round_completed=lambda: None,
     )
     loop = AgentLoop(
@@ -279,10 +281,10 @@ class CurrentSessionState:
 
     @property
     def mode(self) -> str:
-        return self.session.mode
+        return self.session.permission_mode
 
     def set_permission_mode(self, mode: PermissionMode | str) -> PermissionMode:
-        return self.session.set_permission_mode(mode)
+        return self.session.permission_coordinator.set_mode(mode)
 
 
 # ----------------------------------------------------------------------------

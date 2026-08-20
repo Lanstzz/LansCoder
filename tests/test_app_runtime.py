@@ -160,7 +160,7 @@ def test_agent_chat_runner_cancel_current_turn_interrupts_running_python_exec(tm
         project_root=tmp_path,
         tools=[python_tool],
     )
-    session.set_permission_mode(PermissionMode.BYPASS)
+    session.permission_coordinator.set_mode(PermissionMode.BYPASS)
     state = CurrentSessionState(session)
     provider = FakeProvider(
         [
