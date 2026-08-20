@@ -273,7 +273,7 @@ class AgentLoop:
 
         # run_tool_loop_interactive 是核心循环的外壳, 它负责捕获异常
         return self._run_tool_loop_interactive(
-            self._complete_once_with_recovery,
+            self._complete_once_sync_with_recovery,
         )
 
     def _run_nudge_turn_sync(self) -> AgentTurnResult:
@@ -292,7 +292,7 @@ class AgentLoop:
         self._begin_turn()
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
-        return self._run_tool_loop_interactive(self._complete_once_with_recovery)
+        return self._run_tool_loop_interactive(self._complete_once_sync_with_recovery)
 
     # ============================================================================
     # resume_with_user_input — 权限确认恢复的异步入口
@@ -351,7 +351,7 @@ class AgentLoop:
         self._begin_turn(new_user_turn=False)
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
-        return self._run_tool_loop_interactive(self._complete_once_with_recovery)
+        return self._run_tool_loop_interactive(self._complete_once_sync_with_recovery)
 
     async def _resume_with_user_input_streaming(self, request_id: str, answer: str) -> AgentTurnResult:
         """流式模式下恢复权限确认，并继续消费 provider stream。"""
@@ -605,7 +605,7 @@ class AgentLoop:
         )
 
     # ============================================================================
-    # _complete_once — 单次 provider 调用（不处理工具循环）
+    # _complete_once_sync — 单次 provider 调用（不处理工具循环）
     # ============================================================================
     # 这是”问模型一次”的最小单元，拆出来后：
     #   - 同步调用、streaming 调用、prompt-too-long 恢复都能复用同一套上下文构造
@@ -618,7 +618,7 @@ class AgentLoop:
     #   4. provider.complete(prepared.request)：实际调用模型 API
     #   5. _record_projection_consumed：记录本次投影被哪些 tool_result part 消费，
     #      便于后续 compact 判断哪些 tool_result 已经”被模型看过了”
-    def _complete_once(
+    def _complete_once_sync(
         self,
         *,
         tool_choice="auto",
@@ -650,7 +650,7 @@ class AgentLoop:
             **self.request_options.as_chat_request_kwargs(),
         )
 
-    def _complete_once_with_recovery(
+    def _complete_once_sync_with_recovery(
         self,
         *,
         tool_choice="auto",
@@ -663,7 +663,7 @@ class AgentLoop:
         """
 
         try:
-            return self._complete_once(
+            return self._complete_once_sync(
                 tool_choice=tool_choice,
                 runtime_instruction=runtime_instruction,
             )
@@ -673,10 +673,93 @@ class AgentLoop:
             result = self._compact_for_prompt_too_long(runtime_instruction=runtime_instruction)
             if result is None or result.status != "success":
                 raise
-            return self._complete_once(
+            return self._complete_once_sync(
                 tool_choice=tool_choice,
                 runtime_instruction=runtime_instruction,
             )
+
+    async def _complete_once(
+        self,
+        *,
+        tool_choice="auto",
+        runtime_instruction: str | None = None,
+        streaming: bool,
+    ) -> ChatResponse:
+        """构造一次 provider 请求并获得模型响应（统一 sync/streaming）。
+
+        streaming=True 时消费 provider.astream 并转发事件；streaming=False 时在
+        worker 线程里跑 provider.complete，避免阻塞事件循环。
+        """
+        prepared = self._prepare_main_provider_request(
+            tool_choice=tool_choice,
+            runtime_instruction=runtime_instruction,
+        )
+        self._reserve_provider_call()
+        self._check_turn_timeout()
+        self._check_cancelled()
+        if not streaming:
+            response = await anyio.to_thread.run_sync(self.provider.complete, prepared.request)
+        else:
+            start_event_count = len(self.last_stream_events)
+            final_response: ChatResponse | None = None
+            try:
+                async for event in self.provider.astream(prepared.request):
+                    self._check_cancelled()
+                    self.last_stream_events.append(event)
+                    if self.stream_event_handler is not None:
+                        self.stream_event_handler(event)
+                    if event.kind == "message_completed":
+                        final_response = event.response
+            except ProviderError:
+                # 失败的 streaming 尝试不把已收到的局部 delta 当真实回答留给 UI
+                del self.last_stream_events[start_event_count:]
+                raise
+            if final_response is None:
+                raise ProviderError(
+                    ProviderErrorKind.API_ERROR,
+                    "provider stream ended without message_completed event",
+                )
+            response = final_response
+        self._record_projection_consumed(prepared)
+        self._report_progress(response)
+        return response
+
+    async def _complete_once_with_recovery(
+        self,
+        *,
+        tool_choice="auto",
+        runtime_instruction: str | None = None,
+        streaming: bool,
+    ) -> ChatResponse:
+        """统一 recovery：retryable 失败重试一次 → 回退同步 complete；prompt-too-long → compact 重试。"""
+        retryable_failures = 0
+        while True:
+            try:
+                return await self._complete_once(
+                    tool_choice=tool_choice,
+                    runtime_instruction=runtime_instruction,
+                    streaming=streaming,
+                )
+            except ProviderError as exc:
+                if exc.retryable:
+                    if retryable_failures == 0:
+                        retryable_failures += 1
+                        continue
+                    return await self._complete_once(
+                        tool_choice=tool_choice,
+                        runtime_instruction=runtime_instruction,
+                        streaming=False,
+                    )
+                if not exc.requires_compaction:
+                    raise
+                result = self._compact_for_prompt_too_long(runtime_instruction=runtime_instruction)
+                if result is None or result.status != "success":
+                    raise
+                return await self._complete_once(
+                    tool_choice=tool_choice,
+                    runtime_instruction=runtime_instruction,
+                    streaming=streaming,
+                )
 
     async def _stream_once(
         self,
@@ -732,7 +815,7 @@ class AgentLoop:
                     if retryable_failures == 0:
                         retryable_failures += 1
                         continue
-                    return self._complete_once(
+                    return self._complete_once_sync(
                         tool_choice=tool_choice,
                         runtime_instruction=runtime_instruction,
                     )
