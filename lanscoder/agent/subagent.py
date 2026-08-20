@@ -159,7 +159,6 @@ class SubagentRunner:
         self.request_options = request_options or MainRequestOptions()
         self.limits = limits or AgentLoopLimits(max_tool_rounds=20, max_provider_calls=40, max_turn_seconds=600)
         self.background_manager = background_manager
-        self.profile_map = SUBAGENT_PROFILES
 
     def profile(self, role: str) -> SubagentProfile | None:
         return SUBAGENT_PROFILES.get(str(role))

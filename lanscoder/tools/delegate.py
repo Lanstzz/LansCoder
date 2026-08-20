@@ -40,7 +40,7 @@ def create_delegate_tool(
         if kwargs:
             return make_error_result("delegate", f"未知参数：{', '.join(sorted(kwargs))}")
         normalized_role = str(role).strip()
-        if normalized_role not in runner.profile_map:
+        if runner.profile(normalized_role) is None:
             return make_error_result("delegate", f"未知子代理角色：{normalized_role}", role=normalized_role)
         normalized_task = str(task or "").strip()
         if not normalized_task:
