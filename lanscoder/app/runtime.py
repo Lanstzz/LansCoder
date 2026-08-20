@@ -144,6 +144,8 @@ def create_agent_loop(
             cancellation_token=cancellation_token,
             background_manager=None,
             enable_delegate_tool=False,
+            limits=limits,
+            request_options=request_options,
         )
 
     project_root = session.permission_manager.policy.project_root if session.permission_manager is not None else None

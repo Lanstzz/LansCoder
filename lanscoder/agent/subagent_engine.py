@@ -15,6 +15,7 @@ The engine keeps the boundary deliberately small:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -57,6 +58,8 @@ from lanscoder.subagent.types import (
 )
 from lanscoder.tools.types import Tool
 from lanscoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
+
+logger = logging.getLogger(__name__)
 
 
 class SubagentEngine:
@@ -428,6 +431,10 @@ class SubagentEngine:
         except AgentCancelledError:
             raise
         except Exception:
+            # Child session is deleted in the caller's `finally`, so the traceback
+            # would otherwise be unrecoverable; keep the log signal while the
+            # delegate still returns a generic failure result to the parent loop.
+            logger.exception("subagent child loop failed; child session %s", child_session.session_id)
             return None, runner
 
     def _make_child_observer(self, progress_tracker: dict[str, Any] | None) -> TurnObserver:
