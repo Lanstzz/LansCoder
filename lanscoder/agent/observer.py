@@ -51,7 +51,7 @@ class TurnObserver:
         self._total_tokens = 0
 
     def on_turn_started(self) -> None:
-        """Reset per-turn observer state.  Empty until Task 5 needs it."""
+        pass
 
     def on_progress(self, provider_calls: int, total_tokens: int) -> None:
         """Mirror the loop's cumulative usage, then forward if a callback is set.

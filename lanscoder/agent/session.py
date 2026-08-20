@@ -629,26 +629,6 @@ class AgentSession:
         ]
 
 
-class SessionPendingStore:
-    """把 session 的 pending_permission_execution 薄适配成最小 PendingStore 协议。
-
-    handler 只依赖 ``get``/``clear``，任务 7 换 coordinator-backed 实现时无需
-    修改 handler 逻辑。
-    """
-
-    def __init__(self, session: AgentSession) -> None:
-        self._session = session
-
-    def get(self, request_id: str) -> PendingPermissionExecution | None:
-        pending = self._session.pending_permission_execution
-        if pending is not None and pending.request_id == request_id:
-            return pending
-        return None
-
-    def clear(self) -> None:
-        self._session.pending_permission_execution = None
-
-
 def _tool_call_from_part(part: MessagePart) -> ToolCall:
     arguments = deepcopy(part.metadata.get("arguments", {}))
     return ToolCall(

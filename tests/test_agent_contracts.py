@@ -23,7 +23,7 @@ from lanscoder.agent.permission import PermissionCoordinator
 from lanscoder.agent.permission_resume import CoordinatorPendingStore
 from lanscoder.agent.ports import SessionTurnRunner
 from lanscoder.agent.request_builder import PreparedMainRequest, RequestBuilder
-from lanscoder.agent.session import AgentSession, SessionPendingStore
+from lanscoder.agent.session import AgentSession
 from lanscoder.agent.subagent_engine import SubagentEngine
 from lanscoder.agent.tool_execution import ToolExecutionEvent, ToolExecutor
 from lanscoder.agent.user_input import AgentTurnResult, AgentTurnStatus
@@ -728,8 +728,8 @@ def test_permission_coordinator_call_order(tmp_path) -> None:
     assert "store_pending_request" not in coordinator.calls
 
 
-def test_coordinator_pending_store_swap(tmp_path) -> None:
-    """CoordinatorPendingStore 与 SessionPendingStore 行为等价（request_id 匹配/不匹配）。"""
+def test_coordinator_pending_store_contract(tmp_path) -> None:
+    """CoordinatorPendingStore 经 coordinator 的 pending_get/pending_clear 读写 session pending。"""
 
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
@@ -743,16 +743,12 @@ def test_coordinator_pending_store_swap(tmp_path) -> None:
     prepared = coordinator.prepare(tool_call, [])
     assert prepared.pending_input is not None
 
-    coordinator_store = CoordinatorPendingStore(coordinator)
-    session_store = SessionPendingStore(session)
+    pending_store = CoordinatorPendingStore(coordinator)
     request_id = session.pending_permission_execution.request_id
 
-    assert coordinator_store.get(request_id) is session.pending_permission_execution
-    assert session_store.get(request_id) is session.pending_permission_execution
-    assert coordinator_store.get("wrong_request_id") is None
-    assert session_store.get("wrong_request_id") is None
+    assert pending_store.get(request_id) is session.pending_permission_execution
+    assert pending_store.get("wrong_request_id") is None
 
-    coordinator_store.clear()
-    assert coordinator_store.get(request_id) is None
-    assert session_store.get(request_id) is None
+    pending_store.clear()
+    assert pending_store.get(request_id) is None
     assert session.pending_permission_execution is None
