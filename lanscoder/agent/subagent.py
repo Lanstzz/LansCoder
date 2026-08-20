@@ -95,7 +95,10 @@ class SubagentRunner:
                 error="background_not_allowed",
             )
 
-        if not request.run_in_background:
+        # 后台委托时 ToolExecutor 在后台线程里跑 delegate，但其 SubagentRequest 总是
+        # run_in_background=False（delegate 工具硬编码），所以用 current_job_id() 区分：
+        # 真正的前台调用没有 job id，才建 foreground_progress；后台委托由 job.progress 承载。
+        if not request.run_in_background and current_job_id() is None:
             self.foreground_progress = {
                 "label": request.role,
                 "started_at": time.monotonic(),

@@ -773,6 +773,30 @@ async def test_subagent_panel_hidden_when_no_active_jobs() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_subagent_panel_caps_visible_lines_with_remainder_footer() -> None:
+    app = LansCoderApp(chat_runner=_PanelRunner(count=4))
+    async with app.run_test(size=(120, 40)) as pilot:
+        app._refresh_subagent_progress()
+        await pilot.pause()
+        statics = list(app.query_one("#subagent-panel").query("Static"))
+        assert len(statics) == 4  # 3 running lines + remainder footer
+        assert "还有 1 个子agent在跑" in statics[3].content
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_subagent_panel_no_footer_under_cap() -> None:
+    app = LansCoderApp(chat_runner=_PanelRunner(count=3))
+    async with app.run_test(size=(120, 40)) as pilot:
+        app._refresh_subagent_progress()
+        await pilot.pause()
+        statics = list(app.query_one("#subagent-panel").query("Static"))
+        assert len(statics) == 3
+        assert all("还有" not in s.content for s in statics)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_lanscoder_app_welcome_particles_animate_between_frames() -> None:
     app = LansCoderApp()
 
@@ -1093,22 +1117,29 @@ class FakeChatRunner:
 
 
 class _PanelJob:
-    created_at = 100.0
-    tool_name = "delegate"
-    label = "researcher"
-    progress = {"provider_calls": 3, "total_tokens": 2500}
+    def __init__(self, created_at: float, label: str = "researcher"):
+        self.created_at = created_at
+        self.tool_name = "delegate"
+        self.label = label
+        self.progress = {"provider_calls": 3, "total_tokens": 2500}
 
 
 class _PanelManager:
+    def __init__(self, count: int = 1):
+        self._jobs = [_PanelJob(created_at=100.0 + i, label=f"researcher{i}") for i in range(count)]
+
     def active_jobs(self):
-        return [_PanelJob()]
+        return self._jobs
 
 
 class _PanelRunner(FakeChatRunner):
-    background_manager = _PanelManager()
+    def __init__(self, count: int = 1):
+        super().__init__()
+        self.background_manager = _PanelManager(count)
+        self._foreground = None
 
-    def foreground_subagent(self) -> None:
-        return None
+    def foreground_subagent(self):
+        return self._foreground
 
 
 class FakeDisplayChatRunner(FakeChatRunner):

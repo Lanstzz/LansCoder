@@ -84,6 +84,10 @@ __all__ = [
 
 _PROGRESS_INDICATORS = ("[    ]", "[>   ]", "[->  ]", "[--> ]", "[--->]", "[ ---]", "[  --]", "[   -]")
 
+# 子 agent 活动区最多同时显示的行数，超出以一行 "…还有 N 个子agent在跑" 汇总，
+# 避免大量后台任务把输入框顶高。
+_MAX_VISIBLE_SUBAGENT_LINES = 3
+
 
 def _progress_indicator(frame: int) -> str:
     """搜索时的进度条指示：`[>   ]` → `[--->]` → `[   -]` → 回到空条循环。"""
@@ -254,7 +258,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             pass
 
     def _refresh_subagent_progress(self) -> None:
-        """Periodic timer: render running background jobs plus the foreground delegate."""
+        """Periodic timer: render running sub-agents (foreground first, then background), capped."""
         manager = None
         foreground = None
         if self.chat_runner is not None:
@@ -265,9 +269,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         except Exception:
             return
         panel.remove_children()
-        if foreground is None and manager is None:
-            panel.add_class("hidden")
-            return
         jobs = manager.active_jobs() if manager is not None else []
         if not jobs and foreground is None:
             panel.add_class("hidden")
@@ -276,31 +277,33 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._activity_frame += 1
         indicator = _progress_indicator(self._activity_frame)
         now = time.monotonic()
+        lines: list[str] = []
+        if foreground is not None:
+            lines.append(
+                _format_subagent_line(
+                    label=foreground.get("label") or "delegate",
+                    elapsed=now - foreground["started_at"],
+                    calls=foreground.get("provider_calls", 0),
+                    tokens=foreground.get("total_tokens", 0),
+                    indicator=indicator,
+                )
+            )
         for job in jobs:
             progress = job.progress
-            panel.mount(
-                Static(
-                    _format_subagent_line(
-                        label=job.label or job.tool_name,
-                        elapsed=now - job.created_at,
-                        calls=progress.get("provider_calls", 0) if progress else 0,
-                        tokens=progress.get("total_tokens", 0) if progress else 0,
-                        indicator=indicator,
-                    )
+            lines.append(
+                _format_subagent_line(
+                    label=job.label or job.tool_name,
+                    elapsed=now - job.created_at,
+                    calls=progress.get("provider_calls", 0) if progress else 0,
+                    tokens=progress.get("total_tokens", 0) if progress else 0,
+                    indicator=indicator,
                 )
             )
-        if foreground is not None:
-            panel.mount(
-                Static(
-                    _format_subagent_line(
-                        label=foreground.get("label") or "delegate",
-                        elapsed=now - foreground["started_at"],
-                        calls=foreground.get("provider_calls", 0),
-                        tokens=foreground.get("total_tokens", 0),
-                        indicator=indicator,
-                    )
-                )
-            )
+        for line in lines[:_MAX_VISIBLE_SUBAGENT_LINES]:
+            panel.mount(Static(line))
+        hidden = len(lines) - _MAX_VISIBLE_SUBAGENT_LINES
+        if hidden > 0:
+            panel.mount(Static(f"…还有 {hidden} 个子agent在跑"))
 
     def _on_subagent_completed(self, job) -> None:
         """Called from background thread when a job finishes."""
