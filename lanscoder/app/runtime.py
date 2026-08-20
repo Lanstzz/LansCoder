@@ -44,7 +44,7 @@ from lanscoder.agent.observer import TurnObserver
 from lanscoder.agent.permission_resume import CoordinatorPendingStore, PermissionResumeHandler
 from lanscoder.agent.request_builder import RequestBuilder
 from lanscoder.agent.session import AgentSession
-from lanscoder.agent.subagent_engine import SubagentEngine
+from lanscoder.agent.subagent_engine import DEFAULT_CHILD_LIMITS, SubagentEngine
 from lanscoder.agent.tool_execution import ToolExecutor
 from lanscoder.agent.user_input import AgentTurnStatus
 from lanscoder.runtime.user_input import UserInputRequest
@@ -136,6 +136,10 @@ def create_agent_loop(
         request_options=request_options,
     )
 
+    # 子 agent 用紧预算（20 tool rounds / 40 provider calls / 600s），不继承父 loop 的
+    # 运行时配置（生产环境 200/400/3600）。engine 与 child factory 共用 DEFAULT_CHILD_LIMITS。
+    child_limits = DEFAULT_CHILD_LIMITS
+
     def _child_runner_factory(*, session, tools, observer, cancellation_token):
         return create_agent_loop(
             session=session,
@@ -145,7 +149,7 @@ def create_agent_loop(
             cancellation_token=cancellation_token,
             background_manager=None,
             enable_delegate_tool=False,
-            limits=limits,
+            limits=child_limits,
             request_options=request_options,
         )
 
@@ -160,7 +164,7 @@ def create_agent_loop(
         skill_catalog=session.skill_catalog,
         permission_coordinator=coordinator,
         request_options=request_options,
-        limits=limits,
+        limits=child_limits,
         background_manager=background_manager,
         child_runner_factory=_child_runner_factory,
     )

@@ -55,6 +55,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# 子 agent 的紧预算默认值。组装根（app/runtime.create_agent_loop）用它构造 SubagentEngine
+# 并转发给 child_runner_factory，子 loop 与 engine 默认值共用同一常量，避免预算漂移。
+DEFAULT_CHILD_LIMITS = AgentLoopLimits(max_tool_rounds=20, max_provider_calls=40, max_turn_seconds=600)
+
 
 class SubagentEngine:
     """Create and run isolated child sessions for the delegate tool.
@@ -87,7 +91,7 @@ class SubagentEngine:
         self.skill_catalog = skill_catalog or SkillCatalog()
         self.permission_coordinator = permission_coordinator
         self.request_options = request_options or MainRequestOptions()
-        self.limits = limits or AgentLoopLimits(max_tool_rounds=20, max_provider_calls=40, max_turn_seconds=600)
+        self.limits = limits or DEFAULT_CHILD_LIMITS
         self.background_manager = background_manager
         self.child_runner_factory = child_runner_factory
         # 前台 delegate 运行时的实时进度，TUI 用它渲染输入栏下方的 activity 行；
@@ -169,7 +173,7 @@ class SubagentEngine:
         started = time.monotonic()
         try:
             prompt = self._child_prompt(request, profile=profile)
-            result, runner = self._run_child_loop(
+            result, runner, failure = self._run_child_loop(
                 child_session,
                 prompt,
                 self.tools_for_role(request.role),
@@ -190,13 +194,24 @@ class SubagentEngine:
                     provider_calls=usage["provider_calls"],
                     elapsed_seconds=time.monotonic() - started,
                 )
-            summary, error = ("subagent paused for user input", "subagent paused for user input") if result is not None else ("subagent failed without a result", "child_loop_failed")
+            if result is not None:
+                return SubagentResult(
+                    ok=False,
+                    role=request.role,
+                    child_session_id=child_session.session_id,
+                    summary="subagent paused for user input",
+                    error="subagent paused for user input",
+                    total_tokens=usage["total_tokens"],
+                    provider_calls=usage["provider_calls"],
+                    elapsed_seconds=time.monotonic() - started,
+                )
+            summary = f"Subagent failed: {failure}" if failure else "subagent failed without a result"
             return SubagentResult(
                 ok=False,
                 role=request.role,
                 child_session_id=child_session.session_id,
                 summary=summary,
-                error=error,
+                error=failure or "child_loop_failed",
                 total_tokens=usage["total_tokens"],
                 provider_calls=usage["provider_calls"],
                 elapsed_seconds=time.monotonic() - started,
@@ -256,7 +271,7 @@ class SubagentEngine:
             try:
                 prompt = self._child_prompt(request, profile=profile, worktree=worktree)
                 started = time.monotonic()
-                result, runner = self._run_child_loop(
+                result, runner, failure = self._run_child_loop(
                     child_session,
                     prompt,
                     self._worktree_child_tools(
@@ -287,15 +302,28 @@ class SubagentEngine:
                         provider_calls=usage["provider_calls"],
                         elapsed_seconds=time.monotonic() - started,
                     )
-                summary, error = (
-                    ("隔离 coder 等待用户输入，无法在后台继续。", "waiting_for_user_input") if result is not None else ("隔离 coder 执行失败：child loop 未产出结果。", "child_loop_failed")
-                )
+                if result is not None:
+                    return SubagentResult(
+                        ok=False,
+                        role=request.role,
+                        child_session_id=session_id,
+                        summary="隔离 coder 等待用户输入，无法在后台继续。",
+                        error="waiting_for_user_input",
+                        files_changed=diff.files_changed,
+                        worktree_path=str(worktree.path),
+                        worktree_branch=worktree.branch,
+                        diff_summary=diff.render(),
+                        total_tokens=usage["total_tokens"],
+                        provider_calls=usage["provider_calls"],
+                        elapsed_seconds=time.monotonic() - started,
+                    )
+                summary = f"隔离 coder 执行失败：{failure}" if failure else "隔离 coder 执行失败：child loop 未产出结果。"
                 return SubagentResult(
                     ok=False,
                     role=request.role,
                     child_session_id=session_id,
                     summary=summary,
-                    error=error,
+                    error=failure or "child_loop_failed",
                     files_changed=diff.files_changed,
                     worktree_path=str(worktree.path),
                     worktree_branch=worktree.branch,
@@ -420,10 +448,15 @@ class SubagentEngine:
     def _run_child_loop(self, child_session, prompt, tools, observer):
         """Run the child loop via the injected factory and harvest the runner.
 
-        The child's ``cancellation_token`` is captured at call time so a parent
-        turn cancelled mid-subagent aborts the child with ``AgentCancelledError``
+        Returns ``(result, runner, error)``: ``result`` is the child's
+        ``AgentTurnResult`` (or ``None`` when the child raised), ``runner`` is
+        the ``SessionTurnRunner`` for usage harvesting, and ``error`` is the
+        concrete failure message (``None`` on success / pause). The child's
+        ``cancellation_token`` is captured at call time so a parent turn
+        cancelled mid-subagent aborts the child with ``AgentCancelledError``
         (P2-9). Generic child failures are swallowed into ``result=None`` so the
-        delegate never breaks the parent loop; the caller builds the error result.
+        delegate never breaks the parent loop; the caller builds the error result
+        and surfaces the concrete message back to the parent model.
         """
 
         runner = self.child_runner_factory(
@@ -434,15 +467,15 @@ class SubagentEngine:
         )
         try:
             result = asyncio.run(runner.run_user_turn(prompt))
-            return result, runner
+            return result, runner, None
         except AgentCancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             # Child session is deleted in the caller's `finally`, so the traceback
             # would otherwise be unrecoverable; keep the log signal while the
             # delegate still returns a generic failure result to the parent loop.
             logger.exception("subagent child loop failed; child session %s", child_session.session_id)
-            return None, runner
+            return None, runner, str(exc)
 
     def _make_child_observer(self, progress_tracker: dict[str, Any] | None) -> TurnObserver:
         """返回子 agent 的 TurnObserver：后台委托写 Job.progress，前台写 progress_tracker。
