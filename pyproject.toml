@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "trio"]
+dev = ["pytest", "trio", "ruff==0.12.0", "black"]
 
 [project.scripts]
 lanscoder = "lanscoder.cli:main"
