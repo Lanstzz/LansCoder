@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from lanscoder.agent.loop import AgentLoop
+from lanscoder.agent._builders import create_agent_loop
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.session import AgentSession
 from lanscoder.app.factory import create_lanscoder_app
@@ -487,8 +487,8 @@ def test_factory_background_controls_remain_session_scoped(tmp_path: Path) -> No
         session_id="sess_factory_b",
         tools=list(app.chat_runner.tools or []),
     )
-    loop_a = AgentLoop(session=session_a, provider=FakeProvider([]), background_manager=manager)
-    loop_b = AgentLoop(session=session_b, provider=FakeProvider([]), background_manager=manager)
+    loop_a = create_agent_loop(session=session_a, provider=FakeProvider([]), background_manager=manager)
+    loop_b = create_agent_loop(session=session_b, provider=FakeProvider([]), background_manager=manager)
     started = threading.Event()
     release = threading.Event()
     try:

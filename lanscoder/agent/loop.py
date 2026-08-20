@@ -57,14 +57,12 @@ from lanscoder.permissions.types import PermissionDecision, PermissionDecisionKi
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.errors import ProviderError, ProviderErrorKind
 from lanscoder.providers.types import ChatResponse, ChatStreamEvent, MainRequestOptions, ToolCall
+from lanscoder.subagent.types import SubagentRunner
 from lanscoder.tools.permission_results import (
     make_permission_denied_result,
     make_prewrite_review_failed_result,
     make_prewrite_review_stale_result,
 )
-from lanscoder.tools.background import create_background_cancel_tool, create_background_status_tool
-from lanscoder.agent.subagent import SubagentRunner
-from lanscoder.tools.delegate import create_delegate_tool
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 
@@ -105,6 +103,7 @@ class AgentLoop:
         background_manager: BackgroundJobManager | None = None,
         background_tool_names: frozenset[str] | None = None,
         enable_delegate_tool: bool = True,
+        subagent_runner: SubagentRunner | None = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         # -------- 阶段 1：核心依赖 (session / provider / 工具元数据) --------
@@ -155,18 +154,13 @@ class AgentLoop:
         # background_tool_names: 哪些工具被视为"后台工具"，默认包含 background_run 等
         self.background_manager = background_manager
         self.background_tool_names = background_tool_names if background_tool_names is not None else DEFAULT_BACKGROUND_TOOL_NAMES
-        self.enable_delegate_tool = enable_delegate_tool
-        self._delegate_runner = None
+        self._subagent_runner = subagent_runner
         self._task_plan_reconciliation_attempted = False
         self._tool_rounds_completed = 0
 
-        # -------- 阶段 6：工具注册（去重）--------
-        # session 创建时通常已经注册了 session-scoped 工具。这里允许调用方再传入一批
-        # 测试或临时工具，但避免重复注册同名工具导致模型 schema 不稳定。
-        if tools:
-            for tool in tools:
-                if tool.name not in self.session.tool_registry.names():
-                    self.session.tool_registry.register(tool)
+        # -------- 阶段 6：MCP 激活状态快照 ----------
+        # 工具注册已上移到组装根（_builders.register_loop_tools），loop 不再注册任何工具。
+        # 这里快照 session 已有的 mcp__ 工具名，供 MCP 激活校验与搜索结果观测使用。
         self._mcp_tool_names = {name for name in self.session.tool_registry.names() if name.startswith("mcp__")}
         self._active_mcp_tool_names: set[str] = set()
 
@@ -183,13 +177,6 @@ class AgentLoop:
             background_manager=self.background_manager,
             background_tool_names=self.background_tool_names,
         )
-
-        # -------- 阶段 8：背景控制工具 + delegate 工具注册 --------
-        # _ensure_background_control_tools(): 注册 background_status / background_cancel
-        # _ensure_delegate_tool(): 注册 delegate 工具（让模型能启动子 agent）
-        # → 见 lanscoder/tools/delegate.py::create_delegate_tool
-        self._ensure_background_control_tools()
-        self._ensure_delegate_tool()
 
     # ----------------------------------------------------------------------------
     # run_user_turn — 统一 async 入口
@@ -1046,52 +1033,11 @@ class AgentLoop:
             return definition
         return with_background_controls(definition)
 
-    def _ensure_background_control_tools(self) -> None:
-        """Register background_status/background_cancel whenever background runtime exists."""
-
-        if self.background_manager is None:
-            return
-        names = set(self.session.tool_registry.names())
-        if "background_status" not in names:
-            self.session.tool_registry.register(create_background_status_tool(self.background_manager, session_id=self.session.session_id))
-        if "background_cancel" not in names:
-            self.session.tool_registry.register(create_background_cancel_tool(self.background_manager, session_id=self.session.session_id))
-
-    def _ensure_delegate_tool(self) -> None:
-        """Register the parent-facing delegate tool with a non-recursive child runner."""
-
-        if not self.enable_delegate_tool:
-            return
-        if "delegate" in self.session.tool_registry.names():
-            return
-        project_root = None
-        if self.session.permission_manager is not None:
-            project_root = self.session.permission_manager.policy.project_root
-        runner = SubagentRunner(
-            store=self.session.store,
-            provider=self.provider,
-            tools=[tool for tool in self.session.tool_registry.tools() if tool.name != "delegate"],
-            project_root=project_root,
-            agents_md=self.session.agents_md,
-            skill_catalog=self.session.skill_catalog,
-            permission_manager=self.session.permission_manager,
-            sandbox_access=self.session.sandbox_access,
-            request_options=self.request_options,
-            background_manager=self.background_manager,
-        )
-        self._delegate_runner = runner
-        self.session.tool_registry.register(
-            create_delegate_tool(
-                runner,
-                parent_session_id=self.session.session_id,
-            )
-        )
-
     def foreground_subagent(self) -> dict[str, Any] | None:
         """当前前台 delegate 子 agent 的实时进度（无则 None），供 TUI 在输入栏下方显示。"""
-        if self._delegate_runner is None:
+        if self._subagent_runner is None:
             return None
-        return self._delegate_runner.foreground_progress
+        return self._subagent_runner.foreground_progress
 
     def _begin_turn(self, *, new_user_turn: bool = True) -> None:
         if new_user_turn:
