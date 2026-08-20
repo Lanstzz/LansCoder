@@ -1,5 +1,3 @@
-"""`git_status` 工具。"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,7 +11,6 @@ from lanscoder.utils.sandbox_access import SandboxAccess
 
 
 def create_git_status_tool(root: str | Path, *, access: SandboxAccess | None = None) -> Tool:
-    """创建查看 git 工作区状态的工具。"""
 
     sandbox = PathSandbox(root, access=access)
 

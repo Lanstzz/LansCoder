@@ -1,11 +1,3 @@
-"""Anthropic Messages API provider 实现。
-
-目标是与 OpenAI-compatible 主线在 LansCoder 内部契约上对齐：
-complete / astream、tools、forced tool_choice、usage、错误归类、半截 tool 丢弃。
-原生 thinking / cache_control 等 Anthropic 专有增强不在本文件的最低对齐范围内；
-若响应里出现 thinking 块，会像 OpenAI 路径的 reasoning 一样写入 diagnostics。
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -48,11 +40,6 @@ from lanscoder.utils.json_utils import loads_json_object
 
 
 class AnthropicProvider(ChatProvider):
-    """Anthropic Messages API provider。
-
-    与 OpenAI-compatible 主线共享同一套 `ChatRequest` / `ChatResponse` /
-    `ChatStreamEvent` 契约，方便 agent loop 与 TUI 无分支切换。
-    """
 
     def __init__(
         self,
@@ -114,9 +101,8 @@ class AnthropicProvider(ChatProvider):
         return dict(self._extra_body)
 
     def complete(self, request: ChatRequest) -> ChatResponse:
-        """调用 Anthropic Messages API，并转换为统一响应。"""
 
-        params = self._build_message_params(request)  # 把项目内部的 chatRequest 转为 anthropic api 需要的参数
+        params = self._build_message_params(request)
         try:
             response = self._client.messages.create(**params)
         except Exception as exc:
@@ -144,7 +130,6 @@ class AnthropicProvider(ChatProvider):
         )
 
     async def astream(self, request: ChatRequest) -> AsyncIterator[ChatStreamEvent]:
-        """调用 Anthropic Messages streaming，并转换成内部流式事件。"""
 
         if not self._capabilities.supports_streaming:
             raise ProviderError(
@@ -204,7 +189,6 @@ class AnthropicProvider(ChatProvider):
                             id=str(_read_field(block, "id", "") or ""),
                             name=str(_read_field(block, "name", "") or ""),
                         )
-                        # 非流式 input 有时会直接出现在 start block。
                         initial_input = _read_field(block, "input")
                         if isinstance(initial_input, dict) and initial_input:
                             from lanscoder.utils.json_utils import dumps_json
@@ -326,7 +310,6 @@ class AnthropicProvider(ChatProvider):
         params: dict[str, Any] = {
             "model": self._model,
             "messages": self._to_anthropic_messages(request.messages),
-            # Anthropic 要求 max_tokens 必填。
             "max_tokens": request.max_tokens or 4096,
         }
 
@@ -343,8 +326,6 @@ class AnthropicProvider(ChatProvider):
 
         extra_body = {**self._extra_body, **request.extra_body}
         if extra_body:
-            # 与 OpenAI-compatible 一致：允许透传厂商私有参数。
-            # 不覆盖本函数已构造的核心字段，避免消息/工具被悄悄替换。
             reserved = {
                 "model",
                 "messages",
@@ -362,7 +343,6 @@ class AnthropicProvider(ChatProvider):
         return params
 
     def _to_anthropic_tool_choice(self, tool_choice: ToolChoice | None) -> dict[str, Any]:
-        """把内部 tool_choice 转成 Anthropic tool_choice 对象。"""
 
         if tool_choice is None or tool_choice == "auto":
             payload: dict[str, Any] = {"type": "auto"}
@@ -386,13 +366,11 @@ class AnthropicProvider(ChatProvider):
 
     @staticmethod
     def _collect_system_prompt(messages: list[ChatMessage]) -> str:
-        """Anthropic 把 system prompt 放在独立字段，而不是 messages 列表里。"""
 
         return "\n\n".join(message.content for message in messages if message.role == "system")
 
     @staticmethod
     def _to_anthropic_messages(messages: list[ChatMessage]) -> list[dict[str, Any]]:
-        """把内部消息转换为 Anthropic Messages API 格式。"""
 
         converted: list[dict[str, Any]] = []
         for message in messages:
@@ -452,7 +430,6 @@ class AnthropicProvider(ChatProvider):
 
     @staticmethod
     def _collect_text(content_blocks: list[Any]) -> str:
-        """提取 Anthropic content blocks 中的文本内容。"""
 
         parts: list[str] = []
         for block in content_blocks:
@@ -466,7 +443,6 @@ class AnthropicProvider(ChatProvider):
         *,
         diagnostics: ProviderDiagnostics,
     ) -> list[ToolCall]:
-        """解析 Anthropic content blocks 中的 tool_use。"""
 
         parsed: list[ToolCall] = []
         for block in content_blocks:
@@ -520,7 +496,6 @@ def _collect_thinking(content_blocks: list[Any]) -> str:
 
 
 def _normalize_stop_reason(reason: Any) -> FinishReason:
-    """把 Anthropic stop_reason 收敛成内部 finish_reason。"""
 
     if reason == "end_turn" or reason == "stop_sequence":
         return "stop"
@@ -534,7 +509,6 @@ def _normalize_stop_reason(reason: Any) -> FinishReason:
 
 
 def _parse_usage(usage: Any):
-    """解析 Anthropic usage。"""
 
     if usage is None:
         return None

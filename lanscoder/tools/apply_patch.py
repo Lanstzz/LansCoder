@@ -1,5 +1,3 @@
-"""`apply_patch` 工具。"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -18,7 +16,6 @@ END_MARKER = "*** End Patch"
 
 @dataclass(slots=True)
 class PatchHunk:
-    """一次文件更新中的局部替换块。"""
 
     old_lines: list[str] = field(default_factory=list)
     new_lines: list[str] = field(default_factory=list)
@@ -26,7 +23,6 @@ class PatchHunk:
 
 @dataclass(slots=True)
 class PatchOperation:
-    """解析后的单个文件操作。"""
 
     action: str
     path: str
@@ -37,13 +33,11 @@ class PatchOperation:
 
 @dataclass(slots=True)
 class PatchPlan:
-    """完整 patch 的结构化计划。"""
 
     operations: list[PatchOperation]
 
 
 def create_apply_patch_tool(root: str | Path, *, access: SandboxAccess | None = None) -> Tool:
-    """创建多文件文本补丁工具。"""
 
     sandbox = PathSandbox(root, access=access)
 
@@ -89,11 +83,6 @@ def _permission_target_for_patch(arguments: dict[str, object]) -> str:
 
 
 def parse_patch(patch: str) -> PatchPlan:
-    """把文本 patch 解析成文件操作列表。
-
-    这里实现的是第一阶段可控子集：新增文件、删除文件、更新文件，以及 `@@`
-    标记的上下文 hunk。后续如果要兼容更完整的 unified diff，可以在这个函数继续扩展。
-    """
 
     lines = patch.splitlines()
     if not lines or lines[0] != BEGIN_MARKER:
@@ -121,7 +110,6 @@ def parse_patch(patch: str) -> PatchPlan:
 
 
 def _parse_add_file(lines: list[str], index: int) -> tuple[PatchOperation, int]:
-    """解析新增文件操作。"""
 
     path = lines[index].removeprefix("*** Add File: ").strip()
     if not path:
@@ -139,7 +127,6 @@ def _parse_add_file(lines: list[str], index: int) -> tuple[PatchOperation, int]:
 
 
 def _parse_update_file(lines: list[str], index: int) -> tuple[PatchOperation, int]:
-    """解析更新文件操作。"""
 
     path = lines[index].removeprefix("*** Update File: ").strip()
     if not path:
@@ -166,7 +153,6 @@ def _parse_update_file(lines: list[str], index: int) -> tuple[PatchOperation, in
 
 
 def _parse_hunk(lines: list[str], index: int) -> tuple[PatchHunk, int]:
-    """解析单个更新 hunk。"""
 
     hunk = PatchHunk()
     while index < len(lines) - 1 and not lines[index].startswith("@@") and not lines[index].startswith("*** "):
@@ -192,13 +178,11 @@ def _parse_hunk(lines: list[str], index: int) -> tuple[PatchHunk, int]:
 
 
 def _is_update_body_line(line: str) -> bool:
-    """判断一行是否仍属于当前 Update File 操作。"""
 
     return not line.startswith("*** ") or line.startswith("*** Move to: ")
 
 
 def _parse_delete_file(lines: list[str], index: int) -> tuple[PatchOperation, int]:
-    """解析删除文件操作。"""
 
     path = lines[index].removeprefix("*** Delete File: ").strip()
     if not path:
@@ -207,7 +191,6 @@ def _parse_delete_file(lines: list[str], index: int) -> tuple[PatchOperation, in
 
 
 def _apply_plan(sandbox: PathSandbox, plan: PatchPlan, *, dry_run: bool) -> dict[str, list[str]]:
-    """应用解析后的补丁计划。"""
 
     changed_files: list[str] = []
     created_files: list[str] = []
@@ -254,7 +237,6 @@ def _apply_plan(sandbox: PathSandbox, plan: PatchPlan, *, dry_run: bool) -> dict
 
 
 def _plan_add_file(target: Path, operation: PatchOperation, pending_writes: list[tuple[Path, str]]) -> None:
-    """准备新增文件写入。"""
 
     if target.exists():
         raise ValueError(f"文件已存在：{operation.path}")
@@ -268,7 +250,6 @@ def _plan_update_file(
     pending_writes: list[tuple[Path, str]],
     pending_deletes: list[Path],
 ) -> None:
-    """准备更新文件写入。"""
 
     if not target.exists():
         raise ValueError(f"文件不存在：{operation.path}")
@@ -298,7 +279,6 @@ def _plan_update_file(
 
 
 def _plan_delete_file(target: Path, pending_deletes: list[Path]) -> None:
-    """准备删除文件。"""
 
     if not target.exists():
         raise ValueError("文件不存在")
@@ -308,12 +288,6 @@ def _plan_delete_file(target: Path, pending_deletes: list[Path]) -> None:
 
 
 def _join_lines(lines: list[str]) -> str:
-    """把 patch 行还原成文件文本。
-
-    `splitlines()` 会去掉换行符，而 patch 行语义通常表示完整文本行，所以这里统一补回
-    末尾换行。这个约定能让简单文本补丁保持稳定，后续如果要支持
-    “No newline at EOF” 这类标记，可以在 parser 层增加显式语法。
-    """
 
     if not lines:
         return ""

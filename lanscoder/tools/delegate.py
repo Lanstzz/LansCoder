@@ -1,5 +1,3 @@
-"""Delegate tool for running restricted LansCoder subagents."""
-
 from __future__ import annotations
 
 from typing import Any
@@ -15,12 +13,6 @@ def create_delegate_tool(
     *,
     parent_session_id: str,
 ) -> Tool:
-    """Create the parent-facing delegate tool.
-
-    Background execution itself is handled by ToolExecutor's generic Phase 1
-    `run_in_background` control field.  The delegate executor keeps foreground
-    semantics and receives cleaned arguments.
-    """
 
     def delegate(
         role: str,
@@ -30,9 +22,6 @@ def create_delegate_tool(
         isolate_worktree: bool = False,
         **kwargs: Any,
     ) -> ToolResult:
-        # ``isolate_worktree`` is an internal control field injected by the parent
-        # ToolExecutor when it backgrounds a mutation-capable role; it is not part of
-        # the model-visible schema.
         if kwargs:
             return make_error_result("delegate", f"未知参数：{', '.join(sorted(kwargs))}")
         normalized_role = str(role).strip()

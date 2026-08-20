@@ -1,5 +1,3 @@
-"""L1-L2 程序化压缩使用的内容检测器。"""
-
 from __future__ import annotations
 
 from lanscoder.context.models import MessagePart

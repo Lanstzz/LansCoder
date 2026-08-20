@@ -1,5 +1,3 @@
-"""Reusable TUI picker state and rendering helpers."""
-
 from __future__ import annotations
 
 from lanscoder.utils.text import ellipsis_truncate

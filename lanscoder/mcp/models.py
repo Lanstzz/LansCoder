@@ -1,5 +1,3 @@
-"""MCP 配置与运行状态的数据模型。"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -8,12 +6,11 @@ from typing import Literal, Mapping
 
 
 class McpConfigError(ValueError):
-    """表示不会暴露敏感配置值的 MCP 配置错误。"""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class McpLocalServerConfig:
-    """本地 stdio MCP 服务器的期望配置。"""
 
     name: str
     command: tuple[str, ...]
@@ -28,7 +25,6 @@ class McpLocalServerConfig:
 
 @dataclass(frozen=True, slots=True)
 class McpRemoteServerConfig:
-    """远程 Streamable HTTP MCP 服务器的期望配置。"""
 
     name: str
     url: str
@@ -44,7 +40,6 @@ class McpRemoteServerConfig:
 
 @dataclass(frozen=True, slots=True)
 class McpServerStatus:
-    """进程内 MCP 服务器连接状态，不是持久化配置。"""
 
     name: str
     state: Literal["disabled", "connecting", "connected", "failed"]
@@ -54,7 +49,6 @@ class McpServerStatus:
 
 @dataclass(frozen=True, slots=True)
 class McpToolDescription:
-    """MCP 服务端发现的、与传输无关的工具说明。"""
 
     name: str
     description: str | None

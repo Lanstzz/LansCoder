@@ -1,10 +1,3 @@
-"""Pure lifecycle classification for effective-tail tool results.
-
-This module deliberately only interprets structured, successful results from the
-built-in read and mutation tools.  It neither touches the filesystem nor changes
-session state, so callers can safely rebuild the same index after replay.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -54,12 +47,6 @@ def index_tool_result_lifecycles(
     *,
     current_turn: int | None = None,
 ) -> dict[tuple[str, str], ToolResultLifecycleRecord]:
-    """Classify tool results in an already-projected effective tail.
-
-    ``current_turn`` is intentionally accepted for the pipeline contract, but
-    lifecycle is based only on the deterministic tool timeline in this phase.
-    Ambiguous calls, malformed data, and failed results fail open as ``fresh``.
-    """
 
     del current_turn
     tool_calls = _index_tool_calls(messages)
@@ -82,8 +69,6 @@ def index_tool_result_lifecycles(
             reason = "derived_tool_output"
             targets: tuple[SourceReadTarget, ...] = ()
 
-            # A failed result is never evidence of a read or mutation, and must
-            # be retained even if it happens to match another output exactly.
             if part.metadata.get("ok") is not True:
                 lifecycle = ToolResultLifecycle.FRESH
                 reason = "failed_or_unknown_result"

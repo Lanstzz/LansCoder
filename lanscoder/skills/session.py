@@ -1,5 +1,3 @@
-"""Session event helpers for skill audit records."""
-
 from __future__ import annotations
 
 from lanscoder.context.writer import SessionEventWriter

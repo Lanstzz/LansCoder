@@ -1,5 +1,3 @@
-"""Session-backed mutation boundary for canonical task plans."""
-
 from __future__ import annotations
 
 import hashlib
@@ -29,7 +27,6 @@ _THREAD_LOCKS: dict[str, threading.RLock] = {}
 
 @dataclass(frozen=True, slots=True)
 class TaskPlanMutation:
-    """Canonical state and derived view produced by one plan command."""
 
     plan: TaskPlan
     projection: dict[str, object]
@@ -38,7 +35,6 @@ class TaskPlanMutation:
 
 
 class TaskPlanService:
-    """Apply task-plan reducers against the latest replayed session state."""
 
     def __init__(
         self,
@@ -50,7 +46,6 @@ class TaskPlanService:
         self._writer = writer
 
     def current(self) -> TaskPlan | None:
-        """Return the authoritative plan rebuilt from the event log."""
 
         return self._store.rebuild_session_view(self._writer.session_id).task_plan
 

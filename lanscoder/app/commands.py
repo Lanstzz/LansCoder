@@ -1,10 +1,3 @@
-"""TUI slash command 处理。
-
-这一层只把用户输入映射到上下文层的结构化能力：`ContextInspector` 用于只读状态，
-`ContextWindowManager` 用于手动 compact。Textual widget 不直接读取 JSONL 或拼上下文，
-避免 UI 和 agent/context 编排耦合。
-"""
-
 from __future__ import annotations
 
 from lanscoder.utils.text import display_value
@@ -41,7 +34,6 @@ class CommandResult:
 
 @dataclass(slots=True)
 class ContextCommandHandler:
-    """处理 `/context`、`/compact status` 和 `/compact`。"""
 
     session: SessionLike
     budget_provider: BudgetProvider

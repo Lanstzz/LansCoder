@@ -1,5 +1,3 @@
-"""会影响缓存、压缩和投影可信度的策略版本。"""
-
 SYSTEM_PROMPT_VERSION = "v19"
 COMPACTION_STRATEGY_VERSION = "v4"
 ARCHIVE_SCHEMA_VERSION = "v2"

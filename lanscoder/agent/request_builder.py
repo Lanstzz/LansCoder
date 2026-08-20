@@ -1,11 +1,3 @@
-"""纯请求构造：把 SessionView 投影成 provider 请求。
-
-从 AgentLoop 抽出的纯变换层：输入 view + definitions，输出 PreparedMainRequest
-或 ContextBudget。它不触碰 loop 状态（调用计数、事件流、工具执行），因此可以脱离
-AgentLoop 单独构造与测试。Provider 侧的信息（name/model/capabilities）通过构造依赖
-注入，避免在请求构造时再依赖运行期 loop 字段。
-"""
-
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -22,16 +14,6 @@ if TYPE_CHECKING:
     from lanscoder.agent.session import AgentSession
 
 
-# ============================================================================
-# PreparedMainRequest — 一次 provider 请求的准备结果
-# ============================================================================
-# 把"构造 provider 请求"和"真正调用 provider"拆开，便于在调用前后做追踪/去重/诊断。
-# - request: 最终交给 provider.complete() 的 ChatRequest
-# - request_id: 用于追踪这一次调用，写入 session 的 provider_projection_consumed 记录
-# - projection_fingerprint: 消息+工具定义的哈希，用于诊断"同一份投影被调用了几次"
-# - tool_result_part_ids: 本次投影消费了哪些 tool_result part，便于后续 compact 判断哪些
-#   tool_result 已经"被模型看过了"，可以安全压缩
-# ============================================================================
 @dataclass(frozen=True, slots=True)
 class PreparedMainRequest:
     request: ChatRequest
@@ -41,12 +23,6 @@ class PreparedMainRequest:
 
 
 class RequestBuilder:
-    """把 SessionView 投影成一次主请求或上下文预算。
-
-    所有方法都是纯变换：给定 view（外加 definitions / tool_choice /
-    runtime_instruction），返回新对象，不改 session、不触发 compact。loop 与 runtime
-    各自持有自己的 RequestBuilder 实例，构造逻辑只此一份。
-    """
 
     def __init__(
         self,
@@ -71,7 +47,6 @@ class RequestBuilder:
         tool_choice="auto",
         runtime_instruction=None,
     ) -> PreparedMainRequest:
-        """一次完整的主请求构造：投影 + 组装 ChatRequest + 追踪指纹。"""
         messages = self._request_messages(
             view=view,
             runtime_instruction=runtime_instruction,

@@ -1,5 +1,3 @@
-"""根据 Python 函数签名生成工具定义。"""
-
 from __future__ import annotations
 
 import inspect
@@ -26,7 +24,6 @@ PYTHON_TYPE_TO_JSON_TYPE: dict[Any, str] = {
 
 
 def function_to_parameters(func: Callable[..., "ToolResult"]) -> dict[str, Any]:
-    """根据函数签名生成工具参数 JSON Schema。"""
 
     signature = inspect.signature(func)
     type_hints = get_type_hints(func)
@@ -58,7 +55,6 @@ def tool_from_function(
     name: str | None = None,
     description: str | None = None,
 ) -> "Tool":
-    """根据函数自动创建模型可调用工具。"""
 
     tool_name = name or func.__name__
     tool_description = description if description is not None else inspect.getdoc(func) or ""
@@ -76,11 +72,6 @@ def tool_from_function(
 
 
 def _annotation_to_json_schema(annotation: Any) -> dict[str, Any]:
-    """把 Python 类型注解转换成 JSON Schema。
-
-    支持泛型与可选类型：`list[str]` 产成 `{"type": "array", "items": {"type": "string"}}`，
-    `X | None` 解包为非 None 成员。无法识别的注解兜底为 string。
-    """
 
     if annotation is inspect.Signature.empty:
         return {"type": "string"}
@@ -95,7 +86,6 @@ def _annotation_to_json_schema(annotation: Any) -> dict[str, Any]:
             return {"type": "array", "items": _annotation_to_json_schema(args[0])}
         return {"type": "array"}
     if origin in (Union, UnionType):
-        # Optional[X]（X | None）取非 None 成员；多类型 union 无法表达，兜底 string。
         non_none = [arg for arg in get_args(annotation) if arg is not type(None)]
         if len(non_none) == 1:
             return _annotation_to_json_schema(non_none[0])

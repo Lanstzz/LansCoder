@@ -1,5 +1,3 @@
-"""Subagent domain: roles, profiles, and the delegate tool's runner contract."""
-
 from lanscoder.subagent.types import (
     SUBAGENT_PROFILES,
     SubagentProfile,

@@ -1,5 +1,3 @@
-"""同步 LansCoder 与异步 MCP SDK 之间的连接协调器。"""
-
 from __future__ import annotations
 
 import asyncio
@@ -19,7 +17,6 @@ McpServerConfig = McpLocalServerConfig | McpRemoteServerConfig
 
 
 class McpManager:
-    """在守护线程中维护 MCP 连接，并提供同步调用入口。"""
 
     def __init__(
         self,
@@ -46,7 +43,6 @@ class McpManager:
         self._pending_futures: set[Future[object]] = set()
 
     def connect_all(self) -> None:
-        """连接所有启用服务器；任何单个失败都只影响自身状态。"""
 
         workers = [threading.Thread(target=self._connect_one, args=(config,), daemon=True) for config in self._configs.values() if config.enabled]
         for config in self._configs.values():
@@ -58,7 +54,6 @@ class McpManager:
             worker.join()
 
     def connect_all_in_background(self) -> None:
-        """后台并行连接，避免 MCP 启动阻塞 TUI 首帧。"""
 
         with self._lock:
             if self._connection_thread is not None and self._connection_thread.is_alive():
@@ -74,7 +69,6 @@ class McpManager:
             self._connection_thread.start()
 
     def reconnect(self, name: str | None = None) -> bool:
-        """在后台重新连接一个服务器；``None`` 表示所有已启用服务器。"""
 
         with self._lock:
             if self._closed:
@@ -96,25 +90,21 @@ class McpManager:
         return True
 
     def statuses(self) -> tuple[McpServerStatus, ...]:
-        """返回所有服务器的安全状态快照。"""
 
         with self._lock:
             return tuple(self._statuses[name] for name in self._configs)
 
     def doctor(self, name: str) -> McpServerStatus | None:
-        """返回单个服务器状态；未知名称返回 ``None``。"""
 
         with self._lock:
             return self._statuses.get(name)
 
     def tools(self) -> tuple[tuple[str, McpToolDescription], ...]:
-        """返回已连接服务器可用的工具目录。"""
 
         with self._lock:
             return tuple((name, tool) for name in self._configs for tool in self._catalogs.get(name, ()))
 
     def call_tool(self, server: str, tool: str, arguments: dict[str, object]) -> object:
-        """同步调用已发现的 MCP 工具。"""
 
         with self._lock:
             config = self._configs.get(server)
@@ -130,7 +120,6 @@ class McpManager:
             raise RuntimeError("MCP 工具调用失败") from error
 
     def close(self) -> None:
-        """断开所有连接并停止后台事件循环，可重复调用。"""
 
         with self._lock:
             if self._closed:
@@ -182,7 +171,6 @@ class McpManager:
         self._set_status(config.name, "failed", error=error)
 
     def _reconnect_one(self, config: McpServerConfig) -> None:
-        """清理旧连接后复用常规的三次连接逻辑。"""
 
         with self._lock:
             transport = self._transports.pop(config.name, None)

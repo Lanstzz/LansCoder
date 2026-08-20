@@ -1,5 +1,3 @@
-"""LansCoder Textual/TUI 入口模块。"""
-
 from lanscoder.app.factory import create_lanscoder_app
 from lanscoder.app.tui import LansCoderApp, LansCoderTuiConfig
 

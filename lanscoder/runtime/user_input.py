@@ -1,10 +1,3 @@
-"""Structured user-input requests shared across permissions, tools, and agent.
-
-`ask_user` and permission confirmation share one request shape. The `kind` field
-separates semantics so models cannot disguise a permission prompt as a normal
-question.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -16,7 +9,6 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class UserInputOption:
-    """One answer choice shown to the user."""
 
     id: str
     label: str
@@ -25,7 +17,6 @@ class UserInputOption:
 
 @dataclass(slots=True)
 class UserInputRequest:
-    """Structured pause that requires a human answer before the turn continues."""
 
     id: str
     kind: Literal["ask_user", "permission_confirmation"]
@@ -40,7 +31,6 @@ def user_input_request_from_tool_result(
     tool_call_id: str,
     tool_name: str,
 ) -> UserInputRequest | None:
-    """Rebuild a user-input request from structured tool-result data."""
 
     data = getattr(result, "data", {}) or {}
     if not data.get("requires_user_input"):

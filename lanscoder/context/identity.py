@@ -1,5 +1,3 @@
-"""会话存储使用的 ID 与稳定指纹工具。"""
-
 from __future__ import annotations
 
 import hashlib
@@ -14,7 +12,6 @@ if TYPE_CHECKING:
 
 
 def _new_id(prefix: str) -> str:
-    """生成带业务前缀的 ID，方便日志和 JSONL 文件人工排查。"""
 
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
@@ -44,11 +41,6 @@ def new_checkpoint_id() -> str:
 
 
 def stable_json_hash(value: Any, *, length: int = 16) -> str:
-    """对 JSON 可序列化对象计算稳定 hash。
-
-    压缩、system prompt cache 和 task hash 都需要跨运行稳定的指纹，所以这里固定
-    `sort_keys=True` 和紧凑分隔符，避免 dict 插入顺序影响结果。
-    """
 
     encoded = json.dumps(
         value,
@@ -61,13 +53,11 @@ def stable_json_hash(value: Any, *, length: int = 16) -> str:
 
 
 def content_fingerprint(text: str, *, length: int = 16) -> str:
-    """计算文本内容指纹，默认短 hash 便于写入 metadata 和日志。"""
 
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:length]
 
 
 def session_view_fingerprint(view: SessionView) -> str:
-    """计算会话消息视图的稳定指纹。"""
 
     return stable_json_hash(
         {
@@ -79,7 +69,6 @@ def session_view_fingerprint(view: SessionView) -> str:
 
 
 def _json_default(value: Any) -> str:
-    """给配置指纹提供稳定兜底，避免常见配置对象让 hash 计算崩掉。"""
 
     if isinstance(value, Enum):
         return str(value.value)

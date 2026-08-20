@@ -1,5 +1,3 @@
-"""工具定义、注册和执行入口。"""
-
 from lanscoder.tools.builtin import create_builtin_registry
 from lanscoder.tools.apply_patch import create_apply_patch_tool
 from lanscoder.tools.ask_user import create_ask_user_tool
@@ -60,14 +58,6 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    """Lazily resolve the task-plan tool factories.
-
-    ``create_delegate_tool`` used to be resolved here too: it depended on
-    ``lanscoder.agent.subagent_engine``, which would have created a package-level
-    import cycle during low-level startup. Now that delegate reads its types
-    from the leaf ``lanscoder.subagent`` package, it is imported eagerly at the
-    top of this module and only the task-plan tools remain deferred.
-    """
 
     task_factories = {
         "create_task_create_tool": ("lanscoder.tools.task_create", "create_task_create_tool"),

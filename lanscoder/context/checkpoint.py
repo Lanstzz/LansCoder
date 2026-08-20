@@ -1,5 +1,3 @@
-"""checkpoint 与简单 resume 投影所需的数据结构。"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,11 +10,6 @@ from lanscoder.context.versions import CHECKPOINT_STRATEGY_VERSION
 
 @dataclass(slots=True)
 class Checkpoint:
-    """已经被摘要折叠的旧历史边界。
-
-    checkpoint 只记录“旧历史摘要”和“recent tail 从哪里开始”。它不负责生成摘要，
-    也不因为 task hash 切换自动移动边界；边界由后续 compaction pipeline 明确写入。
-    """
 
     id: str
     session_id: str
@@ -71,7 +64,6 @@ class Checkpoint:
 
 
 class CheckpointIndex:
-    """从一组 checkpoint 中选择当前可用的 latest checkpoint。"""
 
     def __init__(self, checkpoints: list[Checkpoint]) -> None:
         self.checkpoints = list(checkpoints)

@@ -1,5 +1,3 @@
-"""MCP TOML 配置提取与校验。"""
-
 from __future__ import annotations
 
 import re
@@ -19,7 +17,6 @@ _ENVIRONMENT_VARIABLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def load_mcp_configs(app_config: AppConfig) -> tuple[McpLocalServerConfig | McpRemoteServerConfig, ...]:
-    """读取并校验合并后的 MCP 服务器期望配置。"""
 
     raw_servers = app_config.mcp_config()
     configs: list[McpLocalServerConfig | McpRemoteServerConfig] = []
@@ -29,7 +26,6 @@ def load_mcp_configs(app_config: AppConfig) -> tuple[McpLocalServerConfig | McpR
 
 
 def resolve_environment_placeholders(value: Any, env: Mapping[str, str]) -> Any:
-    """递归替换配置中的环境变量占位符，缺失时不泄露任何变量值。"""
 
     if isinstance(value, str):
         return _ENV_PLACEHOLDER.sub(lambda match: _environment_value(match.group(1), env), value)

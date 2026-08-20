@@ -1,5 +1,3 @@
-"""Command-specific adapters for the reusable TUI picker."""
-
 from __future__ import annotations
 
 from lanscoder.app.picker import TuiPickerItem, TuiPickerState

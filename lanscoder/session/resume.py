@@ -1,9 +1,3 @@
-"""session resume 编排入口。
-
-resume 的底层事实仍来自完整 append-only event log；checkpoint 只影响下一轮
-provider context 投影，不是 resume 存储边界。
-"""
-
 from __future__ import annotations
 
 import json
@@ -30,7 +24,6 @@ from lanscoder.utils.sandbox_access import SandboxAccess
 
 @dataclass(slots=True)
 class ResumeService:
-    """把用户可见 resume 入口封装成窄服务。"""
 
     store: JsonlSessionStore
     project_root: str | Path
@@ -59,7 +52,6 @@ class ResumeService:
 
 
 def validate_session_schema(store: JsonlSessionStore, session_id: str) -> None:
-    """Reject event logs that cannot be replayed by the current runtime."""
 
     if not is_safe_session_id(session_id):
         raise SessionInvalidIdError(f"invalid session_id: {session_id!r}")

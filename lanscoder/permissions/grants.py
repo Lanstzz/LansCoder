@@ -1,9 +1,3 @@
-"""内存版权限授权匹配。
-
-第一版只做可测试的匹配逻辑。持久化 `.lanscoder/permissions.json` 会在后续阶段
-接入同一组 `PermissionGrant` 类型。
-"""
-
 from __future__ import annotations
 
 import json
@@ -26,11 +20,6 @@ _SHELL_CONTROL_PATTERN = re.compile(r"(&&|\|\||\$\(|[;&|<>`\r\n])")
 
 
 class PermissionGrantStore:
-    """保存并匹配长期授权。
-
-    deny grant 永远优先于 allow grant，避免后续新增 allow 规则意外放开更小范围的
-    明确拒绝。
-    """
 
     def __init__(self, grants: list[PermissionGrant] | None = None) -> None:
         self._grants = list(grants or [])
@@ -67,11 +56,6 @@ class PermissionGrantStore:
 
 
 class FilePermissionGrantStore(PermissionGrantStore):
-    """把 allow-always grant 持久化到项目数据目录。
-
-    第一版使用一个小 JSON 文件，保持容易阅读和手工复盘。后续如果迁移到 SQLite，
-    `PermissionGrantStore` 这层匹配接口可以继续保持不变。
-    """
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)

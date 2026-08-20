@@ -1,9 +1,3 @@
-"""分享文本脱敏。
-
-这不是完整 DLP 系统，只提供第一版保守规则，避免默认 transcript/share 直接暴露
-常见 secret 和本地绝对路径。
-"""
-
 from __future__ import annotations
 
 import re
@@ -27,7 +21,6 @@ _POSIX_PATH_RE = re.compile(r"(?<![\w])/(?:[A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+")
 
 
 def redact_text(text: str, options: RedactionOptions | None = None) -> str:
-    """按选项脱敏普通文本。"""
 
     resolved = options or RedactionOptions()
     result = text

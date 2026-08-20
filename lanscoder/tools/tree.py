@@ -1,5 +1,3 @@
-"""`tree` 工具。"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,7 +10,6 @@ from lanscoder.utils.sandbox_access import SandboxAccess
 
 
 def create_tree_tool(root: str | Path, *, access: SandboxAccess | None = None) -> Tool:
-    """创建目录树查看工具。"""
 
     sandbox = PathSandbox(root, access=access)
 
@@ -47,7 +44,6 @@ def _walk_tree(
     max_depth: int,
     max_entries: int,
 ) -> bool:
-    """递归构造目录树文本。"""
 
     if depth >= max_depth:
         return False

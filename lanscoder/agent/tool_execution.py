@@ -1,9 +1,3 @@
-"""Tool execution helpers for AgentLoop.
-
-Owns parallel-batch policy, interactive tool sequencing, permission pending
-storage, and tool-event emission shape so AgentLoop can stay orchestration-only.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -68,11 +62,6 @@ BYPASS_PARALLEL_TOOL_NAMES = PARALLEL_READONLY_TOOL_NAMES | frozenset(
 
 @dataclass(frozen=True, slots=True)
 class ToolExecutionEvent:
-    """Runtime-visible tool activity event.
-
-    These events are intentionally separate from provider stream events: provider
-    streams describe model output, while this describes local tool execution.
-    """
 
     kind: Literal[
         "prewrite_review",
@@ -95,7 +84,6 @@ class ToolExecutionState:
 
 
 class ToolExecutor:
-    """Execute tool batches for one AgentSession."""
 
     def __init__(
         self,
@@ -151,18 +139,8 @@ class ToolExecutor:
         )
 
     def execute_interactive(self, tool_calls: list[ToolCall]) -> ToolExecutionState:
-        """执行一个 response 里的全部 tool_calls。
-
-        默认顺序执行。只读探查工具在当前权限允许时可以同批并行，减少等待。
-        一旦某个工具需要用户输入（权限 ASK 或 ask_user），会暂停并把同批次剩余
-        工具存进 pending 状态；用户回答后由 AgentLoop 续跑剩余工具（见 loop.py
-        的 deferred batch continuation），需要输入则链式再暂停。
-        """
 
         state = ToolExecutionState()
-        # 先一次性把控制面字段（run_in_background/background_label）从每个 tool_call 里剥掉，
-        # executor 永远看不到它们。没有控制字段时归一化结果与原 tool_call 完全等价，普通
-        # 路径行为不变；后台请求信息按 tool_call_id 单独记录，供本轮调度使用。
         tool_calls, self._background_request = self._normalize_background_controls(tool_calls)
         index = 0
         while index < len(tool_calls):
@@ -209,8 +187,6 @@ class ToolExecutor:
                     prewrite_review=permission.prewrite_review,
                 )
 
-            # 权限已放行（ALLOW 或无预检）。此时才允许把请求转入后台，确保绝不后台执行
-            # 需要用户确认的工具。
             if tool_call.id in self._background_request:
                 label, task_id = self._background_request[tool_call.id]
                 result = self._dispatch_background(
@@ -243,7 +219,6 @@ class ToolExecutor:
         return state
 
     async def execute_interactive_async(self, tool_calls: list[ToolCall]) -> ToolExecutionState:
-        """Run the shared synchronous state machine without blocking the stream loop."""
 
         return await anyio.to_thread.run_sync(self.execute_interactive, tool_calls)
 
@@ -251,12 +226,6 @@ class ToolExecutor:
         self,
         tool_calls: list[ToolCall],
     ) -> tuple[list[ToolCall], dict[str, tuple[str | None, str | None]]]:
-        """Strip control-plane fields once and record which calls asked for background.
-
-        Returns cleaned tool calls (executor-visible args only) plus a map from
-        tool_call_id to the requested background label.  Calls without control
-        fields are returned unchanged, so the ordinary path is unaffected.
-        """
 
         cleaned: list[ToolCall] = []
         requested: dict[str, tuple[str | None, str | None]] = {}
@@ -277,13 +246,6 @@ class ToolExecutor:
         label: str | None,
         task_id: str | None,
     ) -> ToolResult:
-        """Enqueue a permission-cleared tool call as a background job.
-
-        Returns the immediate placeholder result that closes the original
-        ``tool_call_id``.  On any rejection (disabled runtime, ineligible tool,
-        or capacity) it returns a normal error result so the model can react and
-        the provider history stays valid.
-        """
 
         if self._background_manager is None:
             return make_error_result(
@@ -313,11 +275,7 @@ class ToolExecutor:
                 "后台 coder 需要 git worktree 隔离，但当前项目不是 git 仓库；请在 git 仓库内使用，或改用前台 coder。",
                 background_rejected="worktree_unavailable",
             )
-        # 冻结一份可信 tool_call，后台线程执行时不再受外部影响。已通过权限预检，因此
-        # 后台执行走“确认后执行”路径，不会二次触发 ASK。
         trusted_arguments = deepcopy(tool_call.arguments)
-        # 可变更文件的后台角色（coder）必须在隔离 git worktree 内执行，绝不触碰父工作区。
-        # 这里注入内部控制字段 isolate_worktree，delegate executor 会据此走隔离路径。
         if tool_call.name == "delegate" and self._delegate_call_requires_worktree(tool_call):
             if isinstance(trusted_arguments, dict):
                 trusted_arguments = {**trusted_arguments, "isolate_worktree": True}
@@ -379,7 +337,6 @@ class ToolExecutor:
         return plan.revision
 
     def _mark_background_task_completed(self, task_id: str, *, observed_revision: int | None) -> str:
-        """Advance the still-active task without overwriting newer agent decisions."""
 
         service = self._task_plan_service()
         for _ in range(3):
@@ -435,7 +392,6 @@ class ToolExecutor:
         tool_call: ToolCall,
         deferred_tool_calls: list[ToolCall],
     ) -> PreparedPermission:
-        """Resolve preflight outcomes before any local tool side effect."""
 
         return self._permission_coordinator.prepare(tool_call, deferred_tool_calls)
 
@@ -446,12 +402,6 @@ class ToolExecutor:
         *,
         deferred_tool_calls: list[ToolCall] | None = None,
     ) -> UserInputRequest | None:
-        """记录一个已执行工具的结果。
-
-        若结果要求用户输入（ask_user 等），**不**立即写 tool_result：把同批次剩余
-        工具存进 pending-ask_user，回答后才由 resume 合成答案 result 并继续执行剩余。
-        剩余工具不再被写死成 skipped，而是等待回答后继续——这是"延迟批次续跑"的基础。
-        """
 
         pending_input = user_input_request_from_tool_result(
             result,
@@ -480,7 +430,6 @@ class ToolExecutor:
         if self._permission_coordinator.requires_bypass_review(tool_call):
             return False
         if tool_call.id in self._background_request:
-            # 请求后台化的调用不能被并行只读批次吞掉；它要走单独的后台调度分支。
             return False
         if tool_call.name not in self.parallel_tool_names_for_current_mode():
             return False

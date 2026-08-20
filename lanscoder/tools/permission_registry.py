@@ -1,5 +1,3 @@
-"""权限感知工具注册表 wrapper。"""
-
 from __future__ import annotations
 
 import json
@@ -16,11 +14,6 @@ from lanscoder.tools.types import Tool, ToolPermissionSpec, ToolResult
 
 
 class PermissionAwareToolRegistry:
-    """在工具执行前统一做权限预检。
-
-    这一层只包住 `ToolRegistry`，不改变模型可见工具 schema。老工具如果没有
-    `ToolPermissionSpec`，会按原逻辑直接执行。
-    """
 
     def __init__(self, registry: ToolRegistry, permission_manager: PermissionManager) -> None:
         self.registry = registry
@@ -39,7 +32,6 @@ class PermissionAwareToolRegistry:
         return self.registry.tools()
 
     def get(self, name: str) -> Tool | None:
-        """按名称返回工具对象。"""
 
         return self.registry.get(name)
 
@@ -65,12 +57,6 @@ class PermissionAwareToolRegistry:
         name: str,
         arguments: dict[str, Any] | str | None = None,
     ) -> tuple[Tool, dict[str, Any], PermissionRequest, PermissionDecision] | None:
-        """只做权限预检，不执行工具。
-
-        agent loop 需要在 `ASK` 时先暂停，而不是把“权限确认”伪装成 provider
-        tool_result 写入历史；因此这里把预检能力暴露出来，方便上层保存 pending
-        tool_call，等用户选择后再写入唯一的最终 tool_result。
-        """
 
         tool = self.registry.get(name)
         if tool is None:
@@ -105,13 +91,11 @@ class PermissionAwareToolRegistry:
         name: str,
         arguments: dict[str, Any] | str | None = None,
     ) -> ToolResult:
-        """执行已确认的 pending tool，不再次触发 ASK。"""
 
         return self.registry.execute(name, arguments)
 
 
 def permission_request_for_tool(tool: Tool, arguments: dict[str, Any]) -> PermissionRequest:
-    """根据工具声明和调用参数构造权限请求。"""
 
     spec = tool.permission
     if spec is None:

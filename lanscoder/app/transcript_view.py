@@ -1,5 +1,3 @@
-"""Transcript entry classification and CSS helpers."""
-
 from __future__ import annotations
 
 from lanscoder.app.tui_state import TuiEntryKind, TuiTranscriptEntry

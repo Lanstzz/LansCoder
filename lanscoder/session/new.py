@@ -1,5 +1,3 @@
-"""Create fresh interactive sessions."""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -17,7 +15,6 @@ from lanscoder.utils.sandbox_access import SandboxAccess
 
 @dataclass(slots=True)
 class NewSessionService:
-    """Create a new session and return its runtime object."""
 
     store: JsonlSessionStore
     project_root: str | Path

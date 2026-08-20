@@ -1,5 +1,3 @@
-"""Local discovery for MCP tools that are not exposed in the initial schema set."""
-
 from __future__ import annotations
 
 import re
@@ -15,7 +13,6 @@ _TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
 
 @dataclass(frozen=True, slots=True)
 class McpSearchEntry:
-    """A provider-visible MCP definition eligible for local search."""
 
     server: str
     tool: str
@@ -26,7 +23,6 @@ def search_mcp_tools(
     entries: tuple[McpSearchEntry, ...],
     query: str,
 ) -> tuple[McpSearchEntry, ...]:
-    """Return the highest-scoring local MCP matches in deterministic order."""
 
     normalized_query = _normalize(query)
     query_tokens = set(_tokens(query))
@@ -40,7 +36,6 @@ def search_mcp_tools(
 
 
 def create_mcp_tool_search(entries: tuple[McpSearchEntry, ...]) -> Tool:
-    """Create a read-only tool that searches one MCP catalog snapshot."""
 
     def execute(*, query: str) -> ToolResult:
         if not isinstance(query, str) or not query.strip():

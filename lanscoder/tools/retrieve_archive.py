@@ -1,10 +1,3 @@
-"""Session-scoped retrieval for archived tool-result originals.
-
-The compaction pipeline stores an immutable original alongside a compact
-placeholder.  This tool is deliberately created per session so an agent can
-only retrieve archives belonging to its current session.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,7 +13,6 @@ _OMITTED = "[... omitted ...]"
 
 
 def _bounded_max_chars(value: int) -> int | None:
-    """Normalize the public character budget without allowing unbounded output."""
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _MAX_CHARS_LIMIT:
         return None
     return value
@@ -33,7 +25,6 @@ def _clip(text: str, max_chars: int) -> tuple[str, bool]:
 
 
 def _query_projection(raw: str, query: str, max_chars: int) -> tuple[str, int, bool]:
-    """Return matching numbered line windows, joined within the total budget."""
     lines = raw.splitlines()
     needle = query.casefold()
     matching_indexes = [index for index, line in enumerate(lines) if needle in line.casefold()]
@@ -59,21 +50,12 @@ def _query_projection(raw: str, query: str, max_chars: int) -> tuple[str, int, b
     projection = "\n".join(blocks)
     if len(projection) <= max_chars:
         return projection, len(matching_indexes), False
-    # A blind prefix makes it unclear whether further matches exist.  Reserve a
-    # stable omission marker whenever the caller's budget can accommodate it.
     if max_chars >= len(_OMITTED):
         return projection[: max_chars - len(_OMITTED)] + _OMITTED, len(matching_indexes), True
     return projection[:max_chars], len(matching_indexes), True
 
 
 def _diagnostic(record, raw: str, max_chars: int) -> tuple[str, bool]:
-    """Build a bounded browse hint with metadata and both raw-content ends.
-
-    A retrieval with no query must be useful without accidentally becoming a
-    second, unbounded archive-read API.  Very small limits retain as much of
-    the instruction as fits; larger limits include stable metadata and evenly
-    allocated head/tail excerpts.
-    """
     instruction = "Use a query or full=true to retrieve the original content."
     if max_chars < len(instruction):
         return _clip(instruction, max_chars)
@@ -92,8 +74,6 @@ def _diagnostic(record, raw: str, max_chars: int) -> tuple[str, bool]:
     head_chars = excerpt_budget // 2
     tail_chars = excerpt_budget - head_chars
     if len(raw) <= excerpt_budget:
-        # Keep the same labels so callers do not have to infer which form was
-        # returned, even when the whole original happens to fit the excerpt.
         head = raw[:head_chars]
         tail = raw[head_chars:]
         truncated = False
@@ -107,7 +87,6 @@ def _diagnostic(record, raw: str, max_chars: int) -> tuple[str, bool]:
 
 
 def _error(message: str) -> ToolResult:
-    """Return a safe, user-actionable error without leaking local paths."""
     return make_error_result("retrieve_archive", message)
 
 
@@ -117,12 +96,6 @@ def create_retrieve_archive_tool(
     session_id: str,
     current_turn: Callable[[], int],
 ) -> Tool:
-    """Create the session-bound ``retrieve_archive`` tool.
-
-    ``current_turn`` is intentionally a callback: the session writer advances
-    after tool construction, and each successful retrieval must protect the
-    result until the turn in which it was actually retrieved.
-    """
 
     def retrieve_archive(
         *,

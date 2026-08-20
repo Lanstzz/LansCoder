@@ -1,5 +1,3 @@
-"""权限统一决策入口。"""
-
 from __future__ import annotations
 
 from dataclasses import replace
@@ -24,11 +22,6 @@ from lanscoder.permissions.types import (
 
 
 class PermissionManager:
-    """组合长期授权和默认策略。
-
-    后续阶段的用户确认、pending tool execution 和持久化都会接在这个入口后面；
-    第一阶段先保证所有权限请求都能通过同一个纯函数式预检路径。
-    """
 
     def __init__(
         self,
@@ -41,10 +34,6 @@ class PermissionManager:
         self.policy = policy
         self.grants = grants or PermissionGrantStore()
         self.mode = mode
-        # Autonomous contexts (background subagents) have no interactive user to
-        # answer a confirmation prompt, so an ASK would just hang.  When true, any
-        # decision that would pause for confirmation is downgraded to a DENY so the
-        # caller receives a clean denial and can try a safer approach.
         self.autonomous = autonomous
 
     def preflight(self, request: PermissionRequest) -> PermissionDecision:
@@ -61,7 +50,6 @@ class PermissionManager:
         return decision
 
     def build_confirmation(self, request: PermissionRequest) -> UserInputRequest:
-        """把 `ASK` 权限请求转换成 UI 可展示的结构化用户输入请求。"""
 
         request = self.normalize_request(request)
         scope = default_scope_for_request(request, project_root=self.policy.project_root)
@@ -98,7 +86,6 @@ class PermissionManager:
         )
 
     def build_prewrite_review_confirmation(self, request: PermissionRequest) -> UserInputRequest:
-        """Build a one-operation review gate without changing saved permission grants."""
 
         request = self.normalize_request(request)
         return UserInputRequest(
@@ -120,7 +107,6 @@ class PermissionManager:
         )
 
     def resolve_confirmation(self, request: PermissionRequest, choice: str) -> PermissionDecision:
-        """解析用户选择，并在 allow always 时写入内存 grant。"""
 
         request = self.normalize_request(request)
         normalized, feedback = _normalize_choice(choice)
@@ -181,11 +167,6 @@ class PermissionManager:
         )
 
     def _confirmation_guard(self, request: PermissionRequest) -> PermissionDecision | None:
-        """确认只能解析当前仍需要询问的请求。
-
-        这里重新运行一次预检，防止调用方误把硬拒绝请求送进确认流程后创建
-        allow always grant。后续接 pending registry 后，还会再用 pending id 绑定。
-        """
 
         grant_decision = self.grants.matching_decision(request)
         if grant_decision is not None:
@@ -197,7 +178,6 @@ class PermissionManager:
         return None
 
     def normalize_request(self, request: PermissionRequest) -> PermissionRequest:
-        """让 manager 入口中的相对路径解析和默认策略保持同一基准。"""
 
         if request.cwd is not None:
             if request.cwd.is_absolute():
@@ -219,7 +199,6 @@ class _PermissionScope:
 
 
 def default_scope_for_request(request: PermissionRequest, *, project_root: Path | None = None) -> _PermissionScope:
-    """为 allow always 生成第一版保守 scope。"""
 
     if request.action in {
         PermissionAction.READ_PATH,
@@ -263,13 +242,11 @@ def _command_prefix(command: str) -> str:
 
 
 def _shell_command_scope(command: str) -> str:
-    """第一版 shell allow-always 用完整命令作 prefix，避免放大到裸解释器。"""
 
     return command.strip()
 
 
 def _git_command_scope(command: str) -> str:
-    """git_operation 的 target 按 git 子命令建模，例如 `status --short` -> `status`。"""
 
     return _command_prefix(command)
 

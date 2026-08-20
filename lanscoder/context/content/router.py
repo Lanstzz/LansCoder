@@ -1,10 +1,3 @@
-"""L2 内容路由压缩框架。
-
-这一层只负责“识别内容类型 -> 分发到对应压缩器 -> 验证压缩收益 -> 统一写 metadata”。
-具体的 search、diff、build、json、code、html 算法会按第 14 步逐个补齐，避免把
-路由边界和具体压缩策略耦合在一起。
-"""
-
 from __future__ import annotations
 
 import json
@@ -53,7 +46,7 @@ class RouteCompactResult:
 
 class RouteCompressor(Protocol):
     def compact(self, part: MessagePart, context: RouteContext) -> RouteCompactResult | None:
-        """返回压缩结果；不适合压缩时返回 None。"""
+        pass
 
 
 @dataclass(slots=True)

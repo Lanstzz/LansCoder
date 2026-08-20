@@ -1,5 +1,3 @@
-"""Execution sandbox for local subprocess tools."""
-
 from __future__ import annotations
 
 import os
@@ -14,11 +12,6 @@ _SENSITIVE_ENV_KEYWORDS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "COOKIE")
 
 
 class ExecutionSandbox:
-    """Small subprocess boundary layered above PathSandbox.
-
-    This is intentionally not a policy engine. PermissionManager decides whether
-    a command may run; this class constrains how approved subprocesses run.
-    """
 
     def __init__(self, root: str | Path, *, access: SandboxAccess | None = None) -> None:
         self.path_sandbox = PathSandbox(root, access=access)

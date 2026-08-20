@@ -1,5 +1,3 @@
-"""provider 构造入口。"""
-
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -15,14 +13,10 @@ from lanscoder.providers.types import ProviderCapabilities
 
 
 class ProviderConfigError(ValueError):
-    """provider 配置缺失或不合法时抛出的异常。"""
+    pass
 
 
 def create_provider_for_model(profile: ModelProfile) -> ChatProvider:
-    """根据完整的模型 Profile 创建 provider。
-
-    Profile 中的模型 ID、provider ID、endpoint 和能力覆盖属于当前模型选择。
-    """
 
     provider_type = profile.provider.type
     if provider_type in {"openai-compatible", "custom"}:

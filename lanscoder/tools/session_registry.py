@@ -1,5 +1,3 @@
-"""会话级工具注册表工厂。"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -26,7 +24,6 @@ from lanscoder.tools.types import Tool
 
 
 class ToolRegistryLike(Protocol):
-    """AgentSession 需要的工具注册表最小接口。"""
 
     def register(self, tool: Tool) -> None: ...
 
@@ -54,10 +51,6 @@ def create_session_tool_registry(
     get_skill_catalog: Callable[[], SkillCatalog] | None = None,
     memory_manager: MemoryManager | None = None,
 ) -> ToolRegistryLike:
-    """创建单个会话专用的工具注册表。
-
-    这个工厂集中处理会话级注入，后续权限、确认策略也可以在这里包一层。
-    """
 
     supplied_tools = tools or []
     reserved_names = {

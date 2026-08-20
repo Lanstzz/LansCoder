@@ -1,5 +1,3 @@
-"""Fork existing sessions into new editable sessions."""
-
 from __future__ import annotations
 
 import shutil
@@ -22,7 +20,6 @@ from lanscoder.utils.sandbox_access import SandboxAccess
 
 @dataclass(slots=True)
 class ForkSessionService:
-    """Copy a session event log and resume the copy."""
 
     store: JsonlSessionStore
     project_root: str | Path

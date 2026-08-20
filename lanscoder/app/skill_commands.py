@@ -1,5 +1,3 @@
-"""Skill-related slash commands."""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -11,7 +9,6 @@ from lanscoder.skills.models import SkillCatalog, SkillDefinition
 
 @dataclass(slots=True)
 class SkillCommandHandler:
-    """Handle `/skills`, `/skill <name>`, `/reload-skills`, and exact `/<skill-name> <instruction>`."""
 
     catalog_provider: Callable[[], SkillCatalog]
     skill_refresher: Callable[[], SkillCatalog] | None = None

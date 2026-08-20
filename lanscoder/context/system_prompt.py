@@ -1,10 +1,3 @@
-"""稳定系统前缀构造与缓存。
-
-系统提示词属于请求配置，不属于普通会话事实。这里把会影响系统前缀的稳定输入集中
-计算 fingerprint，后续 agent loop 可以据此复用上一轮前缀，避免普通消息追加导致
-系统提示词缓存失效。
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -26,11 +19,6 @@ MEMORY_PROTOCOL = (
 
 @dataclass(frozen=True, slots=True)
 class SystemPromptInputs:
-    """生成 stable system prefix 所需的稳定输入。
-
-    这里刻意不包含最近消息、token 统计、checkpoint、task hash 候选等动态状态。
-    这些内容属于 conversation projection 或 runtime state，不应该污染系统前缀缓存。
-    """
 
     base_rules: str
     agents_md: str
@@ -52,7 +40,6 @@ class PromptPrefixCacheEntry:
 
 
 class SystemPromptBuilder:
-    """构造可复用的 system prompt 前缀。"""
 
     def fingerprint(self, inputs: SystemPromptInputs) -> str:
         value = {
@@ -94,7 +81,6 @@ class SystemPromptBuilder:
 
 
 class PromptPrefixCache:
-    """第一版只缓存当前会话最近一次 stable prefix。"""
 
     def __init__(self) -> None:
         self._entry: PromptPrefixCacheEntry | None = None

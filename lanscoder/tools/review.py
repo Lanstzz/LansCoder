@@ -1,5 +1,3 @@
-"""Trusted pre-write previews for direct local file mutation tools."""
-
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field

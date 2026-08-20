@@ -1,5 +1,3 @@
-"""`git_diff` 工具。"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,7 +12,6 @@ from lanscoder.utils.text import truncate
 
 
 def create_git_diff_tool(root: str | Path, *, access: SandboxAccess | None = None) -> Tool:
-    """创建查看 git diff 的工具。"""
 
     sandbox = PathSandbox(root, access=access)
 

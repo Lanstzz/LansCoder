@@ -1,5 +1,3 @@
-"""Skill system data models."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -50,7 +48,6 @@ class SkillCatalog:
     index_content: str = ""
 
     def resolved(self) -> "SkillCatalog":
-        """Return the unique effective catalog used by runtime consumers."""
 
         from lanscoder.skills.catalog import resolve_skill_catalog
 

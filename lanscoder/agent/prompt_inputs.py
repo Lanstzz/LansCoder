@@ -1,10 +1,3 @@
-"""Agent system prompt 输入装配。
-
-这一层把项目规则、provider 静态能力、权限占位策略和工具 schema 合并成
-`SystemPromptInputs`。它不生成 prompt 文本，也不读取会话历史；这些职责分别属于
-`SystemPromptBuilder` 和 `ContextBuilder`。
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -26,12 +19,6 @@ DEFAULT_PERMISSION_POLICY: dict[str, Any] = {
 
 
 def read_agents_md(project_root: str | Path) -> str:
-    """读取项目根目录的 AGENTS.md。
-
-    第一版只读取项目根目录这一份规则，避免在 context 装配阶段引入目录继承、覆盖和
-    多文件合并语义。后续如果支持子目录 AGENTS.md，应在这里扩展，而不是散落在 agent
-    loop 或 Textual UI 中。
-    """
 
     agents_path = Path(project_root) / "AGENTS.md"
     if not agents_path.exists():
@@ -40,11 +27,6 @@ def read_agents_md(project_root: str | Path) -> str:
 
 
 def provider_capabilities_for(provider_name: str, *, provider_model: str = "") -> dict[str, Any]:
-    """返回第一版 provider 能力描述。
-
-    这里使用静态表是刻意的：真实 provider 还没有 capability discovery 协议，先把影响
-    system prompt fingerprint 的 provider 事实集中在一个窄入口，后续再替换成配置或探测。
-    """
 
     normalized = provider_name.lower()
     base: dict[str, Any] = {
@@ -75,7 +57,6 @@ def provider_capabilities_from_instance(
     provider_name: str,
     provider_model: str = "",
 ) -> dict[str, Any]:
-    """把 provider 实例能力转换成 system prompt 使用的稳定描述。"""
 
     base = provider_capabilities_for(provider_name, provider_model=provider_model)
     if capabilities is None:
@@ -109,7 +90,6 @@ def build_system_prompt_inputs(
     mode: str = "default",
     memory_index: str = "",
 ) -> SystemPromptInputs:
-    """组装 `SystemPromptInputs`，保证调用侧不用手写分散字段。"""
 
     capabilities = provider_capabilities_from_instance(
         provider_capabilities,

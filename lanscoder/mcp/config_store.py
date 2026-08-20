@@ -1,5 +1,3 @@
-"""MCP 配置文件的保真读写服务。"""
-
 from __future__ import annotations
 
 import re
@@ -15,11 +13,10 @@ _ENVIRONMENT_VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class McpConfigStoreError(ValueError):
-    """表示无法安全写入 MCP 配置。"""
+    pass
 
 
 class McpConfigStore:
-    """只管理 TOML 的 ``[mcp.<name>]`` 表，并保留其他配置内容。"""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -33,7 +30,6 @@ class McpConfigStore:
         enabled: bool = True,
         timeout_ms: int = 5_000,
     ) -> None:
-        """新增或完整替换一个 local stdio MCP server。"""
 
         self._validate_name(name)
         if not command or any(not isinstance(item, str) or not item for item in command):
@@ -57,7 +53,6 @@ class McpConfigStore:
         enabled: bool = True,
         timeout_ms: int = 5_000,
     ) -> None:
-        """新增或完整替换一个 remote Streamable HTTP MCP server。"""
 
         self._validate_name(name)
         parsed = urlparse(url)
@@ -77,7 +72,6 @@ class McpConfigStore:
         self._replace_server(name, table)
 
     def remove(self, name: str) -> bool:
-        """删除一个 server；不存在时返回 ``False``。"""
 
         self._validate_name(name)
         document = self._read_document()
@@ -89,7 +83,6 @@ class McpConfigStore:
         return True
 
     def list_servers(self) -> tuple[dict[str, object], ...]:
-        """返回可安全打印的配置摘要，永不返回 headers 或 env。"""
 
         document = self._read_document()
         mcp = document.get("mcp")

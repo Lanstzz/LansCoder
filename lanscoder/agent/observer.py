@@ -1,12 +1,3 @@
-"""Observer owning turn-level progress / stream / tool event dispatch.
-
-Task 4 converges the loop's three event callbacks (``progress_callback``,
-``tool_event_handler``, ``stream_event_handler``) into one collaborator so
-AgentLoop stays orchestration-only and runtime rebinds handlers through one
-seam.  Task 5 additionally moves foreground progress and cancellation token
-ownership here.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -20,18 +11,11 @@ if TYPE_CHECKING:
 
 
 class ToolEventSink(Protocol):
-    """Narrow sink consumed by ToolExecutor for local tool activity events."""
 
     def on_tool_event(self, event: ToolExecutionEvent) -> None: ...
 
 
 class TurnObserver:
-    """Owns progress / stream / tool event dispatch for one AgentLoop.
-
-    Usage counters are mirrored from ``on_progress`` instead of read back from
-    the loop, so the observer can report a summary without a constructor
-    back-reference to AgentLoop (avoids the ToolExecutor<->loop ordering cycle).
-    """
 
     def __init__(
         self,
@@ -54,12 +38,6 @@ class TurnObserver:
         pass
 
     def on_progress(self, provider_calls: int, total_tokens: int) -> None:
-        """Mirror the loop's cumulative usage, then forward if a callback is set.
-
-        Mirroring keeps ``usage_summary()`` available on paths that never set a
-        progress callback (e.g. a foreground subagent) without reading back into
-        the loop.
-        """
         self._provider_calls = provider_calls
         self._total_tokens = total_tokens
         if self._progress_callback is not None:

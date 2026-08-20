@@ -1,9 +1,3 @@
-"""LansCoder 内部会话事实模型。
-
-这些模型表示长期会话事实，不等同于某个 provider 的请求格式。provider 请求由
-`ContextBuilder` 在每轮调用前投影出来。
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -28,7 +22,6 @@ PartKind = Literal[
 
 
 def utc_now_iso() -> str:
-    """返回稳定的 UTC ISO 时间字符串，统一 JSONL 里的时间格式。"""
 
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -93,7 +86,6 @@ class AgentMessage:
 
 
 def latest_user_message_id(messages: list[AgentMessage]) -> str | None:
-    """Return the latest user message ID, if the history contains one."""
 
     for message in reversed(messages):
         if message.role == "user":
@@ -103,7 +95,6 @@ def latest_user_message_id(messages: list[AgentMessage]) -> str | None:
 
 @dataclass(slots=True)
 class SessionView:
-    """由事件日志重放得到的当前会话视图。"""
 
     session_id: str
     messages: list[AgentMessage] = field(default_factory=list)

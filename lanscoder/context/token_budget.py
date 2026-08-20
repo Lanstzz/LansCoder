@@ -1,5 +1,3 @@
-"""上下文 token 预算的集中估算。"""
-
 from __future__ import annotations
 
 import json
@@ -27,10 +25,6 @@ class ContextBudget:
 
 
 def estimate_text_tokens(text: str) -> int:
-    """第一版使用字符数近似 token。
-
-    这里有意不绑定具体 tokenizer，避免 context 层过早依赖 provider。
-    """
 
     if not text:
         return 0

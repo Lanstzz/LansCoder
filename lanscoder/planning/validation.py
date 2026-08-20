@@ -1,5 +1,3 @@
-"""Structural and execution-state validation for canonical task plans."""
-
 from __future__ import annotations
 
 from lanscoder.planning.models import TaskPlan, TaskPlanError

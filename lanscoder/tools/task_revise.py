@@ -1,5 +1,3 @@
-"""Dedicated task-content revision tool."""
-
 from __future__ import annotations
 
 from lanscoder.planning.service import TaskPlanService

@@ -1,5 +1,3 @@
-"""Load one registered skill as an ordinary session tool result."""
-
 from __future__ import annotations
 
 from collections.abc import Callable

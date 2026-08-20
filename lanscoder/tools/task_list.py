@@ -1,5 +1,3 @@
-"""Read the authoritative task plan and derived projection."""
-
 from __future__ import annotations
 
 from lanscoder.planning.projection import project_plan

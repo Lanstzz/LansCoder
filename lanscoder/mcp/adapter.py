@@ -1,5 +1,3 @@
-"""把发现到的 MCP 工具转换为 LansCoder 同步工具。"""
-
 from __future__ import annotations
 
 import json
@@ -16,7 +14,6 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class McpToolCaller(Protocol):
-    """适配器所需的同步 MCP 调用入口。"""
 
     def call_tool(self, server: str, tool: str, arguments: dict[str, object]) -> object: ...
 
@@ -28,7 +25,6 @@ def adapt_mcp_tool(
     *,
     existing_names: set[str] | None = None,
 ) -> Tool:
-    """把一个发现到的 MCP tool 转换成经过既有权限链路执行的 ``Tool``。"""
 
     tool_name = discovered_tool.name
     if not _SAFE_NAME.fullmatch(server) or not _SAFE_NAME.fullmatch(tool_name):
@@ -70,7 +66,6 @@ def adapt_mcp_tool(
 
 
 def _tool_parameters(input_schema: Mapping[str, object]) -> dict[str, object]:
-    """验证 MCP 的输入 schema，并复制为 provider 需要的对象 schema。"""
 
     schema = dict(input_schema)
     if not schema:
@@ -87,7 +82,6 @@ def _tool_parameters(input_schema: Mapping[str, object]) -> dict[str, object]:
 
 
 def _tool_result(name: str, server: str, tool: str, result: object) -> ToolResult:
-    """将 MCP 结果转换为模型可读文本，并保留结构化结果。"""
 
     content = _field(result, "content", ())
     structured_content = _field(result, "structuredContent", None)

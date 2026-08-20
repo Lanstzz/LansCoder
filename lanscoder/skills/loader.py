@@ -1,5 +1,3 @@
-"""Skill file loading."""
-
 from __future__ import annotations
 
 import re
@@ -9,7 +7,7 @@ from lanscoder.skills.models import LoadedSkill, SkillDefinition
 
 
 class SkillLoadError(ValueError):
-    """A skill could not be loaded safely."""
+    pass
 
 
 class SkillLoader:

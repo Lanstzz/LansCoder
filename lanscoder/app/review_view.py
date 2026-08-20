@@ -1,5 +1,3 @@
-"""Rich rendering and input parsing for trusted pre-write reviews."""
-
 from __future__ import annotations
 
 from typing import Any
@@ -16,7 +14,6 @@ def render_prewrite_review(
     max_diff_lines_per_file: int = DEFAULT_MAX_DIFF_LINES_PER_FILE,
     expand_first: bool = True,
 ) -> Text:
-    """Render one bounded review card with red/green unified diff lines."""
 
     files = [item for item in payload.get("files", []) if isinstance(item, dict)]
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
@@ -60,7 +57,6 @@ def render_prewrite_review(
 
 
 def review_command_from_text(text: str, payload: dict[str, object]) -> tuple[str, str | None] | None:
-    """Parse local UI-only expansion commands for the current review card."""
 
     normalized = text.strip()
     if not normalized.lower().startswith("review"):

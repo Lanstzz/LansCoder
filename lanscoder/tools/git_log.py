@@ -1,8 +1,3 @@
-"""`git_log` 工具。
-
-查看 git 提交历史，补齐 git 工具链。
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,7 +11,6 @@ from lanscoder.utils.sandbox_access import SandboxAccess
 
 
 def create_git_log_tool(root: str | Path, *, access: SandboxAccess | None = None) -> Tool:
-    """创建查看 git 提交历史的工具。"""
 
     sandbox = PathSandbox(root, access=access)
 

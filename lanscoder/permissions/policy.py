@@ -1,9 +1,3 @@
-"""LansCoder 默认权限策略。
-
-默认策略只处理“没有命中显式 grant”的情况。它提供安全底线：激进模式可以减少
-普通项目内写入确认，但不能绕过敏感环境变量、项目根外删除、敏感文件覆盖等硬边界。
-"""
-
 from __future__ import annotations
 
 import re
@@ -56,38 +50,10 @@ _SHELL_CONTROL_PATTERN = re.compile(r"(&&|\|\||\$\(|[;&|<>`\r\n])")
 
 
 class DefaultPermissionPolicy:
-    """基于项目根目录的默认权限策略。"""
 
     def __init__(self, project_root: str | Path) -> None:
         self.project_root = Path(project_root).resolve()
 
-    # -------------------------------------------------------------------------
-    # 权限决策矩阵 (Permission Decision Matrix)
-    # -------------------------------------------------------------------------
-    # decide() 是默认策略的唯一决策入口，只处理"未命中显式 grant"的请求。
-    # 结论三选一：ALLOW = 直接执行；ASK = 暂停 turn 等用户确认；DENY = 硬边界拒绝。
-    #
-    # BYPASS 模式在 decide() 第一行直接返回 ALLOW，以下每一行对它都是 ALLOW，
-    # 所以矩阵只列出 STANDARD / AGGRESSIVE 两列。"P" = 项目根目录 (project_root)。
-    #
-    # action          条件                                      STANDARD AGGRESSIVE
-    # --------------- ----------------------------------------- -------- ----------
-    # READ_PATH       P 内 且 非敏感                            ALLOW    ALLOW
-    #                 其他 (P 外 / .git / .env / .pem / .key)   ASK      ASK
-    # WRITE_PATH      P 内 + 非敏感 + allow_auto=true           ASK      ALLOW
-    #                 P 外 / 敏感 / allow_auto=false            ASK      ASK
-    # DELETE_PATH     P 内                                      ASK      ASK
-    #                 P 外                                      DENY     DENY        <- 硬边界
-    # READ_ENV        键含 KEY/TOKEN/SECRET/PASSWORD/COOKIE     DENY     DENY        <- 硬边界
-    #                 其他                                      ASK      ASK
-    # GIT_OPERATION   只读子命令(status/diff/log) + cwd 在 P 内 ALLOW    ALLOW
-    #                 其他 (含 shell 控制符)                    ASK      ASK
-    # EXECUTE_SHELL   白名单命令(pytest/ruff/git apply/...)     ASK      ALLOW
-    #                 allow_auto=false / 危险前缀(rm,sudo,...)  ASK      ASK
-    #                 含 shell 控制符 / 其他                    ASK      ASK
-    # NETWORK_REQUEST 任意                                      ASK      ASK
-    # MCP_TOOL / 未知 任意                                      ASK      ASK
-    # -------------------------------------------------------------------------
     def decide(self, request: PermissionRequest, *, mode: PermissionMode) -> PermissionDecision:
         if mode == PermissionMode.BYPASS:
             return self._allow("bypass 模式允许权限请求。")

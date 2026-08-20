@@ -1,5 +1,3 @@
-"""L3 LLM compact 的 MVP 实现。"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -49,15 +47,15 @@ class NoSummaryError(RuntimeError):
 
 
 class InvalidLlmCheckpointBoundaryError(ValueError):
-    """L3 summarizer 返回的 checkpoint 边界会破坏 resume 投影。"""
+    pass
 
 
 class UnconsumedLlmCheckpointBoundaryError(InvalidLlmCheckpointBoundaryError):
-    """L3 boundary would hide a tool result before its first successful projection."""
+    pass
 
 
 class LlmSourceFingerprintMismatchError(ValueError):
-    """调用方传入的 expected source fingerprint 与当前 view 不一致。"""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,11 +66,6 @@ class LlmCompactSummary:
 
 
 class LlmCompactSummarizer(Protocol):
-    """摘要生成器协议。
-
-    真实实现后续可以适配任意 provider；当前上下文层只依赖这个窄协议，避免把 OpenAI、
-    Anthropic 等外部消息格式提前泄漏进 checkpoint 写入逻辑。
-    """
 
     def summarize(
         self,
@@ -223,11 +216,6 @@ class L3Source:
 
 
 def _conversation_messages_only(view: SessionView) -> list[AgentMessage]:
-    """L3 摘要只看会话历史。
-
-    system prompt、工具 schema 和 provider 能力属于 stable prefix/cache 输入，不属于可被 LLM
-    总结折叠的历史。如果把它们混入 summary，resume 时容易污染系统提示词保护边界。
-    """
 
     return [message for message in view.messages if message.role != "system_meta"]
 
@@ -361,7 +349,6 @@ def _source_fingerprint(session_id: str, source: L3Source) -> str:
 
 
 def source_fingerprint_for_view(view: SessionView) -> str:
-    """L3-domain source fingerprint for a view (the value generate_candidate compares against)."""
 
     source = _build_l3_source(view)
     return _source_fingerprint(view.session_id, source)
@@ -431,15 +418,6 @@ def _summarize(
 
 
 def normalize_coding_handoff(summary: str, headings: tuple[str, ...] = CODING_HANDOFF_HEADINGS) -> str:
-    """Normalize provider output into a stable L3 summary contract.
-
-    The model supplies only prose; local code owns the public checkpoint
-    structure.  Matching sections retain their supplied body (including a
-    repeated section's later body), while missing sections are explicitly
-    marked as `无`. Unknown Markdown headings are converted to ordinary
-    body text so the resulting summary has exactly the supported headings
-    once each.
-    """
 
     bodies: dict[str, list[str]] = {heading: [] for heading in headings}
     current: str | None = None
@@ -450,8 +428,6 @@ def normalize_coding_handoff(summary: str, headings: tuple[str, ...] = CODING_HA
             current = heading
             continue
         if heading.startswith("##"):
-            # Do not emit an extra heading into a checkpoint whose schema is
-            # deliberately fixed. Keep the model's information as body text.
             line = heading.lstrip("#").strip()
         if current is None:
             preamble.append(line)

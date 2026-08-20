@@ -1,5 +1,3 @@
-"""单个记忆根目录的文件 CRUD。"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,7 +7,6 @@ from lanscoder.memory.models import MemoryRecord, MemoryScope, deserialize, file
 
 
 class MemoryStore:
-    """管理一个记忆根目录：`<name>.md` 文件 + `MEMORY.md` 索引。"""
 
     def __init__(self, root: Path, scope: MemoryScope) -> None:
         self.root = Path(root)

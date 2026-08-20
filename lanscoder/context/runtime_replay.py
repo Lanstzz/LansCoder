@@ -1,5 +1,3 @@
-"""从 session JSONL 事件恢复运行期状态。"""
-
 from __future__ import annotations
 
 from lanscoder.utils.text import optional_str
@@ -10,11 +8,6 @@ from lanscoder.context.store import JsonlSessionStore
 
 
 def replay_runtime_state(store: JsonlSessionStore, session_id: str) -> SessionRuntimeState:
-    """重放不属于自然语言历史的 session runtime state。
-
-    `JsonlSessionStore.rebuild_session_view()` 负责消息和 checkpoint 投影；这里只恢复
-    compact failure、latest checkpoint 等运行期事实。
-    """
 
     state = SessionRuntimeState(session_id=session_id)
     for event in store.list_events(session_id):

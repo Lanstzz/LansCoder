@@ -1,5 +1,3 @@
-"""上下文窗口压缩触发编排。"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -98,7 +96,6 @@ class _HardTruncateOutcome:
 
 @dataclass(slots=True)
 class ContextWindowManager:
-    """用一次 provider-facing budget 编排 L1-L3。"""
 
     store: JsonlSessionStore
     pipeline: ProgrammaticCompactor | None = None
@@ -326,12 +323,6 @@ class ContextWindowManager:
         trigger: ContextWindowTrigger,
         mode: ContextCompactMode,
     ) -> _HardTruncateOutcome:
-        """L3 与 fallback 全失败后的确定性兜底：近 N 轮保留，其余替换为占位摘要。
-
-        Three-way outcome: success commits the placeholder checkpoint; over_budget
-        means a boundary existed but the recent-N tail alone still exceeds the
-        target; nothing_to_drop means the whole conversation is inside the window.
-        """
 
         messages = [message for message in view.messages if message.role != "system_meta"]
         boundary = select_compaction_boundary(
@@ -584,7 +575,6 @@ class ContextWindowManager:
         reason: str,
         fallback_steps: list[dict[str, object]] | None = None,
     ) -> ContextCompactResult:
-        """Try the deterministic hard truncate; if nothing is droppable, fail."""
 
         outcome = self._hard_truncate(
             request=request,

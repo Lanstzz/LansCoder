@@ -1,5 +1,3 @@
-"""Permission prompt rendering and answer parsing for the TUI."""
-
 from __future__ import annotations
 
 
@@ -94,11 +92,6 @@ def permission_option_label(label: str, option_id: str) -> str:
 
 
 def ask_user_prompt_text(pending) -> str:
-    """Render an `ask_user` pending request: question plus its options, if any.
-
-    Options render as `[n] label` on a single indented line, mirroring the
-    permission prompt so both paused states read consistently.
-    """
     question = str(getattr(pending, "question", "") or "需要用户输入。")
     lines = [question]
     options = list(getattr(pending, "options", []) or [])
@@ -109,12 +102,6 @@ def ask_user_prompt_text(pending) -> str:
 
 
 def ask_user_choice_for_text(text: str, pending) -> str | None:
-    """Match a typed answer to one `ask_user` option by index, id, or label.
-
-    Returns the option's canonical label (what the model posed) so the answer
-    keeps its meaning when sent back as the next user message. Returns None
-    when the text matches no option — the caller treats it as free-text.
-    """
     normalized = text.strip().lower().replace(" ", "_")
     for index, option in enumerate(getattr(pending, "options", []) or [], start=1):
         option_id = str(getattr(option, "id", "") or "")

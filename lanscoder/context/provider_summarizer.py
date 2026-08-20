@@ -1,5 +1,3 @@
-"""用 provider 实现 L3 checkpoint 摘要的适配器。"""
-
 from __future__ import annotations
 
 import re
@@ -21,12 +19,6 @@ from lanscoder.providers.types import ChatMessage, ChatRequest
 
 
 class ProviderLlmCompactSummarizer(LlmCompactSummarizer):
-    """把上下文层的 L3 summarizer 协议适配到通用 `ChatProvider`。
-
-    L3 checkpoint 需要三个事实：摘要正文、被摘要覆盖到哪里、从哪里开始保留 tail。
-    默认实现只让模型生成摘要正文，边界由本地根据当前消息序列选择并继续交给
-    `LlmCompactService` 校验，避免把恢复边界完全交给模型决定。
-    """
 
     def __init__(self, provider: ChatProvider, *, max_tokens: int = 1200) -> None:
         self.provider = provider
@@ -89,7 +81,6 @@ def _tail_boundary(
     current_turn: int,
     recent_turn_window: int,
 ) -> _TailBoundary:
-    """选择保守 tail，同时保证保留最近 N 轮对话。"""
 
     candidates = _boundary_candidates(messages)
     if len(candidates) < 2:
@@ -121,12 +112,6 @@ def select_compaction_boundary(
     current_turn: int,
     recent_turn_window: int,
 ) -> tuple[str, str] | None:
-    """Return (covered_until_message_id, tail_start_message_id) for hard truncation.
-
-    Mirrors `_tail_boundary`: respects the recent-N window and tool-call sequence
-    validity. Returns None when the whole conversation is inside the window (nothing
-    to drop) or no valid boundary exists — the manager then falls through to failure.
-    """
 
     try:
         boundary = _tail_boundary(
@@ -145,12 +130,6 @@ def _recent_turn_max_tail_start_index(
     current_turn: int,
     recent_turn_window: int,
 ) -> int:
-    """tail_start 允许的最大候选下标。
-
-    保留最近 N 轮意味着 tail 必须包含 turn [T-N+1, T] 的全部消息，所以
-    tail_start 最晚必须落在 turn T-N+1 开头的消息上。若 T-N+1 <= 1（全部
-    都在窗口内）或历史不足，返回 0（无可摘要）。
-    """
 
     min_created_turn = current_turn - recent_turn_window + 1
     if min_created_turn <= 1:

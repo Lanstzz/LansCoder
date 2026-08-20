@@ -1,5 +1,3 @@
-"""MCP slash command handlers."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,7 +8,6 @@ from lanscoder.mcp.models import McpServerStatus
 
 
 class McpStatusProvider(Protocol):
-    """MCP commands need only safe status snapshots."""
 
     def statuses(self) -> tuple[McpServerStatus, ...]: ...
 
@@ -21,7 +18,6 @@ class McpStatusProvider(Protocol):
 
 @dataclass(slots=True)
 class McpCommandHandler:
-    """Handle the small, read-only MCP command surface."""
 
     manager: McpStatusProvider
 

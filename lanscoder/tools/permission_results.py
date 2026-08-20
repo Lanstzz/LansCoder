@@ -1,5 +1,3 @@
-"""权限系统专用 ToolResult helper。"""
-
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -17,7 +15,6 @@ def make_permission_confirmation_result(
     confirmation: UserInputRequest,
     pending_tool_call: ToolCall | None = None,
 ) -> ToolResult:
-    """创建会让 agent loop 暂停的权限确认结果。"""
 
     data = {
         "requires_user_input": True,
@@ -42,7 +39,6 @@ def make_permission_denied_result(
     request: PermissionRequest,
     decision: PermissionDecision,
 ) -> ToolResult:
-    """创建统一的权限拒绝结果。"""
 
     data = {
         "request_type": "permission_denied",
@@ -60,7 +56,6 @@ def make_permission_denied_result(
 
 
 def make_prewrite_review_stale_result(*, tool_name: str, request: PermissionRequest) -> ToolResult:
-    """Block an approved mutation when the reviewed filesystem snapshot changed."""
 
     return make_error_result(
         tool_name,
@@ -77,7 +72,6 @@ def make_prewrite_review_failed_result(
     request: PermissionRequest,
     error: str,
 ) -> ToolResult:
-    """Reject a direct mutation whose trusted preview cannot be produced."""
 
     return make_error_result(
         tool_name,

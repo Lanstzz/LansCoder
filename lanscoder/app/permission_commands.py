@@ -1,5 +1,3 @@
-"""权限相关 slash command。"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,7 +15,6 @@ class PermissionSessionLike(Protocol):
 
 @dataclass(slots=True)
 class PermissionCommandHandler:
-    """处理 `/mode` 权限策略切换。"""
 
     session: PermissionSessionLike
 
