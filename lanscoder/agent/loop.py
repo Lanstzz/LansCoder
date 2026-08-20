@@ -23,7 +23,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from collections.abc import Callable
 from functools import partial
 from typing import Any, Literal
@@ -59,14 +58,13 @@ from lanscoder.permissions.types import PermissionDecision, PermissionDecisionKi
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.errors import ProviderError, ProviderErrorKind
 from lanscoder.providers.types import ChatResponse, ChatStreamEvent, MainRequestOptions, ToolCall
-from lanscoder.subagent.types import SubagentRunner
 from lanscoder.tools.permission_results import (
     make_permission_denied_result,
     make_prewrite_review_failed_result,
     make_prewrite_review_stale_result,
 )
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
-from lanscoder.tools.types import Tool, ToolResult, make_text_result
+from lanscoder.tools.types import ToolResult, make_text_result
 
 
 class AgentLoop:
@@ -89,27 +87,22 @@ class AgentLoop:
         *,
         session: AgentSession,
         provider: ChatProvider,
-        tools: list[Tool] | None = None,
         context_builder: ContextBuilder | None = None,
         context_manager: ContextManagerLike | None = None,
         limits: AgentLoopLimits | None = None,
-        guardrails: TurnGuardrails | None = None,
-        clock=time.monotonic,
+        request_builder: RequestBuilder,
+        guardrails: TurnGuardrails,
+        observer: TurnObserver,
+        mcp_activation: McpActivationTracker,
+        tool_executor: ToolExecutor,
         stream_event_handler: Callable[[ChatStreamEvent], None] | None = None,
         tool_event_handler: Callable[[ToolExecutionEvent], None] | None = None,
         guidance_provider: Callable[[], list[str]] | None = None,
         cancellation_token: CancellationToken | None = None,
         request_options: MainRequestOptions | None = None,
         context_window: int | None = None,
-        request_builder: RequestBuilder | None = None,
         background_manager: BackgroundJobManager | None = None,
         background_tool_names: frozenset[str] | None = None,
-        enable_delegate_tool: bool = True,
-        subagent_runner: SubagentRunner | None = None,
-        progress_callback: Callable[[dict[str, Any]], None] | None = None,
-        observer: TurnObserver | None = None,
-        mcp_activation: McpActivationTracker | None = None,
-        tool_executor: ToolExecutor | None = None,
     ) -> None:
         # -------- 阶段 1：核心依赖 (session / provider / 工具元数据) --------
         # session: 持久化 JSONL 写入与视图重建，是所有"事实落库"的入口
@@ -126,24 +119,16 @@ class AgentLoop:
         # -------- 阶段 2：上下文投影 (projection) 与压缩 (compact) --------
         # context_builder: 把 session 视图投影成 provider 能理解的 messages
         # context_manager: 当投影超过 context_window 时，触发 compact（摘要/裁剪）
-        # request_builder: 唯一的主请求构造入口；未显式注入时用与本 loop 相同的依赖兜底构造
-        self.context_builder = context_builder or ContextBuilder()
+        # request_builder: 唯一的主请求构造入口，由组装根注入（含本 loop 相同的依赖）
         self.context_manager = context_manager
-        self.request_builder = request_builder or RequestBuilder(
-            session=session,
-            provider=provider,
-            context_builder=context_builder or ContextBuilder(),
-            request_options=request_options or MainRequestOptions(),
-            context_window=context_window,
-        )
+        self.request_builder = request_builder
 
         # -------- 阶段 3：循环上限控制 (limits) --------
         # max_tool_rounds: 一次 turn 最多允许模型调用多少轮工具，防止无限循环
         # guardrails: turn 级预算策略，持有 provider 调用计数、turn 起始时间与 limit 响应构造
         self.limits = limits or AgentLoopLimits.default()
         self.max_tool_rounds = self.limits.max_tool_rounds
-        self.clock = clock
-        self.guardrails = guardrails or TurnGuardrails(provider=provider, limits=self.limits, clock=clock)
+        self.guardrails = guardrails
 
         # -------- 阶段 4：事件流回调（UI 层注入，AgentLoop 本身不消费）--------
         # stream/tool handler 以属性透传给 observer：runtime _resume_turn 通过 setter
@@ -160,33 +145,20 @@ class AgentLoop:
         # background_tool_names: 哪些工具被视为"后台工具"，默认包含 background_run 等
         self.background_manager = background_manager
         self.background_tool_names = background_tool_names if background_tool_names is not None else DEFAULT_BACKGROUND_TOOL_NAMES
-        self._subagent_runner = subagent_runner
         self._task_plan_reconciliation_attempted = False
         self._tool_rounds_completed = 0
 
         # -------- 阶段 6：MCP 激活状态 ----------
-        # 工具注册已上移到组装根（_builders.register_loop_tools），loop 不再注册任何工具。
+        # 工具注册已上移到组装根（app/runtime.register_loop_tools），loop 不再注册任何工具。
         # MCP 激活校验与搜索结果观测由 McpActivationTracker 持有：先构造 tracker，再把
         # validate/observe 交给 ToolExecutor，避免 ToolExecutor↔loop 构造顺序环（P0）。
-        self._mcp_activation = mcp_activation or McpActivationTracker(frozenset(name for name in session.tool_registry.names() if name.startswith("mcp__")))
+        self._mcp_activation = mcp_activation
 
-        # -------- 阶段 7：TurnObserver + ToolExecutor 创建 --------
+        # -------- 阶段 7：TurnObserver + ToolExecutor（必需注入，无兜底）--------
         # observer 收敛 progress/stream/tool 三个事件回调；ToolExecutor 经 event_sink 消费
-        # 工具事件，validate/observe 由 tracker 提供。任务 5 会把三者改为必需注入并删兜底。
-        self._observer = observer or TurnObserver(
-            stream_event_handler=stream_event_handler,
-            tool_event_handler=tool_event_handler,
-            progress_callback=progress_callback,
-        )
-        self.tool_executor = tool_executor or ToolExecutor(
-            session=session,
-            event_sink=self._observer,
-            cancellation_token=self.cancellation_token,
-            validate_tool_call=self._mcp_activation.validate,
-            observe_tool_result=self._mcp_activation.observe,
-            background_manager=self.background_manager,
-            background_tool_names=self.background_tool_names,
-        )
+        # 工具事件，validate/observe 由 tracker 提供。两者都由组装根构造后注入。
+        self._observer = observer
+        self.tool_executor = tool_executor
 
     # ----------------------------------------------------------------------------
     # handler 属性 — 透传给 observer（runtime _resume_turn 的 setter 重绑形状）
@@ -253,6 +225,7 @@ class AgentLoop:
     # ============================================================================
     # _run_user_turn_sync — 供同步测试调用的薄 facade（内部转调 async 核心）
     # ============================================================================
+    # 删改任一 facade 必须同步迁移全部约 120 个测试调用点
     def _run_user_turn_sync(
         self,
         content: str,
@@ -298,6 +271,7 @@ class AgentLoop:
             partial(self._complete_once_with_recovery, streaming=False),
         )
 
+    # 删改任一 facade 必须同步迁移全部约 120 个测试调用点
     def _run_nudge_turn_sync(self) -> AgentTurnResult:
         """薄 sync facade：内部转调 async 唤醒轮次。"""
 
@@ -348,6 +322,7 @@ class AgentLoop:
     # ----------------------------------------------------------------------------
     # _resume_with_user_input_sync — 供同步测试调用的薄 facade（内部转调 async 核心）
     # ----------------------------------------------------------------------------
+    # 删改任一 facade 必须同步迁移全部约 120 个测试调用点
     def _resume_with_user_input_sync(self, request_id: str, answer: str) -> AgentTurnResult:
         """薄 sync facade：用用户回答恢复暂停的 turn。"""
 
@@ -1052,11 +1027,9 @@ class AgentLoop:
             return definition
         return with_background_controls(definition)
 
-    def foreground_subagent(self) -> dict[str, Any] | None:
+    def foreground_progress(self) -> dict[str, Any] | None:
         """当前前台 delegate 子 agent 的实时进度（无则 None），供 TUI 在输入栏下方显示。"""
-        if self._subagent_runner is None:
-            return None
-        return self._subagent_runner.foreground_progress
+        return self._observer.foreground_progress()
 
     def _begin_turn(self, *, new_user_turn: bool = True) -> None:
         if new_user_turn:

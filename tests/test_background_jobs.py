@@ -26,8 +26,7 @@ from lanscoder.agent.background import (
     strip_background_controls,
     with_background_controls,
 )
-from lanscoder.agent._builders import create_agent_loop
-from lanscoder.agent.loop import AgentLoop
+from lanscoder.app.runtime import create_agent_loop
 from lanscoder.agent.session import AgentSession
 from lanscoder.context.context_builder import ContextBuilder
 from lanscoder.context.store import JsonlSessionStore
@@ -500,13 +499,13 @@ def test_run_in_background_stripped_before_executor(tmp_path) -> None:
         manager.shutdown()
 
 
-def test_disallowed_tool_rejects_run_in_background(tmp_path) -> None:
+def test_disallowed_tool_rejects_run_in_background(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     manager = BackgroundJobManager()
     try:
         # background_tool_names 限定为空集：任何工具都不允许后台化。
         session = AgentSession.create(store=store, session_id="sess_bg_deny", tools=[_bg_tool("custom")])
-        loop = AgentLoop(
+        loop = make_loop(
             session=session,
             provider=FakeProvider([ChatResponse(provider="fake", model="fake-model", content="done")]),
             background_manager=manager,
@@ -528,10 +527,10 @@ def test_disallowed_tool_rejects_run_in_background(tmp_path) -> None:
         manager.shutdown()
 
 
-def test_background_dispatch_disabled_without_manager(tmp_path) -> None:
+def test_background_dispatch_disabled_without_manager(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_bg_off", tools=[_bg_tool("shell")])
-    loop = AgentLoop(
+    loop = make_loop(
         session=session,
         provider=FakeProvider([ChatResponse(provider="fake", model="fake-model", content="done")]),
     )

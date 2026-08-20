@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from lanscoder.agent._builders import create_agent_loop
+from lanscoder.app.runtime import create_agent_loop
 from lanscoder.agent.loop import AgentLoop, ToolExecutionEvent
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.user_input import AgentTurnStatus
@@ -464,7 +464,7 @@ def _failed_test_tool() -> Tool:
     return Tool(definition=definition, executor=execute)
 
 
-def test_agent_loop_persists_provider_diagnostics_metadata(tmp_path) -> None:
+def test_agent_loop_persists_provider_diagnostics_metadata(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test")
     provider = FakeProvider(
@@ -482,7 +482,7 @@ def test_agent_loop_persists_provider_diagnostics_metadata(tmp_path) -> None:
         ]
     )
 
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("读取 README")
+    make_loop(session=session, provider=provider)._run_user_turn_sync("读取 README")
 
     assistant = [message for message in store.rebuild_session_view("sess_test").messages if message.role == "assistant"][0]
     assert assistant.metadata["diagnostics"]["raw_finish_reason"] == "tool_calls"
@@ -497,12 +497,12 @@ def _extract_basis_message_id(request: ChatRequest) -> str:
     raise AssertionError("request did not expose basis_message_id")
 
 
-def test_agent_loop_appends_user_and_assistant_messages(tmp_path) -> None:
+def test_agent_loop_appends_user_and_assistant_messages(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test", agents_md="项目规则")
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="收到")])
 
-    result = AgentLoop(session=session, provider=provider)._run_user_turn_sync("你好")
+    result = make_loop(session=session, provider=provider)._run_user_turn_sync("你好")
 
     assert result.content == "收到"
     view = store.rebuild_session_view("sess_test")
@@ -515,14 +515,14 @@ def test_agent_loop_appends_user_and_assistant_messages(tmp_path) -> None:
     assert view.messages[1].parts[0].metadata["turn_id"] == 1
 
 
-def test_agent_loop_projects_image_attachment_into_provider_request(tmp_path) -> None:
+def test_agent_loop_projects_image_attachment_into_provider_request(tmp_path, make_loop) -> None:
     image = tmp_path / "image.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01")
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.create(store=store, session_id="sess_image_request")
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="收到图片")])
 
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync(
+    make_loop(session=session, provider=provider)._run_user_turn_sync(
         "描述图片",
         attachments=[attach_path(image)],
     )
@@ -535,12 +535,12 @@ def test_agent_loop_projects_image_attachment_into_provider_request(tmp_path) ->
     assert image_part.data_base64
 
 
-def test_agent_loop_builds_context_with_system_prefix_without_storing_it(tmp_path) -> None:
+def test_agent_loop_builds_context_with_system_prefix_without_storing_it(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test", agents_md="AGENTS 规则")
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
 
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("问题")
+    make_loop(session=session, provider=provider)._run_user_turn_sync("问题")
 
     request = provider.requests[0]
     assert request.messages[0].role == "system"
@@ -553,12 +553,12 @@ def test_agent_loop_builds_context_with_system_prefix_without_storing_it(tmp_pat
     assert session.runtime_state.system_prompt_fingerprint is not None
 
 
-def test_agent_loop_system_prefix_uses_provider_model_and_default_permission_policy(tmp_path) -> None:
+def test_agent_loop_system_prefix_uses_provider_model_and_default_permission_policy(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test", agents_md="AGENTS 规则")
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
 
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("问题")
+    make_loop(session=session, provider=provider)._run_user_turn_sync("问题")
 
     system_prompt = provider.requests[0].messages[0].content
     assert '"model": "fake-model"' in system_prompt
@@ -566,12 +566,12 @@ def test_agent_loop_system_prefix_uses_provider_model_and_default_permission_pol
     assert '"env_secrets": "redact"' in system_prompt
 
 
-def test_agent_loop_exposes_user_message_id_as_context_anchor(tmp_path) -> None:
+def test_agent_loop_exposes_user_message_id_as_context_anchor(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
 
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("新需求")
+    make_loop(session=session, provider=provider)._run_user_turn_sync("新需求")
 
     user_message_id = store.rebuild_session_view("sess_test").messages[0].id
     request_user_message = provider.requests[0].messages[-1]
@@ -686,7 +686,7 @@ def test_agent_loop_runs_readonly_tool_calls_in_parallel_and_appends_results_in_
     assert [message.parts[0].content for message in tool_messages] == ["view:first", "grep:second"]
 
 
-def test_agent_loop_runs_bypass_allowed_tool_calls_in_parallel(tmp_path) -> None:
+def test_agent_loop_runs_bypass_allowed_tool_calls_in_parallel(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     execution_intervals: dict[str, tuple[float, float]] = {}
     session = AgentSession.from_project(
@@ -715,7 +715,7 @@ def test_agent_loop_runs_bypass_allowed_tool_calls_in_parallel(tmp_path) -> None
         ]
     )
     tool_events: list[ToolExecutionEvent] = []
-    loop = AgentLoop(
+    loop = make_loop(
         session=session,
         provider=provider,
         tool_event_handler=tool_events.append,
@@ -777,11 +777,11 @@ def test_agent_loop_streaming_runs_readonly_tool_calls_in_parallel(tmp_path) -> 
     ]
 
 
-def test_agent_loop_streaming_text_persists_final_assistant_message(tmp_path) -> None:
+def test_agent_loop_streaming_text_persists_final_assistant_message(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_stream", agents_md="")
     provider = StreamingProvider([ChatResponse(provider="fake-stream", model="fake-stream-model", content="你好")])
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     result = _run_streaming(loop, "你好")
 
@@ -904,12 +904,12 @@ def test_agent_loop_streaming_does_not_execute_tool_before_message_completed(tmp
     assert [message.role for message in view.messages] == ["user", "assistant", "tool", "assistant"]
 
 
-def test_agent_loop_streaming_incomplete_message_does_not_persist_assistant(tmp_path) -> None:
+def test_agent_loop_streaming_incomplete_message_does_not_persist_assistant(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_stream_incomplete", agents_md="")
 
     with pytest.raises(ProviderError) as exc_info:
-        _run_streaming(AgentLoop(session=session, provider=IncompleteStreamingProvider()), "你好")
+        _run_streaming(make_loop(session=session, provider=IncompleteStreamingProvider()), "你好")
 
     assert exc_info.value.kind == ProviderErrorKind.API_ERROR
     view = store.rebuild_session_view("sess_stream_incomplete")
@@ -918,7 +918,7 @@ def test_agent_loop_streaming_incomplete_message_does_not_persist_assistant(tmp_
     assert all(event.type != "provider_projection_consumed" for event in store.list_events("sess_stream_incomplete"))
 
 
-def test_streaming_success_records_projected_tool_result_as_consumed(tmp_path) -> None:
+def test_streaming_success_records_projected_tool_result_as_consumed(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_stream_consumed", agents_md="")
     session.append_user_message("继续")
@@ -938,13 +938,13 @@ def test_streaming_success_records_projected_tool_result_as_consumed(tmp_path) -
     )
     provider = StreamingProvider([ChatResponse(provider="fake-stream", model="fake-stream-model", content="ok")])
 
-    asyncio.run(AgentLoop(session=session, provider=provider)._complete_once(streaming=True))
+    asyncio.run(make_loop(session=session, provider=provider)._complete_once(streaming=True))
 
     assert len(session.runtime_state.consumed_tool_result_part_ids) == 1
     assert [event.type for event in store.list_events(session.session_id)].count("provider_projection_consumed") == 1
 
 
-def test_agent_loop_streaming_retries_once_after_prompt_too_long_compaction(tmp_path) -> None:
+def test_agent_loop_streaming_retries_once_after_prompt_too_long_compaction(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_stream_retry", agents_md="")
     provider = StreamingProvider(
@@ -955,7 +955,7 @@ def test_agent_loop_streaming_retries_once_after_prompt_too_long_compaction(tmp_
     )
     context_manager = PromptTooLongSuccessContextManager()
 
-    result = _run_streaming(AgentLoop(session=session, provider=provider, context_manager=context_manager), "问题")
+    result = _run_streaming(make_loop(session=session, provider=provider, context_manager=context_manager), "问题")
 
     assert result.content == "ok"
     assert len(provider.requests) == 2
@@ -966,12 +966,12 @@ def test_agent_loop_streaming_retries_once_after_prompt_too_long_compaction(tmp_
     ]
 
 
-def test_agent_loop_streaming_prompt_too_long_retry_discards_failed_attempt_events(tmp_path) -> None:
+def test_agent_loop_streaming_prompt_too_long_retry_discards_failed_attempt_events(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_stream_retry_events", agents_md="")
     provider = PartialPromptTooLongThenSuccessStreamingProvider()
     context_manager = PromptTooLongSuccessContextManager()
-    loop = AgentLoop(session=session, provider=provider, context_manager=context_manager)
+    loop = make_loop(session=session, provider=provider, context_manager=context_manager)
 
     result = _run_streaming(loop, "问题")
 
@@ -985,7 +985,7 @@ def test_agent_loop_streaming_prompt_too_long_retry_discards_failed_attempt_even
     assert [event.text for event in loop.last_stream_events if event.kind == "text_delta"] == ["ok"]
 
 
-def test_agent_loop_streaming_retries_retryable_network_error_once(tmp_path) -> None:
+def test_agent_loop_streaming_retries_retryable_network_error_once(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_stream_network_retry", agents_md="")
     provider = StreamingProvider(
@@ -994,7 +994,7 @@ def test_agent_loop_streaming_retries_retryable_network_error_once(tmp_path) -> 
             ChatResponse(provider="fake-stream", model="fake-stream-model", content="ok"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider, context_manager=RecordingContextManager())
+    loop = make_loop(session=session, provider=provider, context_manager=RecordingContextManager())
 
     result = _run_streaming(loop, "问题")
 
@@ -1013,7 +1013,7 @@ def test_agent_loop_streaming_retries_retryable_network_error_once(tmp_path) -> 
     ]
 
 
-def test_agent_loop_streaming_falls_back_to_non_streaming_after_retryable_stream_failures(tmp_path) -> None:
+def test_agent_loop_streaming_falls_back_to_non_streaming_after_retryable_stream_failures(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_stream_fallback", agents_md="")
     provider = FallbackStreamingProvider(
@@ -1023,7 +1023,7 @@ def test_agent_loop_streaming_falls_back_to_non_streaming_after_retryable_stream
         ],
         complete_response=ChatResponse(provider="fallback-stream", model="fallback-stream-model", content="complete ok"),
     )
-    loop = AgentLoop(session=session, provider=provider, context_manager=RecordingContextManager())
+    loop = make_loop(session=session, provider=provider, context_manager=RecordingContextManager())
 
     result = _run_streaming(loop, "问题")
 
@@ -1036,7 +1036,7 @@ def test_agent_loop_streaming_falls_back_to_non_streaming_after_retryable_stream
     assert view.messages[-1].parts[0].content == "complete ok"
 
 
-def test_agent_loop_streaming_ignores_returned_tool_calls_when_provider_without_tool_support(tmp_path) -> None:
+def test_agent_loop_streaming_ignores_returned_tool_calls_when_provider_without_tool_support(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_stream_no_tool_exec", agents_md="")
     provider = StreamingProvider(
@@ -1052,7 +1052,7 @@ def test_agent_loop_streaming_ignores_returned_tool_calls_when_provider_without_
         capabilities=ProviderCapabilities(supports_tools=False),
     )
 
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
     response = _run_streaming(loop, "问题")
 
     assert provider.requests[0].tools == []
@@ -1066,12 +1066,12 @@ def test_agent_loop_streaming_ignores_returned_tool_calls_when_provider_without_
     ]
 
 
-def test_agent_loop_streaming_second_prompt_too_long_discards_retry_attempt_events(tmp_path) -> None:
+def test_agent_loop_streaming_second_prompt_too_long_discards_retry_attempt_events(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_stream_retry_events_fail", agents_md="")
     provider = PartialPromptTooLongThenPartialPromptTooLongStreamingProvider()
     context_manager = PromptTooLongSuccessContextManager()
-    loop = AgentLoop(session=session, provider=provider, context_manager=context_manager)
+    loop = make_loop(session=session, provider=provider, context_manager=context_manager)
 
     with pytest.raises(ProviderError) as exc_info:
         _run_streaming(loop, "问题")
@@ -1081,14 +1081,14 @@ def test_agent_loop_streaming_second_prompt_too_long_discards_retry_attempt_even
     assert loop.last_stream_events == []
 
 
-def test_agent_loop_streaming_prompt_too_long_does_not_retry_when_compaction_fails(tmp_path) -> None:
+def test_agent_loop_streaming_prompt_too_long_does_not_retry_when_compaction_fails(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_stream_retry_fail", agents_md="")
     provider = StreamingProvider([ProviderError(ProviderErrorKind.PROMPT_TOO_LONG, "too long")])
     context_manager = RecordingContextManager(status="failed", reason="l3_service_missing")
 
     with pytest.raises(ProviderError) as exc_info:
-        _run_streaming(AgentLoop(session=session, provider=provider, context_manager=context_manager), "问题")
+        _run_streaming(make_loop(session=session, provider=provider, context_manager=context_manager), "问题")
 
     assert exc_info.value.kind == ProviderErrorKind.PROMPT_TOO_LONG
     assert len(provider.requests) == 1
@@ -1099,12 +1099,12 @@ def test_agent_loop_streaming_prompt_too_long_does_not_retry_when_compaction_fai
     assert [message.role for message in store.rebuild_session_view("sess_stream_retry_fail").messages] == ["user"]
 
 
-def test_agent_loop_sends_tool_schema_only_via_request_tools(tmp_path) -> None:
+def test_agent_loop_sends_tool_schema_only_via_request_tools(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_tool_schema", agents_md="", tools=[_echo_tool()])
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
 
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("调用 echo")
+    make_loop(session=session, provider=provider)._run_user_turn_sync("调用 echo")
 
     request = provider.requests[0]
     echo = next(tool for tool in request.tools if tool.name == "echo")
@@ -1118,7 +1118,7 @@ def test_agent_loop_sends_tool_schema_only_via_request_tools(tmp_path) -> None:
     assert '"text": {"type": "string"}' not in system_message
 
 
-def test_agent_loop_exposes_only_searched_mcp_schemas_for_current_turn(tmp_path) -> None:
+def test_agent_loop_exposes_only_searched_mcp_schemas_for_current_turn(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     caller = RecordingMcpCaller()
     tools = _mcp_tools(caller)
@@ -1159,7 +1159,7 @@ def test_agent_loop_exposes_only_searched_mcp_schemas_for_current_turn(tmp_path)
         ]
     )
 
-    result = AgentLoop(session=session, provider=provider)._run_user_turn_sync("Read issue 12")
+    result = make_loop(session=session, provider=provider)._run_user_turn_sync("Read issue 12")
 
     first_names = {tool.name for tool in provider.requests[0].tools}
     second_names = {tool.name for tool in provider.requests[1].tools}
@@ -1171,7 +1171,7 @@ def test_agent_loop_exposes_only_searched_mcp_schemas_for_current_turn(tmp_path)
     assert result.content == "done"
 
 
-def test_agent_loop_clears_mcp_activation_on_next_user_turn(tmp_path) -> None:
+def test_agent_loop_clears_mcp_activation_on_next_user_turn(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     caller = RecordingMcpCaller()
     session = AgentSession.create(
@@ -1199,7 +1199,7 @@ def test_agent_loop_clears_mcp_activation_on_next_user_turn(tmp_path) -> None:
             ChatResponse(provider="fake", model="fake-model", content="second done"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     loop._run_user_turn_sync("Read issue 12")
     loop._run_user_turn_sync("Explain this local function")
@@ -1209,7 +1209,7 @@ def test_agent_loop_clears_mcp_activation_on_next_user_turn(tmp_path) -> None:
     assert not any(name.startswith("mcp__") for name in next_turn_names)
 
 
-def test_agent_loop_rejects_guessed_mcp_tool_before_permission_or_transport(tmp_path) -> None:
+def test_agent_loop_rejects_guessed_mcp_tool_before_permission_or_transport(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     caller = RecordingMcpCaller()
     session = AgentSession.create(
@@ -1236,7 +1236,7 @@ def test_agent_loop_rejects_guessed_mcp_tool_before_permission_or_transport(tmp_
         ]
     )
 
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("Read issue 12")
+    make_loop(session=session, provider=provider)._run_user_turn_sync("Read issue 12")
 
     assert caller.calls == []
     tool_part = next(part for message in session.rebuild_view().messages for part in message.parts if part.kind == "tool_result" and part.metadata["tool_name"] == "mcp__github__get_issue")
@@ -1245,7 +1245,7 @@ def test_agent_loop_rejects_guessed_mcp_tool_before_permission_or_transport(tmp_
     assert session.pending_permission_execution is None
 
 
-def test_agent_loop_streaming_keeps_same_mcp_visibility_rules(tmp_path) -> None:
+def test_agent_loop_streaming_keeps_same_mcp_visibility_rules(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     caller = RecordingMcpCaller()
     session = AgentSession.create(
@@ -1285,7 +1285,7 @@ def test_agent_loop_streaming_keeps_same_mcp_visibility_rules(tmp_path) -> None:
         ]
     )
 
-    result = _run_streaming(AgentLoop(session=session, provider=provider), "Read issue")
+    result = _run_streaming(make_loop(session=session, provider=provider), "Read issue")
 
     first_names = {tool.name for tool in provider.requests[0].tools}
     second_names = {tool.name for tool in provider.requests[1].tools}
@@ -1296,7 +1296,7 @@ def test_agent_loop_streaming_keeps_same_mcp_visibility_rules(tmp_path) -> None:
     assert result.content == "done"
 
 
-def test_agent_loop_permission_resume_keeps_mcp_schema_active(tmp_path) -> None:
+def test_agent_loop_permission_resume_keeps_mcp_schema_active(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     caller = RecordingMcpCaller()
     session = AgentSession.from_project(
@@ -1334,7 +1334,7 @@ def test_agent_loop_permission_resume_keeps_mcp_schema_active(tmp_path) -> None:
             ChatResponse(provider="fake", model="fake-model", content="done"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     waiting = loop._run_user_turn_sync("Read issue")
 
@@ -1348,7 +1348,7 @@ def test_agent_loop_permission_resume_keeps_mcp_schema_active(tmp_path) -> None:
     assert caller.calls == [("github", "get_issue", {})]
 
 
-def test_agent_loop_omits_tools_for_provider_without_tool_support(tmp_path) -> None:
+def test_agent_loop_omits_tools_for_provider_without_tool_support(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_no_tools", agents_md="")
     provider = FakeProvider(
@@ -1356,7 +1356,7 @@ def test_agent_loop_omits_tools_for_provider_without_tool_support(tmp_path) -> N
         capabilities=ProviderCapabilities(supports_tools=False),
     )
 
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("问题")
+    make_loop(session=session, provider=provider)._run_user_turn_sync("问题")
 
     assert provider.requests[0].tools == []
     system_message = provider.requests[0].messages[0].content
@@ -1364,7 +1364,7 @@ def test_agent_loop_omits_tools_for_provider_without_tool_support(tmp_path) -> N
     assert "Available tools" not in system_message
 
 
-def test_agent_loop_ignores_returned_tool_calls_when_provider_without_tool_support(tmp_path) -> None:
+def test_agent_loop_ignores_returned_tool_calls_when_provider_without_tool_support(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_no_tool_exec", agents_md="")
     provider = FakeProvider(
@@ -1380,7 +1380,7 @@ def test_agent_loop_ignores_returned_tool_calls_when_provider_without_tool_suppo
         capabilities=ProviderCapabilities(supports_tools=False),
     )
 
-    response = AgentLoop(session=session, provider=provider)._run_user_turn_sync("问题")
+    response = make_loop(session=session, provider=provider)._run_user_turn_sync("问题")
 
     assert response.tool_calls == []
     assert response.finish_reason == "error"
@@ -1391,19 +1391,19 @@ def test_agent_loop_ignores_returned_tool_calls_when_provider_without_tool_suppo
     ]
 
 
-def test_agent_loop_passes_current_turn_into_context_manager(tmp_path) -> None:
+def test_agent_loop_passes_current_turn_into_context_manager(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_test", agents_md="")
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
     context_manager = PromptTooLongSuccessContextManager()
 
-    AgentLoop(session=session, provider=provider, context_manager=context_manager)._run_user_turn_sync("新任务")
+    make_loop(session=session, provider=provider, context_manager=context_manager)._run_user_turn_sync("新任务")
 
     assert context_manager.calls
     assert context_manager.calls[0].current_turn == 1
 
 
-def test_agent_loop_retries_once_after_prompt_too_long_compaction(tmp_path) -> None:
+def test_agent_loop_retries_once_after_prompt_too_long_compaction(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_retry", agents_md="")
     provider = FakeProvider(
@@ -1414,7 +1414,7 @@ def test_agent_loop_retries_once_after_prompt_too_long_compaction(tmp_path) -> N
     )
     context_manager = PromptTooLongSuccessContextManager()
 
-    result = AgentLoop(session=session, provider=provider, context_manager=context_manager)._run_user_turn_sync("问题")
+    result = make_loop(session=session, provider=provider, context_manager=context_manager)._run_user_turn_sync("问题")
 
     assert result.content == "ok"
     assert len(provider.requests) == 2
@@ -1425,7 +1425,7 @@ def test_agent_loop_retries_once_after_prompt_too_long_compaction(tmp_path) -> N
     ]
 
 
-def test_agent_loop_prompt_too_long_retries_only_once(tmp_path) -> None:
+def test_agent_loop_prompt_too_long_retries_only_once(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_retry_once", agents_md="")
     provider = FakeProvider(
@@ -1437,7 +1437,7 @@ def test_agent_loop_prompt_too_long_retries_only_once(tmp_path) -> None:
     context_manager = PromptTooLongSuccessContextManager()
 
     with pytest.raises(ProviderError) as exc_info:
-        AgentLoop(session=session, provider=provider, context_manager=context_manager)._run_user_turn_sync("问题")
+        make_loop(session=session, provider=provider, context_manager=context_manager)._run_user_turn_sync("问题")
 
     assert exc_info.value.kind == ProviderErrorKind.PROMPT_TOO_LONG
     assert len(provider.requests) == 2
@@ -1449,14 +1449,14 @@ def test_agent_loop_prompt_too_long_retries_only_once(tmp_path) -> None:
     assert [message.role for message in store.rebuild_session_view("sess_retry_once").messages] == ["user"]
 
 
-def test_agent_loop_prompt_too_long_does_not_retry_when_compaction_fails(tmp_path) -> None:
+def test_agent_loop_prompt_too_long_does_not_retry_when_compaction_fails(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_retry_fail", agents_md="")
     provider = FakeProvider([ProviderError(ProviderErrorKind.PROMPT_TOO_LONG, "too long")])
     context_manager = RecordingContextManager(status="failed", reason="l3_service_missing")
 
     with pytest.raises(ProviderError) as exc_info:
-        AgentLoop(session=session, provider=provider, context_manager=context_manager)._run_user_turn_sync("问题")
+        make_loop(session=session, provider=provider, context_manager=context_manager)._run_user_turn_sync("问题")
 
     assert exc_info.value.kind == ProviderErrorKind.PROMPT_TOO_LONG
     assert len(provider.requests) == 1
@@ -1467,26 +1467,26 @@ def test_agent_loop_prompt_too_long_does_not_retry_when_compaction_fails(tmp_pat
     assert [message.role for message in store.rebuild_session_view("sess_retry_fail").messages] == ["user"]
 
 
-def test_agent_loop_does_not_retry_non_compaction_provider_error(tmp_path) -> None:
+def test_agent_loop_does_not_retry_non_compaction_provider_error(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_no_retry", agents_md="")
     provider = FakeProvider([ProviderError(ProviderErrorKind.AUTH_ERROR, "bad key")])
     context_manager = RecordingContextManager()
 
     with pytest.raises(ProviderError) as exc_info:
-        AgentLoop(session=session, provider=provider, context_manager=context_manager)._run_user_turn_sync("问题")
+        make_loop(session=session, provider=provider, context_manager=context_manager)._run_user_turn_sync("问题")
 
     assert exc_info.value.kind == ProviderErrorKind.AUTH_ERROR
     assert len(provider.requests) == 1
     assert [call.trigger for call in context_manager.calls] == [ContextWindowTrigger.AUTO]
 
 
-def test_agent_loop_streaming_does_not_retry_non_compaction_provider_error(tmp_path) -> None:
+def test_agent_loop_streaming_does_not_retry_non_compaction_provider_error(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_stream_no_retry", agents_md="")
     provider = PartialThenErrorStreamingProvider(ProviderError(ProviderErrorKind.AUTH_ERROR, "bad key"))
     context_manager = RecordingContextManager()
-    loop = AgentLoop(session=session, provider=provider, context_manager=context_manager)
+    loop = make_loop(session=session, provider=provider, context_manager=context_manager)
 
     with pytest.raises(ProviderError) as exc_info:
         _run_streaming(loop, "问题")
@@ -1498,15 +1498,15 @@ def test_agent_loop_streaming_does_not_retry_non_compaction_provider_error(tmp_p
     assert [message.role for message in store.rebuild_session_view("sess_stream_no_retry").messages] == ["user"]
 
 
-def test_agent_loop_resume_keeps_turn_counter_and_metadata(tmp_path) -> None:
+def test_agent_loop_resume_keeps_turn_counter_and_metadata(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     original = AgentSession.create(store=store, session_id="sess_test", agents_md="")
     first_provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="第一轮")])
-    AgentLoop(session=original, provider=first_provider)._run_user_turn_sync("第一轮问题")
+    make_loop(session=original, provider=first_provider)._run_user_turn_sync("第一轮问题")
 
     resumed = AgentSession.resume(store=store, session_id="sess_test", agents_md="")
     second_provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="第二轮")])
-    AgentLoop(session=resumed, provider=second_provider)._run_user_turn_sync("第二轮问题")
+    make_loop(session=resumed, provider=second_provider)._run_user_turn_sync("第二轮问题")
 
     view = store.rebuild_session_view("sess_test")
     assert view.messages[0].parts[0].metadata["created_turn"] == 1
@@ -1553,7 +1553,7 @@ def test_task_plan_tool_writes_one_native_state_event_without_session_inference(
     assert session.rebuild_view().task_plan.revision == 1
 
 
-def test_main_provider_request_includes_latest_task_plan_snapshot_without_task_list(tmp_path) -> None:
+def test_main_provider_request_includes_latest_task_plan_snapshot_without_task_list(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_task_plan_provider_snapshot")
     create = ToolCall(
@@ -1578,7 +1578,7 @@ def test_main_provider_request_includes_latest_task_plan_snapshot_without_task_l
         ]
     )
 
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("继续执行")
+    make_loop(session=session, provider=provider)._run_user_turn_sync("继续执行")
 
     snapshots = [message.content for message in provider.requests[0].messages if message.role == "system" and message.content.startswith("Current TaskPlan snapshot")]
     assert snapshots == [
@@ -1593,7 +1593,7 @@ def test_main_provider_request_includes_latest_task_plan_snapshot_without_task_l
     assert all(message.role != "tool" for message in provider.requests[0].messages)
 
 
-def test_main_provider_request_refreshes_task_plan_snapshot_after_update(tmp_path) -> None:
+def test_main_provider_request_refreshes_task_plan_snapshot_after_update(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_task_plan_snapshot_refresh")
     create = ToolCall(
@@ -1628,7 +1628,7 @@ def test_main_provider_request_refreshes_task_plan_snapshot_after_update(tmp_pat
         ]
     )
 
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("继续执行")
+    make_loop(session=session, provider=provider)._run_user_turn_sync("继续执行")
 
     first_snapshot = next(message.content for message in provider.requests[0].messages if message.role == "system" and message.content.startswith("Current TaskPlan snapshot"))
     second_snapshot = next(message.content for message in provider.requests[1].messages if message.role == "system" and message.content.startswith("Current TaskPlan snapshot"))
@@ -1707,11 +1707,11 @@ def test_agent_loop_does_not_persist_unexecuted_tool_calls_after_round_limit(tmp
     assert all(part.kind != "tool_call" for part in view.messages[3].parts)
 
 
-def test_agent_loop_passes_tool_choice_none_for_final_only_completion(tmp_path) -> None:
+def test_agent_loop_passes_tool_choice_none_for_final_only_completion(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_tool_choice", agents_md="")
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="final")])
-    loop = AgentLoop(
+    loop = make_loop(
         session=session,
         provider=provider,
         limits=AgentLoopLimits.default(),
@@ -1723,7 +1723,7 @@ def test_agent_loop_passes_tool_choice_none_for_final_only_completion(tmp_path) 
     assert provider.requests[0].tool_choice == "none"
 
 
-def test_agent_loop_runs_task_plan_reconciliation_before_final_answer(tmp_path) -> None:
+def test_agent_loop_runs_task_plan_reconciliation_before_final_answer(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_task_plan_self_check", agents_md="")
     provider = FakeProvider(
@@ -1753,7 +1753,7 @@ def test_agent_loop_runs_task_plan_reconciliation_before_final_answer(tmp_path) 
         ]
     )
 
-    response = AgentLoop(
+    response = make_loop(
         session=session,
         provider=provider,
         limits=AgentLoopLimits(max_tool_rounds=5, max_provider_calls=5, max_turn_seconds=None),
@@ -1766,7 +1766,7 @@ def test_agent_loop_runs_task_plan_reconciliation_before_final_answer(tmp_path) 
     assert all("unfinished linear task plan" not in part.content for message in store.rebuild_session_view("sess_task_plan_self_check").messages for part in message.parts)
 
 
-def test_runtime_instruction_is_ephemeral_and_only_applies_to_one_request(tmp_path) -> None:
+def test_runtime_instruction_is_ephemeral_and_only_applies_to_one_request(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_runtime_instruction", agents_md="")
     session.append_user_message("真实用户请求")
@@ -1776,7 +1776,7 @@ def test_runtime_instruction_is_ephemeral_and_only_applies_to_one_request(tmp_pa
             ChatResponse(provider="fake", model="fake-model", content="second"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     asyncio.run(loop._complete_once(streaming=False, runtime_instruction="Reconcile task plan state"))
     asyncio.run(loop._complete_once(streaming=False))
@@ -1786,7 +1786,7 @@ def test_runtime_instruction_is_ephemeral_and_only_applies_to_one_request(tmp_pa
     assert all("Reconcile task plan state" not in part.content for message in session.rebuild_view().messages for part in message.parts)
 
 
-def test_runtime_instruction_survives_prompt_too_long_retry(tmp_path) -> None:
+def test_runtime_instruction_survives_prompt_too_long_retry(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_runtime_retry", agents_md="")
     session.append_user_message("真实用户请求")
@@ -1796,7 +1796,7 @@ def test_runtime_instruction_survives_prompt_too_long_retry(tmp_path) -> None:
             ChatResponse(provider="fake", model="fake-model", content="ok"),
         ]
     )
-    loop = AgentLoop(
+    loop = make_loop(
         session=session,
         provider=provider,
         context_manager=PromptTooLongSuccessContextManager(),
@@ -1809,7 +1809,7 @@ def test_runtime_instruction_survives_prompt_too_long_retry(tmp_path) -> None:
     assert all(any(message.role == "system" and message.content == "Reconcile task plan state" for message in request.messages) for request in provider.requests)
 
 
-def test_agent_loop_skips_task_plan_reconciliation_when_all_tasks_done(tmp_path) -> None:
+def test_agent_loop_skips_task_plan_reconciliation_when_all_tasks_done(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_task_plan_self_check_done", agents_md="")
     provider = FakeProvider(
@@ -1838,7 +1838,7 @@ def test_agent_loop_skips_task_plan_reconciliation_when_all_tasks_done(tmp_path)
         ]
     )
 
-    response = AgentLoop(
+    response = make_loop(
         session=session,
         provider=provider,
         limits=AgentLoopLimits(max_tool_rounds=5, max_provider_calls=5, max_turn_seconds=None),
@@ -1848,7 +1848,7 @@ def test_agent_loop_skips_task_plan_reconciliation_when_all_tasks_done(tmp_path)
     assert len(provider.requests) == 2
 
 
-def test_agent_loop_skips_task_plan_reconciliation_when_all_tasks_completed(tmp_path) -> None:
+def test_agent_loop_skips_task_plan_reconciliation_when_all_tasks_completed(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_task_plan_self_check_completed", agents_md="")
     provider = FakeProvider(
@@ -1877,7 +1877,7 @@ def test_agent_loop_skips_task_plan_reconciliation_when_all_tasks_completed(tmp_
         ]
     )
 
-    response = AgentLoop(
+    response = make_loop(
         session=session,
         provider=provider,
         limits=AgentLoopLimits(max_tool_rounds=5, max_provider_calls=5, max_turn_seconds=None),
@@ -1887,7 +1887,7 @@ def test_agent_loop_skips_task_plan_reconciliation_when_all_tasks_completed(tmp_
     assert len(provider.requests) == 2
 
 
-def test_agent_loop_executes_incremental_task_plan_updates_after_reconciliation(tmp_path) -> None:
+def test_agent_loop_executes_incremental_task_plan_updates_after_reconciliation(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
         store=store,
@@ -1942,7 +1942,7 @@ def test_agent_loop_executes_incremental_task_plan_updates_after_reconciliation(
         ]
     )
 
-    response = AgentLoop(
+    response = make_loop(
         session=session,
         provider=provider,
         limits=AgentLoopLimits(max_tool_rounds=10, max_provider_calls=10, max_turn_seconds=None),
@@ -1956,7 +1956,7 @@ def test_agent_loop_executes_incremental_task_plan_updates_after_reconciliation(
     assert [event.payload["revision"] for event in plan_events] == [1, 2]
 
 
-def test_agent_loop_runs_task_plan_reconciliation_at_most_once_per_user_turn(tmp_path) -> None:
+def test_agent_loop_runs_task_plan_reconciliation_at_most_once_per_user_turn(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
         store=store,
@@ -1995,14 +1995,14 @@ def test_agent_loop_runs_task_plan_reconciliation_at_most_once_per_user_turn(tmp
         ]
     )
 
-    response = AgentLoop(session=session, provider=provider)._run_user_turn_sync("执行任务")
+    response = make_loop(session=session, provider=provider)._run_user_turn_sync("执行任务")
 
     assert response.content == "仍有未完成项"
     reconciliation_requests = [request for request in provider.requests if any(message.role == "system" and "unfinished linear task plan" in message.content for message in request.messages)]
     assert len(reconciliation_requests) == 1
 
 
-def test_agent_loop_resets_task_plan_reconciliation_for_each_user_turn(tmp_path) -> None:
+def test_agent_loop_resets_task_plan_reconciliation_for_each_user_turn(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_task_plan_reconciliation_reset", agents_md="")
     create_call = ToolCall(
@@ -2023,7 +2023,7 @@ def test_agent_loop_resets_task_plan_reconciliation_for_each_user_turn(tmp_path)
             ChatResponse(provider="fake", model="fake-model", content="第二轮仍有未完成任务"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     first = loop._run_user_turn_sync("第一轮继续任务")
     second = loop._run_user_turn_sync("第二轮继续任务")
@@ -2034,7 +2034,7 @@ def test_agent_loop_resets_task_plan_reconciliation_for_each_user_turn(tmp_path)
     assert len(reconciliation_requests) == 2
 
 
-def test_agent_loop_does_not_reconcile_task_plan_after_tool_round_limit(tmp_path) -> None:
+def test_agent_loop_does_not_reconcile_task_plan_after_tool_round_limit(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_task_plan_tool_limit", agents_md="")
     provider = FakeProvider(
@@ -2059,7 +2059,7 @@ def test_agent_loop_does_not_reconcile_task_plan_after_tool_round_limit(tmp_path
         ]
     )
 
-    response = AgentLoop(
+    response = make_loop(
         session=session,
         provider=provider,
         limits=AgentLoopLimits(max_tool_rounds=1, max_provider_calls=5, max_turn_seconds=None),
@@ -2069,7 +2069,7 @@ def test_agent_loop_does_not_reconcile_task_plan_after_tool_round_limit(tmp_path
     assert len(provider.requests) == 1
 
 
-def test_agent_loop_converts_provider_limit_during_task_plan_reconciliation_to_stop_response(tmp_path) -> None:
+def test_agent_loop_converts_provider_limit_during_task_plan_reconciliation_to_stop_response(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_task_plan_provider_limit", agents_md="")
     provider = FakeProvider(
@@ -2095,7 +2095,7 @@ def test_agent_loop_converts_provider_limit_during_task_plan_reconciliation_to_s
         ]
     )
 
-    response = AgentLoop(
+    response = make_loop(
         session=session,
         provider=provider,
         limits=AgentLoopLimits(max_tool_rounds=5, max_provider_calls=2, max_turn_seconds=None),
@@ -2105,7 +2105,7 @@ def test_agent_loop_converts_provider_limit_during_task_plan_reconciliation_to_s
     assert len(provider.requests) == 2
 
 
-def test_agent_loop_converts_timeout_during_task_plan_reconciliation_to_stop_response(tmp_path) -> None:
+def test_agent_loop_converts_timeout_during_task_plan_reconciliation_to_stop_response(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_task_plan_timeout", agents_md="")
     provider = FakeProvider(
@@ -2131,7 +2131,7 @@ def test_agent_loop_converts_timeout_during_task_plan_reconciliation_to_stop_res
         ]
     )
 
-    response = AgentLoop(
+    response = make_loop(
         session=session,
         provider=provider,
         limits=AgentLoopLimits(max_tool_rounds=5, max_provider_calls=5, max_turn_seconds=5),
@@ -2142,7 +2142,7 @@ def test_agent_loop_converts_timeout_during_task_plan_reconciliation_to_stop_res
     assert len(provider.requests) == 2
 
 
-def test_agent_loop_converts_cancellation_during_task_plan_reconciliation_to_interrupted_response(tmp_path) -> None:
+def test_agent_loop_converts_cancellation_during_task_plan_reconciliation_to_interrupted_response(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_task_plan_cancelled", agents_md="")
     token = CancellationToken()
@@ -2170,7 +2170,7 @@ def test_agent_loop_converts_cancellation_during_task_plan_reconciliation_to_int
         cancellation_token=token,
     )
 
-    response = AgentLoop(
+    response = make_loop(
         session=session,
         provider=provider,
         cancellation_token=token,
@@ -2180,7 +2180,7 @@ def test_agent_loop_converts_cancellation_during_task_plan_reconciliation_to_int
     assert len(provider.requests) == 2
 
 
-def test_agent_loop_propagates_prewrite_review_from_task_plan_reconciliation_without_duplicate_call(tmp_path) -> None:
+def test_agent_loop_propagates_prewrite_review_from_task_plan_reconciliation_without_duplicate_call(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -2241,7 +2241,7 @@ def test_agent_loop_propagates_prewrite_review_from_task_plan_reconciliation_wit
         ]
     )
 
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
     result = loop._run_user_turn_sync("完成任务")
 
     assert result.status == AgentTurnStatus.WAITING_FOR_USER_INPUT
@@ -2263,7 +2263,7 @@ def test_agent_loop_propagates_prewrite_review_from_task_plan_reconciliation_wit
     ]
 
 
-def test_permission_resume_does_not_repeat_task_plan_reconciliation_for_same_user_turn(tmp_path) -> None:
+def test_permission_resume_does_not_repeat_task_plan_reconciliation_for_same_user_turn(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -2308,7 +2308,7 @@ def test_permission_resume_does_not_repeat_task_plan_reconciliation_for_same_use
             ChatResponse(provider="fake", model="fake-model", content="不应再次对账"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     paused = loop._run_user_turn_sync("完成任务")
     assert paused.pending_input is not None
@@ -2320,7 +2320,7 @@ def test_permission_resume_does_not_repeat_task_plan_reconciliation_for_same_use
     assert len(reconciliation_requests) == 1
 
 
-def test_agent_loop_streaming_propagates_prewrite_review_from_task_plan_reconciliation_without_duplicate_call(tmp_path) -> None:
+def test_agent_loop_streaming_propagates_prewrite_review_from_task_plan_reconciliation_without_duplicate_call(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -2365,7 +2365,7 @@ def test_agent_loop_streaming_propagates_prewrite_review_from_task_plan_reconcil
     )
 
     response = asyncio.run(
-        AgentLoop(session=session, provider=provider).run_user_turn(
+        make_loop(session=session, provider=provider).run_user_turn(
             "完成任务",
             streaming=True,
         )
@@ -2418,7 +2418,7 @@ def test_agent_loop_injects_guidance_before_next_provider_call(tmp_path) -> None
     assert guidance == []
 
 
-def test_agent_loop_does_not_persist_task_plan_reconciliation_as_user_message(tmp_path) -> None:
+def test_agent_loop_does_not_persist_task_plan_reconciliation_as_user_message(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
         store=store,
@@ -2481,14 +2481,14 @@ def test_agent_loop_does_not_persist_task_plan_reconciliation_as_user_message(tm
         ]
     )
 
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("完成多步骤任务")
+    make_loop(session=session, provider=provider)._run_user_turn_sync("完成多步骤任务")
 
     projected_user_messages = [message.content for request in provider.requests for message in request.messages if message.role == "user"]
     assert all("unfinished linear task plan" not in text for text in projected_user_messages)
     assert [message.role for message in session.rebuild_view().messages].count("user") == 1
 
 
-def test_agent_loop_resets_call_count_for_each_user_turn(tmp_path) -> None:
+def test_agent_loop_resets_call_count_for_each_user_turn(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_provider_count_reset", agents_md="")
     provider = FakeProvider(
@@ -2497,7 +2497,7 @@ def test_agent_loop_resets_call_count_for_each_user_turn(tmp_path) -> None:
             ChatResponse(provider="fake", model="fake-model", content="second"),
         ]
     )
-    loop = AgentLoop(
+    loop = make_loop(
         session=session,
         provider=provider,
         limits=AgentLoopLimits(max_tool_rounds=1, max_provider_calls=2, max_turn_seconds=None),
@@ -2750,7 +2750,7 @@ def test_sync_main_request_records_projected_tool_result_as_consumed(tmp_path) -
     assert [event.type for event in store.list_events(session.session_id)].count("provider_projection_consumed") == 1
 
 
-def test_agent_loop_interactive_pauses_on_ask_user(tmp_path) -> None:
+def test_agent_loop_interactive_pauses_on_ask_user(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
         store=store,
@@ -2777,7 +2777,7 @@ def test_agent_loop_interactive_pauses_on_ask_user(tmp_path) -> None:
         ]
     )
 
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
     result = loop._run_user_turn_sync("部署")
 
     assert result.status == AgentTurnStatus.WAITING_FOR_USER_INPUT
@@ -2809,7 +2809,7 @@ def test_agent_loop_interactive_pauses_on_ask_user(tmp_path) -> None:
     assert answer_result.content == "prod"
 
 
-def test_agent_loop_defers_remaining_tools_until_ask_user_answer(tmp_path) -> None:
+def test_agent_loop_defers_remaining_tools_until_ask_user_answer(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
         store=store,
@@ -2836,7 +2836,7 @@ def test_agent_loop_defers_remaining_tools_until_ask_user_answer(tmp_path) -> No
             ChatResponse(provider="fake", model="fake-model", content="继续"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     result = loop._run_user_turn_sync("需要确认")
 
@@ -2865,7 +2865,7 @@ def test_agent_loop_defers_remaining_tools_until_ask_user_answer(tmp_path) -> No
     assert echo_result.content == "echo:should skip"
 
 
-def test_agent_loop_permission_pause_does_not_append_confirmation_tool_result(tmp_path) -> None:
+def test_agent_loop_permission_pause_does_not_append_confirmation_tool_result(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -2891,7 +2891,7 @@ def test_agent_loop_permission_pause_does_not_append_confirmation_tool_result(tm
         ]
     )
 
-    result = AgentLoop(session=session, provider=provider)._run_user_turn_sync("写 README")
+    result = make_loop(session=session, provider=provider)._run_user_turn_sync("写 README")
 
     assert result.status == AgentTurnStatus.WAITING_FOR_USER_INPUT
     assert result.pending_input is not None
@@ -2911,7 +2911,7 @@ def test_agent_loop_permission_pause_does_not_append_confirmation_tool_result(tm
     assert view.messages[1].parts[0].metadata["tool_call_id"] == "call_write"
 
 
-def test_agent_loop_bypass_mode_emits_prewrite_review_and_executes_without_confirmation(tmp_path) -> None:
+def test_agent_loop_bypass_mode_emits_prewrite_review_and_executes_without_confirmation(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -2940,7 +2940,7 @@ def test_agent_loop_bypass_mode_emits_prewrite_review_and_executes_without_confi
     )
 
     events: list[ToolExecutionEvent] = []
-    result = AgentLoop(
+    result = make_loop(
         session=session,
         provider=provider,
         tool_event_handler=events.append,
@@ -2958,7 +2958,7 @@ def test_agent_loop_bypass_mode_emits_prewrite_review_and_executes_without_confi
     assert "+hello" in events[0].prewrite_review["files"][0]["diff"]
 
 
-def test_agent_loop_streaming_bypass_mode_emits_prewrite_review_without_confirmation(tmp_path) -> None:
+def test_agent_loop_streaming_bypass_mode_emits_prewrite_review_without_confirmation(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -2988,7 +2988,7 @@ def test_agent_loop_streaming_bypass_mode_emits_prewrite_review_without_confirma
 
     events: list[ToolExecutionEvent] = []
     response = _run_streaming(
-        AgentLoop(
+        make_loop(
             session=session,
             provider=provider,
             tool_event_handler=events.append,
@@ -3004,7 +3004,7 @@ def test_agent_loop_streaming_bypass_mode_emits_prewrite_review_without_confirma
     assert "+hello" in events[0].prewrite_review["files"][0]["diff"]
 
 
-def test_agent_loop_bypass_mode_blocks_mutation_when_prewrite_review_fails(tmp_path) -> None:
+def test_agent_loop_bypass_mode_blocks_mutation_when_prewrite_review_fails(tmp_path, make_loop) -> None:
     target = tmp_path / "app.py"
     target.write_text("old\nold\n", encoding="utf-8")
     store = JsonlSessionStore(tmp_path / ".lanscoder")
@@ -3034,7 +3034,7 @@ def test_agent_loop_bypass_mode_blocks_mutation_when_prewrite_review_fails(tmp_p
         ]
     )
 
-    result = AgentLoop(session=session, provider=provider)._run_user_turn_sync("修改 app.py")
+    result = make_loop(session=session, provider=provider)._run_user_turn_sync("修改 app.py")
 
     assert result.status == AgentTurnStatus.COMPLETED
     assert result.pending_input is None
@@ -3044,7 +3044,7 @@ def test_agent_loop_bypass_mode_blocks_mutation_when_prewrite_review_fails(tmp_p
     assert tool_part.metadata["data"]["request_type"] == "prewrite_review_failed"
 
 
-def test_agent_loop_shell_permission_does_not_claim_precomputed_diff(tmp_path) -> None:
+def test_agent_loop_shell_permission_does_not_claim_precomputed_diff(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3064,14 +3064,14 @@ def test_agent_loop_shell_permission_does_not_claim_precomputed_diff(tmp_path) -
         ]
     )
 
-    result = AgentLoop(session=session, provider=provider)._run_user_turn_sync("运行命令")
+    result = make_loop(session=session, provider=provider)._run_user_turn_sync("运行命令")
 
     assert result.status == AgentTurnStatus.WAITING_FOR_USER_INPUT
     assert result.pending_input is not None
     assert "prewrite_review" not in result.pending_input.payload
 
 
-def test_agent_loop_blocks_mutation_when_prewrite_review_cannot_be_built(tmp_path) -> None:
+def test_agent_loop_blocks_mutation_when_prewrite_review_cannot_be_built(tmp_path, make_loop) -> None:
     target = tmp_path / "app.py"
     target.write_text("old\nold\n", encoding="utf-8")
     store = JsonlSessionStore(tmp_path / ".lanscoder")
@@ -3100,7 +3100,7 @@ def test_agent_loop_blocks_mutation_when_prewrite_review_cannot_be_built(tmp_pat
         ]
     )
 
-    result = AgentLoop(session=session, provider=provider)._run_user_turn_sync("修改 app.py")
+    result = make_loop(session=session, provider=provider)._run_user_turn_sync("修改 app.py")
 
     assert result.status == AgentTurnStatus.COMPLETED
     assert result.pending_input is None
@@ -3114,7 +3114,7 @@ def test_agent_loop_blocks_mutation_when_prewrite_review_cannot_be_built(tmp_pat
     assert "匹配内容出现 2 次" in tool_part.content
 
 
-def test_agent_loop_permission_deny_appends_denied_result_and_continues(tmp_path) -> None:
+def test_agent_loop_permission_deny_appends_denied_result_and_continues(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3140,7 +3140,7 @@ def test_agent_loop_permission_deny_appends_denied_result_and_continues(tmp_path
             ChatResponse(provider="fake", model="fake-model", content="已取消写入"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     pending = loop._run_user_turn_sync("写 README").pending_input
     assert pending is not None
@@ -3160,7 +3160,7 @@ def test_agent_loop_permission_deny_appends_denied_result_and_continues(tmp_path
     assert provider.requests[1].messages[-1].tool_call_id == "call_write"
 
 
-def test_permission_resume_preserves_provider_call_budget_for_same_user_turn(tmp_path) -> None:
+def test_permission_resume_preserves_provider_call_budget_for_same_user_turn(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3185,7 +3185,7 @@ def test_permission_resume_preserves_provider_call_budget_for_same_user_turn(tmp
             ),
         ]
     )
-    loop = AgentLoop(
+    loop = make_loop(
         session=session,
         provider=provider,
         limits=AgentLoopLimits(max_tool_rounds=5, max_provider_calls=1, max_turn_seconds=None),
@@ -3200,7 +3200,7 @@ def test_permission_resume_preserves_provider_call_budget_for_same_user_turn(tmp
     assert len(provider.requests) == 1
 
 
-def test_permission_resume_preserves_turn_start_time_for_same_user_turn(tmp_path) -> None:
+def test_permission_resume_preserves_turn_start_time_for_same_user_turn(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3225,7 +3225,7 @@ def test_permission_resume_preserves_turn_start_time_for_same_user_turn(tmp_path
             ),
         ]
     )
-    loop = AgentLoop(
+    loop = make_loop(
         session=session,
         provider=provider,
         limits=AgentLoopLimits(max_tool_rounds=5, max_provider_calls=5, max_turn_seconds=5),
@@ -3242,7 +3242,7 @@ def test_permission_resume_preserves_turn_start_time_for_same_user_turn(tmp_path
     assert not (tmp_path / "README.md").exists()
 
 
-def test_permission_resume_preserves_tool_round_budget_for_same_user_turn(tmp_path) -> None:
+def test_permission_resume_preserves_tool_round_budget_for_same_user_turn(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3267,7 +3267,7 @@ def test_permission_resume_preserves_tool_round_budget_for_same_user_turn(tmp_pa
             ),
         ]
     )
-    loop = AgentLoop(
+    loop = make_loop(
         session=session,
         provider=provider,
         limits=AgentLoopLimits(max_tool_rounds=1, max_provider_calls=5, max_turn_seconds=None),
@@ -3282,7 +3282,7 @@ def test_permission_resume_preserves_tool_round_budget_for_same_user_turn(tmp_pa
     assert len(provider.requests) == 1
 
 
-def test_agent_loop_permission_reject_with_feedback_returns_feedback_to_model(tmp_path) -> None:
+def test_agent_loop_permission_reject_with_feedback_returns_feedback_to_model(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3308,7 +3308,7 @@ def test_agent_loop_permission_reject_with_feedback_returns_feedback_to_model(tm
             ChatResponse(provider="fake", model="fake-model", content="我会按反馈重新修改"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     pending = loop._run_user_turn_sync("写 README").pending_input
     assert pending is not None
@@ -3323,7 +3323,7 @@ def test_agent_loop_permission_reject_with_feedback_returns_feedback_to_model(tm
     assert "请保留原标题" in provider.requests[1].messages[-1].content
 
 
-def test_agent_loop_permission_allow_once_executes_without_grant(tmp_path) -> None:
+def test_agent_loop_permission_allow_once_executes_without_grant(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3349,7 +3349,7 @@ def test_agent_loop_permission_allow_once_executes_without_grant(tmp_path) -> No
             ChatResponse(provider="fake", model="fake-model", content="写好了"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     pending = loop._run_user_turn_sync("写 README").pending_input
     assert pending is not None
@@ -3365,7 +3365,7 @@ def test_agent_loop_permission_allow_once_executes_without_grant(tmp_path) -> No
     assert view.messages[2].parts[0].metadata["ok"] is True
 
 
-def test_agent_loop_permission_allow_once_rejects_stale_prewrite_review(tmp_path) -> None:
+def test_agent_loop_permission_allow_once_rejects_stale_prewrite_review(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3391,7 +3391,7 @@ def test_agent_loop_permission_allow_once_rejects_stale_prewrite_review(tmp_path
             ChatResponse(provider="fake", model="fake-model", content="预览已过期，未写入"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     pending = loop._run_user_turn_sync("写 README").pending_input
     assert pending is not None
@@ -3407,7 +3407,7 @@ def test_agent_loop_permission_allow_once_rejects_stale_prewrite_review(tmp_path
     assert tool_part.metadata["data"]["request_type"] == "prewrite_review_stale"
 
 
-def test_agent_loop_permission_allow_always_adds_grant_and_executes(tmp_path) -> None:
+def test_agent_loop_permission_allow_always_adds_grant_and_executes(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3433,7 +3433,7 @@ def test_agent_loop_permission_allow_always_adds_grant_and_executes(tmp_path) ->
             ChatResponse(provider="fake", model="fake-model", content="写好了"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     pending = loop._run_user_turn_sync("写 README").pending_input
     assert pending is not None
@@ -3447,7 +3447,7 @@ def test_agent_loop_permission_allow_always_adds_grant_and_executes(tmp_path) ->
     assert grants[0].scope_value == str((tmp_path / "README.md").resolve())
 
 
-def test_agent_loop_permission_resume_rejects_unknown_request_id(tmp_path) -> None:
+def test_agent_loop_permission_resume_rejects_unknown_request_id(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3472,7 +3472,7 @@ def test_agent_loop_permission_resume_rejects_unknown_request_id(tmp_path) -> No
             )
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     loop._run_user_turn_sync("写 README")
     result = loop._resume_with_user_input_sync("perm_wrong", "allow_once")
@@ -3484,7 +3484,7 @@ def test_agent_loop_permission_resume_rejects_unknown_request_id(tmp_path) -> No
     assert not (tmp_path / "README.md").exists()
 
 
-def test_agent_loop_permission_pending_blocks_new_user_turn_until_resolved(tmp_path) -> None:
+def test_agent_loop_permission_pending_blocks_new_user_turn_until_resolved(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3509,7 +3509,7 @@ def test_agent_loop_permission_pending_blocks_new_user_turn_until_resolved(tmp_p
             )
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     first = loop._run_user_turn_sync("写 README")
     second = loop._run_user_turn_sync("先别管权限，我有新问题")
@@ -3525,7 +3525,7 @@ def test_agent_loop_permission_pending_blocks_new_user_turn_until_resolved(tmp_p
     ]
 
 
-def test_agent_loop_permission_resume_continues_remaining_parallel_tools(tmp_path) -> None:
+def test_agent_loop_permission_resume_continues_remaining_parallel_tools(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3552,7 +3552,7 @@ def test_agent_loop_permission_resume_continues_remaining_parallel_tools(tmp_pat
             ChatResponse(provider="fake", model="fake-model", content="写好了"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     pending = loop._run_user_turn_sync("写 README，然后 echo").pending_input
     assert pending is not None
@@ -3573,7 +3573,7 @@ def test_agent_loop_permission_resume_continues_remaining_parallel_tools(tmp_pat
     assert provider.requests[1].messages[-1].tool_call_id == "call_echo"
 
 
-def test_agent_loop_chains_permission_prompts_across_deferred_batch(tmp_path) -> None:
+def test_agent_loop_chains_permission_prompts_across_deferred_batch(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3596,7 +3596,7 @@ def test_agent_loop_chains_permission_prompts_across_deferred_batch(tmp_path) ->
             ChatResponse(provider="fake", model="fake-model", content="写好了"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     pending = loop._run_user_turn_sync("写两个文件").pending_input
     assert pending is not None
@@ -3617,7 +3617,7 @@ def test_agent_loop_chains_permission_prompts_across_deferred_batch(tmp_path) ->
     assert (tmp_path / "b.md").read_text(encoding="utf-8") == "B"
 
 
-def test_agent_session_restores_pending_ask_user_across_restart(tmp_path) -> None:
+def test_agent_session_restores_pending_ask_user_across_restart(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
         store=store,
@@ -3639,7 +3639,7 @@ def test_agent_session_restores_pending_ask_user_across_restart(tmp_path) -> Non
             ),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
     pending = loop._run_user_turn_sync("提问").pending_input
     assert pending is not None
     assert pending.kind == "ask_user"
@@ -3660,7 +3660,7 @@ def test_agent_session_restores_pending_ask_user_across_restart(tmp_path) -> Non
     assert [call.id for call in restored.deferred_tool_calls] == ["call_echo"]
 
     # 用恢复出的 pending 继续回答，延迟批次里的 echo 仍会执行。
-    resumed_loop = AgentLoop(
+    resumed_loop = make_loop(
         session=resumed_session,
         provider=FakeProvider([ChatResponse(provider="fake", model="fake-model", content="完成")]),
     )
@@ -3681,7 +3681,7 @@ def test_agent_session_restores_pending_ask_user_across_restart(tmp_path) -> Non
     assert view.messages[3].parts[0].metadata["ok"] is True
 
 
-def test_agent_loop_permission_resume_uses_local_pending_not_ui_payload(tmp_path) -> None:
+def test_agent_loop_permission_resume_uses_local_pending_not_ui_payload(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3707,7 +3707,7 @@ def test_agent_loop_permission_resume_uses_local_pending_not_ui_payload(tmp_path
             ChatResponse(provider="fake", model="fake-model", content="写好了"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     pending = loop._run_user_turn_sync("写 README").pending_input
     assert pending is not None
@@ -3725,7 +3725,7 @@ def test_agent_loop_permission_resume_uses_local_pending_not_ui_payload(tmp_path
     assert tool_part.metadata["tool_call_id"] == "call_write"
 
 
-def test_agent_loop_permission_resume_ignores_nested_ui_argument_tampering(tmp_path) -> None:
+def test_agent_loop_permission_resume_ignores_nested_ui_argument_tampering(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
         store=store,
@@ -3751,7 +3751,7 @@ def test_agent_loop_permission_resume_ignores_nested_ui_argument_tampering(tmp_p
             ChatResponse(provider="fake", model="fake-model", content="写好了"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider)
+    loop = make_loop(session=session, provider=provider)
 
     pending = loop._run_user_turn_sync("写 README").pending_input
     assert pending is not None
@@ -3763,7 +3763,7 @@ def test_agent_loop_permission_resume_ignores_nested_ui_argument_tampering(tmp_p
     assert not (tmp_path / "pwned.txt").exists()
 
 
-def test_agent_loop_reconciles_unfinished_dag_task_plan_before_final_answer(tmp_path) -> None:
+def test_agent_loop_reconciles_unfinished_dag_task_plan_before_final_answer(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(store=store, session_id="sess_dag_task_plan_self_check", agents_md="")
     provider = FakeProvider(
@@ -3798,7 +3798,7 @@ def test_agent_loop_reconciles_unfinished_dag_task_plan_before_final_answer(tmp_
         ]
     )
 
-    response = AgentLoop(
+    response = make_loop(
         session=session,
         provider=provider,
         limits=AgentLoopLimits(max_tool_rounds=5, max_provider_calls=5, max_turn_seconds=None),
@@ -3811,7 +3811,7 @@ def test_agent_loop_reconciles_unfinished_dag_task_plan_before_final_answer(tmp_
     assert all("unfinished dag task plan" not in part.content for message in store.rebuild_session_view("sess_dag_task_plan_self_check").messages for part in message.parts)
 
 
-def test_agent_loop_runs_dag_task_plan_reconciliation_at_most_once_per_user_turn(tmp_path) -> None:
+def test_agent_loop_runs_dag_task_plan_reconciliation_at_most_once_per_user_turn(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     session = AgentSession.create(
         store=store,
@@ -3850,7 +3850,7 @@ def test_agent_loop_runs_dag_task_plan_reconciliation_at_most_once_per_user_turn
         ]
     )
 
-    response = AgentLoop(session=session, provider=provider)._run_user_turn_sync("执行 DAG 任务")
+    response = make_loop(session=session, provider=provider)._run_user_turn_sync("执行 DAG 任务")
 
     assert response.content == "仍有未完成图节点"
     reconciliation_requests = [request for request in provider.requests if any(message.role == "system" and "unfinished dag task plan" in message.content for message in request.messages)]

@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lanscoder.agent.loop import AgentLoop
 from lanscoder.agent.session import AgentSession
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.base import ChatProvider
@@ -29,14 +28,14 @@ class RecordingProvider(ChatProvider):
         return self.responses.pop(0)
 
 
-def test_user_language_does_not_auto_load_skill_before_provider_call(tmp_path: Path, monkeypatch) -> None:
+def test_user_language_does_not_auto_load_skill_before_provider_call(tmp_path: Path, monkeypatch, make_loop) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     _write_skill_project(tmp_path)
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(store=store, session_id="sess_skill", project_root=tmp_path)
     provider = RecordingProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
 
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("按框架跑一次今天的全球家办资讯简报")
+    make_loop(session=session, provider=provider)._run_user_turn_sync("按框架跑一次今天的全球家办资讯简报")
 
     assert [event for event in store.list_events("sess_skill") if event.type.startswith("skill_")] == []
     system_prompt = provider.requests[0].messages[0].content
@@ -45,7 +44,7 @@ def test_user_language_does_not_auto_load_skill_before_provider_call(tmp_path: P
     assert "# 全球家族办公室资讯简报" not in system_prompt
 
 
-def test_model_load_skill_call_returns_body_in_next_provider_request_and_audits(tmp_path: Path, monkeypatch) -> None:
+def test_model_load_skill_call_returns_body_in_next_provider_request_and_audits(tmp_path: Path, monkeypatch, make_loop) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     _write_skill_project(tmp_path)
     store = JsonlSessionStore(tmp_path / ".lanscoder")
@@ -63,7 +62,7 @@ def test_model_load_skill_call_returns_body_in_next_provider_request_and_audits(
         ]
     )
 
-    AgentLoop(session=session, provider=provider)._run_user_turn_sync("生成今天的简报")
+    make_loop(session=session, provider=provider)._run_user_turn_sync("生成今天的简报")
 
     events = store.list_events("sess_skill")
     assert [event.type for event in events if event.type.startswith("skill_")] == ["skill_selected", "skill_loaded"]
@@ -75,7 +74,7 @@ def test_model_load_skill_call_returns_body_in_next_provider_request_and_audits(
     assert "# Evidence Policy" not in tool_messages[0].content
 
 
-def test_resume_replays_loaded_skill_tool_result_without_reading_disk(tmp_path: Path, monkeypatch) -> None:
+def test_resume_replays_loaded_skill_tool_result_without_reading_disk(tmp_path: Path, monkeypatch, make_loop) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     _write_skill_project(tmp_path)
     store = JsonlSessionStore(tmp_path / ".lanscoder")
@@ -92,7 +91,7 @@ def test_resume_replays_loaded_skill_tool_result_without_reading_disk(tmp_path: 
             ChatResponse(provider="fake", model="fake-model", content="done"),
         ]
     )
-    AgentLoop(session=original, provider=provider)._run_user_turn_sync("生成简报")
+    make_loop(session=original, provider=provider)._run_user_turn_sync("生成简报")
     (tmp_path / ".lanscoder" / "skills" / "global-family-office-news-brief" / "SKILL.md").unlink()
 
     resumed = AgentSession.resume(
@@ -103,7 +102,7 @@ def test_resume_replays_loaded_skill_tool_result_without_reading_disk(tmp_path: 
     )
     resumed_provider = RecordingProvider([ChatResponse(provider="fake", model="fake-model", content="继续完成")])
 
-    AgentLoop(session=resumed, provider=resumed_provider)._run_user_turn_sync("继续")
+    make_loop(session=resumed, provider=resumed_provider)._run_user_turn_sync("继续")
 
     request_text = "\n".join(message.content for request in resumed_provider.requests for message in request.messages)
     assert "Loaded skill: global-family-office-news-brief" in request_text

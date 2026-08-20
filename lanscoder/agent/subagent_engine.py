@@ -1,6 +1,9 @@
-"""Subagent runner for the Phase 2 delegate tool.
+"""Subagent engine for the delegate tool.
 
-The first implementation keeps the boundary deliberately small:
+The child runner is not constructed here: the assembly root injects a
+``child_runner_factory`` so this module never imports ``AgentLoop`` (breaking
+the historical ``agent.loop -> agent.subagent -> agent.loop`` import cycle).
+The engine keeps the boundary deliberately small:
 
 - child sessions are fresh and metadata-tagged;
 - tool access is profile restricted;
@@ -13,11 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from lanscoder.agent.background import BackgroundJobManager, current_job_id
 from lanscoder.agent.loop_limits import AgentLoopLimits
+from lanscoder.agent.observer import TurnObserver
+from lanscoder.agent.ports import SessionTurnRunner
 from lanscoder.agent.session import AgentSession
 from lanscoder.agent.worktree import (
     Worktree,
@@ -53,8 +59,13 @@ from lanscoder.tools.types import Tool
 from lanscoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
 
 
-class SubagentRunner:
-    """Create and run isolated child AgentLoop sessions for delegate."""
+class SubagentEngine:
+    """Create and run isolated child sessions for the delegate tool.
+
+    The concrete child loop is produced by ``child_runner_factory`` (a
+    ``Callable[..., SessionTurnRunner]`` injected by the assembly root), so this
+    class never imports ``AgentLoop`` and the layer stays cycle-free.
+    """
 
     def __init__(
         self,
@@ -70,22 +81,20 @@ class SubagentRunner:
         request_options: MainRequestOptions | None = None,
         limits: AgentLoopLimits | None = None,
         background_manager: BackgroundJobManager | None = None,
+        child_runner_factory: Callable[..., SessionTurnRunner],
     ) -> None:
         self.store = store
         self.provider = provider
         self.tools = list(tools)
-        self.project_root = (
-            Path(project_root).resolve() if project_root is not None else None
-        )
+        self.project_root = Path(project_root).resolve() if project_root is not None else None
         self.agents_md = agents_md
         self.skill_catalog = skill_catalog or SkillCatalog()
         self.permission_manager = permission_manager
         self.sandbox_access = sandbox_access or SandboxAccess()
         self.request_options = request_options or MainRequestOptions()
-        self.limits = limits or AgentLoopLimits(
-            max_tool_rounds=20, max_provider_calls=40, max_turn_seconds=600
-        )
+        self.limits = limits or AgentLoopLimits(max_tool_rounds=20, max_provider_calls=40, max_turn_seconds=600)
         self.background_manager = background_manager
+        self.child_runner_factory = child_runner_factory
         # 前台 delegate 运行时的实时进度，TUI 用它渲染输入栏下方的 activity 行；
         # 无前台 delegate 时为 None。
         self.foreground_progress: dict[str, Any] | None = None
@@ -97,11 +106,7 @@ class SubagentRunner:
         profile = self.profile(role)
         if profile is None:
             return []
-        return [
-            tool
-            for tool in self.tools
-            if tool.name in profile.allowed_tool_names and tool.name != "delegate"
-        ]
+        return [tool for tool in self.tools if tool.name in profile.allowed_tool_names and tool.name != "delegate"]
 
     def run(self, request: SubagentRequest) -> SubagentResult:
         profile = self.profile(request.role)
@@ -137,17 +142,13 @@ class SubagentRunner:
             self.foreground_progress = tracker
         try:
             if self._needs_worktree(request, profile=profile):
-                return self._run_isolated(
-                    request, profile=profile, progress_tracker=tracker
-                )
+                return self._run_isolated(request, profile=profile, progress_tracker=tracker)
             return self._run_inline(request, profile=profile, progress_tracker=tracker)
         finally:
             if tracker is not None:
                 self.foreground_progress = None
 
-    def _needs_worktree(
-        self, request: SubagentRequest, *, profile: SubagentProfile
-    ) -> bool:
+    def _needs_worktree(self, request: SubagentRequest, *, profile: SubagentProfile) -> bool:
         """Whether this run must execute inside an isolated git worktree.
 
         Mutation-capable roles isolate when running in the background so a
@@ -173,49 +174,34 @@ class SubagentRunner:
         started = time.monotonic()
         try:
             prompt = self._child_prompt(request, profile=profile)
-            from lanscoder.agent.loop import AgentLoop
-
-            loop = AgentLoop(
-                session=child_session,
-                provider=self.provider,
-                tools=self.tools_for_role(request.role),
-                limits=self.limits,
-                request_options=self.request_options,
-                background_manager=None,
-                enable_delegate_tool=False,
-                progress_callback=self._make_progress_callback(progress_tracker),
-                cancellation_token=current_cancellation_token(),
+            result, runner = self._run_child_loop(
+                child_session,
+                prompt,
+                self.tools_for_role(request.role),
+                self._make_child_observer(progress_tracker),
             )
-            try:
-                result = asyncio.run(loop.run_user_turn(prompt))
-                response = result.response
-                if response is None:
-                    raise RuntimeError("subagent paused for user input")
+            usage = runner.usage_summary()
+            response = result.response if result is not None else None
+            if response is not None:
                 if response.finish_reason == "interrupted":
                     raise AgentCancelledError()
-            except AgentCancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - delegate must return a tool result, not break parent loop
-                usage = loop.usage_summary()
+                content = response.content.strip() or "Subagent finished without text output."
                 return SubagentResult(
-                    ok=False,
+                    ok=True,
                     role=request.role,
                     child_session_id=child_session.session_id,
-                    summary=f"Subagent failed: {exc}",
-                    error=str(exc),
+                    summary=content,
                     total_tokens=usage["total_tokens"],
                     provider_calls=usage["provider_calls"],
                     elapsed_seconds=time.monotonic() - started,
                 )
-            usage = loop.usage_summary()
-            content = (
-                response.content.strip() or "Subagent finished without text output."
-            )
+            summary, error = ("subagent paused for user input", "subagent paused for user input") if result is not None else ("subagent failed without a result", "child_loop_failed")
             return SubagentResult(
-                ok=True,
+                ok=False,
                 role=request.role,
                 child_session_id=child_session.session_id,
-                summary=content,
+                summary=summary,
+                error=error,
                 total_tokens=usage["total_tokens"],
                 provider_calls=usage["provider_calls"],
                 elapsed_seconds=time.monotonic() - started,
@@ -271,62 +257,33 @@ class SubagentRunner:
         self._attach_worktree_cleanup(manager, worktree)
 
         try:
-            child_session = self._create_isolated_child_session(
-                request, profile=profile, worktree=worktree, session_id=session_id
-            )
+            child_session = self._create_isolated_child_session(request, profile=profile, worktree=worktree, session_id=session_id)
             try:
                 prompt = self._child_prompt(request, profile=profile, worktree=worktree)
-                from lanscoder.agent.loop import AgentLoop
-
-                loop = AgentLoop(
-                    session=child_session,
-                    provider=self.provider,
-                    tools=self._worktree_child_tools(
+                started = time.monotonic()
+                result, runner = self._run_child_loop(
+                    child_session,
+                    prompt,
+                    self._worktree_child_tools(
                         worktree.path,
                         profile=profile,
                         access=child_session.sandbox_access,
                     ),
-                    limits=self.limits,
-                    request_options=self.request_options,
-                    background_manager=None,
-                    enable_delegate_tool=False,
-                    progress_callback=self._make_progress_callback(progress_tracker),
-                    cancellation_token=current_cancellation_token(),
+                    self._make_child_observer(progress_tracker),
                 )
-                started = time.monotonic()
-                try:
-                    result = asyncio.run(loop.run_user_turn(prompt))
-                    response = result.response
-                    if response is None:
-                        diff = manager.diff(worktree)
-                        usage = loop.usage_summary()
-                        return SubagentResult(
-                            ok=False,
-                            role=request.role,
-                            child_session_id=session_id,
-                            summary="隔离 coder 等待用户输入，无法在后台继续。",
-                            error="waiting_for_user_input",
-                            files_changed=diff.files_changed,
-                            worktree_path=str(worktree.path),
-                            worktree_branch=worktree.branch,
-                            diff_summary=diff.render(),
-                            total_tokens=usage["total_tokens"],
-                            provider_calls=usage["provider_calls"],
-                            elapsed_seconds=time.monotonic() - started,
-                        )
+                usage = runner.usage_summary()
+                diff = manager.diff(worktree)
+                response = result.response if result is not None else None
+                if response is not None:
                     if response.finish_reason == "interrupted":
                         raise AgentCancelledError()
-                except AgentCancelledError:
-                    raise
-                except Exception as exc:  # noqa: BLE001 - never break the parent loop
-                    diff = manager.diff(worktree)
-                    usage = loop.usage_summary()
+                    content = response.content.strip() or "Subagent finished without text output."
+                    summary = self._compose_isolated_summary(content, worktree=worktree, diff=diff)
                     return SubagentResult(
-                        ok=False,
+                        ok=True,
                         role=request.role,
                         child_session_id=session_id,
-                        summary=f"隔离 coder 执行失败：{exc}",
-                        error=str(exc),
+                        summary=summary,
                         files_changed=diff.files_changed,
                         worktree_path=str(worktree.path),
                         worktree_branch=worktree.branch,
@@ -335,19 +292,15 @@ class SubagentRunner:
                         provider_calls=usage["provider_calls"],
                         elapsed_seconds=time.monotonic() - started,
                     )
-                diff = manager.diff(worktree)
-                usage = loop.usage_summary()
-                content = (
-                    response.content.strip() or "Subagent finished without text output."
-                )
-                summary = self._compose_isolated_summary(
-                    content, worktree=worktree, diff=diff
+                summary, error = (
+                    ("隔离 coder 等待用户输入，无法在后台继续。", "waiting_for_user_input") if result is not None else ("隔离 coder 执行失败：child loop 未产出结果。", "child_loop_failed")
                 )
                 return SubagentResult(
-                    ok=True,
+                    ok=False,
                     role=request.role,
                     child_session_id=session_id,
                     summary=summary,
+                    error=error,
                     files_changed=diff.files_changed,
                     worktree_path=str(worktree.path),
                     worktree_branch=worktree.branch,
@@ -371,15 +324,9 @@ class SubagentRunner:
                 worktree_branch=worktree.branch,
             )
 
-    def create_child_session(
-        self, request: SubagentRequest, *, profile: SubagentProfile
-    ) -> AgentSession:
+    def create_child_session(self, request: SubagentRequest, *, profile: SubagentProfile) -> AgentSession:
         session_id = new_session_id()
-        permission_manager = (
-            self._background_child_permission_manager()
-            if request.run_in_background
-            else self._child_permission_manager_for_inline()
-        )
+        permission_manager = self._background_child_permission_manager() if request.run_in_background else self._child_permission_manager_for_inline()
         child = AgentSession.create(
             store=self.store,
             session_id=session_id,
@@ -416,11 +363,7 @@ class SubagentRunner:
         reserved-name guard.
         """
 
-        return [
-            tool
-            for tool in self.tools_for_role(role)
-            if tool.name != "retrieve_archive"
-        ]
+        return [tool for tool in self.tools_for_role(role) if tool.name != "retrieve_archive"]
 
     def _create_isolated_child_session(
         self,
@@ -438,9 +381,7 @@ class SubagentRunner:
         the parent working directory.
         """
 
-        permission_manager = self._child_permission_manager(
-            worktree.path, mutation=True
-        )
+        permission_manager = self._child_permission_manager(worktree.path, mutation=True)
         # PROJECT sandbox keeps every file tool physically confined to the worktree
         # root even though the policy auto-allows in-tree writes.
         sandbox_access = SandboxAccess(mode=SandboxAccessMode.PROJECT)
@@ -449,9 +390,7 @@ class SubagentRunner:
             session_id=session_id,
             agents_md=self.agents_md,
             skill_catalog=self.skill_catalog,
-            tools=self._worktree_child_tools(
-                worktree.path, profile=profile, access=sandbox_access, for_registry=True
-            ),
+            tools=self._worktree_child_tools(worktree.path, profile=profile, access=sandbox_access, for_registry=True),
             permission_manager=permission_manager,
             sandbox_access=sandbox_access,
         )
@@ -468,35 +407,51 @@ class SubagentRunner:
         )
         return child
 
-    def _make_progress_callback(self, progress_tracker: dict[str, Any] | None):
-        """返回进度回调：后台子 agent 写 BackgroundJob.progress，前台写 progress_tracker。
+    def _run_child_loop(self, child_session, prompt, tools, observer):
+        """Run the child loop via the injected factory and harvest the runner.
 
-        后台分支按线程局部 ``current_job_id()`` 判断，把进度写给对应 job 供 TUI 的
-        activity 面板读；前台分支写本次 run 创建的 ``progress_tracker``（由 run() 决定
-        并贯穿到本 run 结束）。回调把 tracker 按值闭包捕获，不再动态读共享属性，因此
+        The child's ``cancellation_token`` is captured at call time so a parent
+        turn cancelled mid-subagent aborts the child with ``AgentCancelledError``
+        (P2-9). Generic child failures are swallowed into ``result=None`` so the
+        delegate never breaks the parent loop; the caller builds the error result.
+        """
+
+        runner = self.child_runner_factory(
+            session=child_session,
+            tools=tools,
+            observer=observer,
+            cancellation_token=current_cancellation_token(),
+        )
+        try:
+            result = asyncio.run(runner.run_user_turn(prompt))
+            return result, runner
+        except AgentCancelledError:
+            raise
+        except Exception:
+            return None, runner
+
+    def _make_child_observer(self, progress_tracker: dict[str, Any] | None) -> TurnObserver:
+        """返回子 agent 的 TurnObserver：后台委托写 Job.progress，前台写 progress_tracker。
+
+        进度去向是每次 run 独立的决定，按线程局部 ``current_job_id()`` 分流：后台分支把
+        进度写给对应 job 供 TUI 的 activity 面板读，前台分支写本次 run 创建的
+        ``progress_tracker``（由 run() 决定并贯穿到本 run 结束）。tracker 按值闭包捕获，
         任何时刻清掉 ``self.foreground_progress`` 都不会让运行中的前台子 agent 崩溃。
         """
-        if self.background_manager is not None:
+
+        def _report(state: dict[str, Any]) -> None:
             job_id = current_job_id()
             if job_id is not None:
-
-                def _report(state: dict[str, Any]) -> None:
-                    job = self.background_manager.get(job_id)
-                    if job is not None:
-                        job.progress = state
-
-                return _report
-        if progress_tracker is not None:
-
-            def _report(state: dict[str, Any]) -> None:
+                job = self.background_manager.get(job_id) if self.background_manager is not None else None
+                if job is not None:
+                    job.progress = state
+                    return
+            if progress_tracker is not None:
                 progress_tracker.update(state)
 
-            return _report
-        return None
+        return TurnObserver(progress_callback=_report)
 
-    def _attach_worktree_cleanup(
-        self, manager: WorktreeManager, worktree: Worktree
-    ) -> None:
+    def _attach_worktree_cleanup(self, manager: WorktreeManager, worktree: Worktree) -> None:
         """Attach worktree teardown to the current background job.
 
         A background coder runs inside an isolated worktree that is normally left
@@ -626,11 +581,7 @@ class SubagentRunner:
             access=access,
         )
         allowed = profile.allowed_tool_names
-        tools = [
-            tool
-            for tool in registry.tools()
-            if tool.name in allowed and tool.name != "delegate"
-        ]
+        tools = [tool for tool in registry.tools() if tool.name in allowed and tool.name != "delegate"]
         if for_registry:
             tools = [tool for tool in tools if tool.name != "retrieve_archive"]
         return tools
@@ -642,14 +593,8 @@ class SubagentRunner:
         profile: SubagentProfile,
         worktree: Worktree | None = None,
     ) -> str:
-        hints = "\n".join(
-            f"- {hint}" for hint in request.path_hints if str(hint).strip()
-        )
-        summary = (
-            request.parent_summary.strip()
-            if request.parent_summary
-            else "(none provided)"
-        )
+        hints = "\n".join(f"- {hint}" for hint in request.path_hints if str(hint).strip())
+        summary = request.parent_summary.strip() if request.parent_summary else "(none provided)"
         if worktree is not None:
             root = str(worktree.path)
             isolation = (
@@ -658,11 +603,7 @@ class SubagentRunner:
                 "then summarize what you changed. Do not attempt to merge or push.\n"
             )
         else:
-            root = (
-                str(self.project_root)
-                if self.project_root is not None
-                else "(current project root)"
-            )
+            root = str(self.project_root) if self.project_root is not None else "(current project root)"
             isolation = ""
         return (
             f"You are a LansCoder subagent with role: {profile.role}.\n"
@@ -676,9 +617,7 @@ class SubagentRunner:
             f"Task:\n{request.task}"
         )
 
-    def _compose_isolated_summary(
-        self, content: str, *, worktree: Worktree, diff: "WorktreeDiff"
-    ) -> str:
+    def _compose_isolated_summary(self, content: str, *, worktree: Worktree, diff: "WorktreeDiff") -> str:
         parts = [
             content,
             "",

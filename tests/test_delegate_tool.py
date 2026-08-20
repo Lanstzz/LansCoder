@@ -4,10 +4,10 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lanscoder.agent._builders import create_agent_loop
+from lanscoder.app.runtime import create_agent_loop
 from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.session import AgentSession
-from lanscoder.agent.subagent import SubagentRunner
+from lanscoder.agent.subagent_engine import SubagentEngine
 from lanscoder.subagent.types import SubagentRequest, SubagentResult
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.base import ChatProvider
@@ -84,9 +84,30 @@ def _create_task_plan(session: AgentSession, *, task_id: str) -> None:
     assert result.ok is True
 
 
+def _child_runner_factory(provider):
+    """Build a child-loop factory closed over ``provider`` for one test.
+
+    Mirrors the production closure in ``app/runtime.create_agent_loop``: the
+    child never gets the delegate tool, and cancellation flows from the parent
+    turn through the current cancellation token.
+    """
+
+    def _factory(*, session, tools, observer, cancellation_token):
+        return create_agent_loop(
+            session=session,
+            provider=provider,
+            tools=tools,
+            observer=observer,
+            cancellation_token=cancellation_token,
+            enable_delegate_tool=False,
+        )
+
+    return _factory
+
+
 def test_subagent_runner_filters_tools_by_profile(tmp_path) -> None:
     provider = FakeProvider([])
-    runner = SubagentRunner(
+    runner = SubagentEngine(
         store=JsonlSessionStore(tmp_path),
         provider=provider,
         tools=[
@@ -96,6 +117,7 @@ def test_subagent_runner_filters_tools_by_profile(tmp_path) -> None:
             _tool("delegate"),
             _tool("shell"),
         ],
+        child_runner_factory=_child_runner_factory(provider),
     )
 
     assert [tool.name for tool in runner.tools_for_role("reviewer")] == ["view", "grep"]
@@ -106,7 +128,13 @@ def test_subagent_runner_filters_tools_by_profile(tmp_path) -> None:
 
 def test_child_session_is_metadata_tagged(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    runner = SubagentRunner(store=store, provider=FakeProvider([]), tools=[_tool("view")])
+    provider = FakeProvider([])
+    runner = SubagentEngine(
+        store=store,
+        provider=provider,
+        tools=[_tool("view")],
+        child_runner_factory=_child_runner_factory(provider),
+    )
 
     child = runner.create_child_session(
         SubagentRequest(
@@ -127,7 +155,12 @@ def test_child_session_is_metadata_tagged(tmp_path) -> None:
 def test_subagent_run_restricts_child_tools_and_deletes_session(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="child done")])
-    runner = SubagentRunner(store=store, provider=provider, tools=[_tool("view"), _tool("delegate")])
+    runner = SubagentEngine(
+        store=store,
+        provider=provider,
+        tools=[_tool("view"), _tool("delegate")],
+        child_runner_factory=_child_runner_factory(provider),
+    )
 
     result = runner.run(
         SubagentRequest(
@@ -151,11 +184,11 @@ def test_subagent_run_restricts_child_tools_and_deletes_session(tmp_path) -> Non
     assert all(record.session_id != result.child_session_id for record in records)
 
 
-def test_agent_loop_registers_delegate_and_foreground_returns_summary(tmp_path) -> None:
+def test_agent_loop_registers_delegate_and_foreground_returns_summary(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="child summary")])
     session = AgentSession.create(store=store, session_id="parent_delegate", tools=[_tool("view")])
-    create_agent_loop(session=session, provider=provider)
+    make_loop(session=session, provider=provider)
 
     assert "delegate" in session.tool_registry.names()
     result = session.tool_registry.execute("delegate", {"role": "researcher", "task": "read docs"})
@@ -166,7 +199,7 @@ def test_agent_loop_registers_delegate_and_foreground_returns_summary(tmp_path) 
     assert "child summary" in result.content
 
 
-def test_foreground_delegate_result_includes_usage_and_elapsed(tmp_path) -> None:
+def test_foreground_delegate_result_includes_usage_and_elapsed(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     provider = FakeProvider(
         [
@@ -179,7 +212,7 @@ def test_foreground_delegate_result_includes_usage_and_elapsed(tmp_path) -> None
         ]
     )
     session = AgentSession.create(store=store, session_id="parent_usage", tools=[_tool("view")])
-    create_agent_loop(session=session, provider=provider)
+    make_loop(session=session, provider=provider)
 
     result = session.tool_registry.execute("delegate", {"role": "researcher", "task": "read docs"})
 
@@ -191,9 +224,15 @@ def test_foreground_delegate_result_includes_usage_and_elapsed(tmp_path) -> None
     assert "calls" in result.content
 
 
-def test_foreground_progress_callback_writes_to_runner_tracker(tmp_path) -> None:
+def test_foreground_progress_writes_to_runner_tracker(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    runner = SubagentRunner(store=store, provider=FakeProvider([]), tools=[_tool("view")])
+    provider = FakeProvider([])
+    runner = SubagentEngine(
+        store=store,
+        provider=provider,
+        tools=[_tool("view")],
+        child_runner_factory=_child_runner_factory(provider),
+    )
     tracker = {
         "label": "researcher",
         "started_at": 0.0,
@@ -201,10 +240,9 @@ def test_foreground_progress_callback_writes_to_runner_tracker(tmp_path) -> None
         "total_tokens": 0,
     }
 
-    callback = runner._make_progress_callback(tracker)
+    observer = runner._make_child_observer(tracker)
+    observer.on_progress(2, 1500)
 
-    assert callback is not None
-    callback({"provider_calls": 2, "total_tokens": 1500})
     assert tracker["provider_calls"] == 2
     assert tracker["total_tokens"] == 1500
 
@@ -212,7 +250,7 @@ def test_foreground_progress_callback_writes_to_runner_tracker(tmp_path) -> None
 def test_background_delegate_does_not_expose_foreground_tracker(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     observed: list[dict | None] = []
-    runner: SubagentRunner
+    runner: SubagentEngine
 
     class ProbeProvider(FakeProvider):
         def complete(self, request):
@@ -222,11 +260,13 @@ def test_background_delegate_does_not_expose_foreground_tracker(tmp_path) -> Non
             return ChatResponse(provider="fake", model="fake-model", content="child done")
 
     manager = BackgroundJobManager()
-    runner = SubagentRunner(
+    provider = ProbeProvider([])
+    runner = SubagentEngine(
         store=store,
-        provider=ProbeProvider([]),
+        provider=provider,
         tools=[_tool("view")],
         background_manager=manager,
+        child_runner_factory=_child_runner_factory(provider),
     )
 
     def job_func() -> ToolResult:
@@ -274,11 +314,12 @@ def test_foreground_delegate_survives_background_delegate_finish(tmp_path) -> No
     manager = BackgroundJobManager()
     provider = GatedProvider([])
     provider._gate_active = True
-    runner = SubagentRunner(
+    runner = SubagentEngine(
         store=store,
         provider=provider,
         tools=[_tool("view")],
         background_manager=manager,
+        child_runner_factory=_child_runner_factory(provider),
     )
     foreground_results: list[SubagentResult] = []
 
@@ -329,7 +370,13 @@ def test_foreground_delegate_cancel_aborts_child(tmp_path) -> None:
                 raise AssertionError("release gate was not opened")
             return ChatResponse(provider="fake", model="fake-model", content="child done")
 
-    runner = SubagentRunner(store=store, provider=BlockingProvider([]), tools=[_tool("view")])
+    provider = BlockingProvider([])
+    runner = SubagentEngine(
+        store=store,
+        provider=provider,
+        tools=[_tool("view")],
+        child_runner_factory=_child_runner_factory(provider),
+    )
     token = CancellationToken()
     outcomes: list[object] = []
 
@@ -377,11 +424,13 @@ def test_background_delegate_cancel_aborts_child(tmp_path) -> None:
                 raise AssertionError("release gate was not opened")
             return ChatResponse(provider="fake", model="fake-model", content="child done")
 
-    runner = SubagentRunner(
+    provider = BlockingProvider([])
+    runner = SubagentEngine(
         store=store,
-        provider=BlockingProvider([]),
+        provider=provider,
         tools=[_tool("view")],
         background_manager=manager,
+        child_runner_factory=_child_runner_factory(provider),
     )
     outcomes: list[object] = []
 
@@ -435,11 +484,13 @@ def test_background_delegate_cancel_keeps_job_error_clear(tmp_path) -> None:
                 raise AssertionError("release gate was not opened")
             return ChatResponse(provider="fake", model="fake-model", content="child done")
 
-    runner = SubagentRunner(
+    provider = BlockingProvider([])
+    runner = SubagentEngine(
         store=store,
-        provider=BlockingProvider([]),
+        provider=provider,
         tools=[_tool("view")],
         background_manager=manager,
+        child_runner_factory=_child_runner_factory(provider),
     )
 
     def job_func() -> ToolResult:
@@ -467,7 +518,7 @@ def test_background_delegate_cancel_keeps_job_error_clear(tmp_path) -> None:
     assert job.error is None
 
 
-def test_background_delegate_returns_placeholder_and_notification(tmp_path) -> None:
+def test_background_delegate_returns_placeholder_and_notification(tmp_path, make_loop) -> None:
     store = JsonlSessionStore(tmp_path)
     manager = BackgroundJobManager()
     gate = threading.Event()
@@ -486,7 +537,7 @@ def test_background_delegate_returns_placeholder_and_notification(tmp_path) -> N
     provider = BlockingProvider([])
     try:
         session = AgentSession.create(store=store, session_id="parent_bg_delegate", tools=[_tool("view")])
-        loop = create_agent_loop(session=session, provider=provider, background_manager=manager)
+        loop = make_loop(session=session, provider=provider, background_manager=manager)
         _create_task_plan(session, task_id="research_a")
         session.append_user_message("start")
         call = _delegate_call(
@@ -530,7 +581,7 @@ def test_background_delegate_returns_placeholder_and_notification(tmp_path) -> N
         manager.shutdown()
 
 
-def test_coder_delegate_background_rejected_without_git_repo(tmp_path) -> None:
+def test_coder_delegate_background_rejected_without_git_repo(tmp_path, make_loop) -> None:
     """Background coder needs worktree isolation; a non-git project must be refused.
 
     Phase 4 allows background coder only when a git worktree can be created.  With
@@ -543,7 +594,7 @@ def test_coder_delegate_background_rejected_without_git_repo(tmp_path) -> None:
     provider = FakeProvider([])
     try:
         session = AgentSession.create(store=store, session_id="parent_coder_bg", tools=[_tool("view")])
-        loop = create_agent_loop(session=session, provider=provider, background_manager=manager)
+        loop = make_loop(session=session, provider=provider, background_manager=manager)
         session.append_user_message("start")
         call = _delegate_call("call_delegate", role="coder", task="edit files", run_in_background=True)
         session.append_assistant_response(
@@ -589,7 +640,7 @@ def test_isolated_coder_writes_only_in_worktree(tmp_path) -> None:
     from lanscoder.permissions.manager import PermissionManager
     from lanscoder.permissions.policy import DefaultPermissionPolicy
     from lanscoder.permissions.types import PermissionMode
-    from lanscoder.agent.subagent import SubagentRunner
+    from lanscoder.agent.subagent_engine import SubagentEngine
     from lanscoder.subagent.types import SubagentRequest
 
     repo = tmp_path / "repo"
@@ -613,12 +664,13 @@ def test_isolated_coder_writes_only_in_worktree(tmp_path) -> None:
     )
     store = JsonlSessionStore(repo / ".fc_sessions")
     permission_manager = PermissionManager(policy=DefaultPermissionPolicy(repo), mode=PermissionMode.STANDARD)
-    runner = SubagentRunner(
+    runner = SubagentEngine(
         store=store,
         provider=provider,
         tools=[],
         project_root=repo,
         permission_manager=permission_manager,
+        child_runner_factory=_child_runner_factory(provider),
     )
 
     result = runner.run(
@@ -651,7 +703,7 @@ def test_isolated_coder_can_delete_inside_worktree_without_parent_delete(
     from lanscoder.permissions.manager import PermissionManager
     from lanscoder.permissions.policy import DefaultPermissionPolicy
     from lanscoder.permissions.types import PermissionMode
-    from lanscoder.agent.subagent import SubagentRunner
+    from lanscoder.agent.subagent_engine import SubagentEngine
     from lanscoder.subagent.types import SubagentRequest
 
     repo = tmp_path / "repo"
@@ -671,12 +723,13 @@ def test_isolated_coder_can_delete_inside_worktree_without_parent_delete(
             ChatResponse(provider="fake", model="fake-model", content="Deleted seed.txt"),
         ]
     )
-    runner = SubagentRunner(
+    runner = SubagentEngine(
         store=JsonlSessionStore(repo / ".fc_sessions"),
         provider=provider,
         tools=[],
         project_root=repo,
         permission_manager=PermissionManager(policy=DefaultPermissionPolicy(repo), mode=PermissionMode.STANDARD),
+        child_runner_factory=_child_runner_factory(provider),
     )
 
     result = runner.run(
@@ -699,7 +752,7 @@ def test_isolated_coder_dangerous_shell_is_denied_not_waiting(tmp_path) -> None:
     """A dangerous shell in a background coder is auto-DENIED (not paused), so the
     child keeps running instead of surfacing waiting_for_user_input."""
 
-    from lanscoder.agent.subagent import SubagentRunner
+    from lanscoder.agent.subagent_engine import SubagentEngine
     from lanscoder.subagent.types import SubagentRequest
 
     repo = tmp_path / "repo"
@@ -722,11 +775,12 @@ def test_isolated_coder_dangerous_shell_is_denied_not_waiting(tmp_path) -> None:
             ),
         ]
     )
-    runner = SubagentRunner(
+    runner = SubagentEngine(
         store=JsonlSessionStore(repo / ".fc_sessions"),
         provider=provider,
         tools=[],
         project_root=repo,
+        child_runner_factory=_child_runner_factory(provider),
     )
 
     result = runner.run(
@@ -753,11 +807,13 @@ def test_background_child_permission_manager_is_autonomous(tmp_path) -> None:
 
     repo = tmp_path / "repo"
     repo.mkdir()
-    runner = SubagentRunner(
+    provider = FakeProvider([])
+    runner = SubagentEngine(
         store=JsonlSessionStore(repo / ".fc_sessions"),
-        provider=FakeProvider([]),
+        provider=provider,
         tools=[],
         project_root=repo,
+        child_runner_factory=_child_runner_factory(provider),
     )
 
     manager = runner._background_child_permission_manager()
@@ -767,7 +823,7 @@ def test_background_child_permission_manager_is_autonomous(tmp_path) -> None:
     assert manager.mode == PermissionMode.AGGRESSIVE
 
 
-def test_background_coder_uses_worktree_and_leaves_parent_untouched(tmp_path) -> None:
+def test_background_coder_uses_worktree_and_leaves_parent_untouched(tmp_path, make_loop) -> None:
     """Phase 4: background delegate for coder runs isolated and reports a diff summary."""
 
     from lanscoder.permissions.manager import PermissionManager
@@ -800,7 +856,7 @@ def test_background_coder_uses_worktree_and_leaves_parent_untouched(tmp_path) ->
             session_id="parent_bg_coder",
             permission_manager=permission_manager,
         )
-        loop = create_agent_loop(session=session, provider=provider, background_manager=manager)
+        loop = make_loop(session=session, provider=provider, background_manager=manager)
         _create_task_plan(session, task_id="impl")
         session.append_user_message("start")
         call = _delegate_call(
@@ -865,13 +921,15 @@ def test_isolated_coder_cancel_aborts_child(tmp_path) -> None:
             return ChatResponse(provider="fake", model="fake-model", content="coder done")
 
     store = JsonlSessionStore(repo / ".fc_sessions")
-    runner = SubagentRunner(
+    provider = BlockingProvider([])
+    runner = SubagentEngine(
         store=store,
-        provider=BlockingProvider([]),
+        provider=provider,
         tools=[],
         project_root=repo,
         permission_manager=PermissionManager(policy=DefaultPermissionPolicy(repo), mode=PermissionMode.STANDARD),
         background_manager=manager,
+        child_runner_factory=_child_runner_factory(provider),
     )
     outcomes: list[object] = []
 
@@ -906,15 +964,16 @@ def test_isolated_coder_cancel_aborts_child(tmp_path) -> None:
 def test_isolated_coder_without_git_repo_returns_error(tmp_path) -> None:
     """When isolation is requested but the project is not a git repo, fail cleanly."""
 
-    from lanscoder.agent.subagent import SubagentRunner
+    from lanscoder.agent.subagent_engine import SubagentEngine
     from lanscoder.subagent.types import SubagentRequest
 
     provider = FakeProvider([])
-    runner = SubagentRunner(
+    runner = SubagentEngine(
         store=JsonlSessionStore(tmp_path),
         provider=provider,
         tools=[],
         project_root=tmp_path,
+        child_runner_factory=_child_runner_factory(provider),
     )
     result = runner.run(
         SubagentRequest(
