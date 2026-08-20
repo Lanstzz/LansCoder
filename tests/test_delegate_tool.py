@@ -181,6 +181,41 @@ def test_foreground_progress_callback_writes_to_runner_tracker(tmp_path) -> None
     assert runner.foreground_progress["total_tokens"] == 1500
 
 
+def test_background_delegate_does_not_expose_foreground_tracker(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    observed: list[dict | None] = []
+    runner: SubagentRunner
+
+    class ProbeProvider(FakeProvider):
+        def complete(self, request):
+            if request.tools == [] and request.tool_choice == "none" and request.max_tokens == 512:
+                return super().complete(request)
+            observed.append(runner.foreground_progress)
+            return ChatResponse(provider="fake", model="fake-model", content="child done")
+
+    manager = BackgroundJobManager()
+    runner = SubagentRunner(
+        store=store,
+        provider=ProbeProvider([]),
+        tools=[_tool("view")],
+        background_manager=manager,
+    )
+
+    def job_func() -> ToolResult:
+        runner.run(SubagentRequest(role="researcher", task="inspect", parent_session_id="parent_1"))
+        return make_text_result("delegate", "done")
+
+    job = manager.start(job_func, tool_name="delegate")
+    try:
+        assert manager.wait(timeout=5) is True
+    finally:
+        manager.shutdown()
+
+    assert observed, "child provider must run as part of the background job"
+    assert observed[0] is None  # no phantom foreground tracker inside a background delegate
+    assert job.progress, "background progress must go to the job, not a foreground tracker"
+
+
 def test_background_delegate_returns_placeholder_and_notification(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     manager = BackgroundJobManager()
