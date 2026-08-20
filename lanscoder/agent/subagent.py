@@ -291,6 +291,7 @@ class SubagentRunner:
                     background_manager=None,
                     enable_delegate_tool=False,
                     progress_callback=self._make_progress_callback(progress_tracker),
+                    cancellation_token=current_cancellation_token(),
                 )
                 started = time.monotonic()
                 try:
@@ -313,6 +314,10 @@ class SubagentRunner:
                             provider_calls=usage["provider_calls"],
                             elapsed_seconds=time.monotonic() - started,
                         )
+                    if response.finish_reason == "interrupted":
+                        raise AgentCancelledError()
+                except AgentCancelledError:
+                    raise
                 except Exception as exc:  # noqa: BLE001 - never break the parent loop
                     diff = manager.diff(worktree)
                     usage = loop.usage_summary()
@@ -353,6 +358,8 @@ class SubagentRunner:
                 )
             finally:
                 self._delete_child_session(session_id)
+        except AgentCancelledError:
+            raise
         except Exception as exc:  # noqa: BLE001 - defensive: setup failures must not break parent loop
             return SubagentResult(
                 ok=False,

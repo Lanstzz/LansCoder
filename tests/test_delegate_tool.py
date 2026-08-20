@@ -904,6 +904,79 @@ def test_background_coder_uses_worktree_and_leaves_parent_untouched(tmp_path) ->
         manager.shutdown()
 
 
+def test_isolated_coder_cancel_aborts_child(tmp_path) -> None:
+    """A cancelled background coder must abort its worktree-isolated subagent with
+    AgentCancelledError and finish cancelled, not run to completion."""
+
+    from lanscoder.permissions.manager import PermissionManager
+    from lanscoder.permissions.policy import DefaultPermissionPolicy
+    from lanscoder.permissions.types import PermissionMode
+    from lanscoder.runtime.cancellation import AgentCancelledError
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+
+    manager = BackgroundJobManager()
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingProvider(FakeProvider):
+        def complete(self, request: ChatRequest) -> ChatResponse:
+            if (
+                request.tools == []
+                and request.tool_choice == "none"
+                and request.max_tokens == 512
+            ):
+                return super().complete(request)
+            started.set()
+            if not release.wait(5):
+                raise AssertionError("release gate was not opened")
+            return ChatResponse(
+                provider="fake", model="fake-model", content="coder done"
+            )
+
+    store = JsonlSessionStore(repo / ".fc_sessions")
+    runner = SubagentRunner(
+        store=store,
+        provider=BlockingProvider([]),
+        tools=[],
+        project_root=repo,
+        permission_manager=PermissionManager(
+            policy=DefaultPermissionPolicy(repo), mode=PermissionMode.STANDARD
+        ),
+        background_manager=manager,
+    )
+    outcomes: list[object] = []
+
+    def job_func() -> ToolResult:
+        try:
+            runner.run(
+                SubagentRequest(
+                    role="coder",
+                    task="edit in isolation",
+                    parent_session_id="p_coder",
+                    isolate_worktree=True,
+                )
+            )
+        except AgentCancelledError as exc:
+            outcomes.append(exc)
+        return make_text_result("delegate", "done")
+
+    try:
+        job = manager.start(job_func, tool_name="delegate")
+        assert started.wait(5), "isolated child should start and block on its provider"
+        manager.cancel(job.id)
+        release.set()
+        assert manager.wait(timeout=5) is True
+    finally:
+        manager.shutdown()
+
+    assert len(outcomes) == 1
+    assert isinstance(outcomes[0], AgentCancelledError)
+    assert job.status == "cancelled"
+
+
 def test_isolated_coder_without_git_repo_returns_error(tmp_path) -> None:
     """When isolation is requested but the project is not a git repo, fail cleanly."""
 
