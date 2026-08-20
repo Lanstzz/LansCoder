@@ -1026,3 +1026,130 @@ def test_isolated_coder_without_git_repo_returns_error(tmp_path) -> None:
     assert result.error == "worktree_unavailable"
     # 没有真正调用 provider（在创建 worktree 前就返回了）。
     assert provider.requests == []
+
+
+def test_child_factory_loop_carries_tight_guardrail_limits(tmp_path) -> None:
+    """A child loop built the way the assembly root builds one carries the tight budget.
+
+    Regression for the human decision on the child delegate budget: the child
+    factory must forward ``DEFAULT_CHILD_LIMITS`` (20 tool rounds / 40 provider
+    calls / 600s), not the parent runtime's looser limits.
+    """
+
+    from lanscoder.agent.loop_limits import AgentLoopLimits
+    from lanscoder.agent.subagent_engine import DEFAULT_CHILD_LIMITS
+    from lanscoder.providers.types import MainRequestOptions
+
+    assert DEFAULT_CHILD_LIMITS.max_tool_rounds == 20
+    assert DEFAULT_CHILD_LIMITS.max_provider_calls == 40
+    assert DEFAULT_CHILD_LIMITS.max_turn_seconds == 600
+
+    store = JsonlSessionStore(tmp_path)
+    provider = FakeProvider([])
+    runner = SubagentEngine(
+        store=store,
+        provider=provider,
+        tools=[_tool("view")],
+        permission_coordinator=_engine_coordinator(),
+        limits=DEFAULT_CHILD_LIMITS,
+        request_options=MainRequestOptions(),
+        child_runner_factory=lambda **kwargs: None,
+    )
+    child_session = runner.create_child_session(
+        SubagentRequest(role="researcher", task="inspect", parent_session_id="p_budget"),
+        profile=runner.profile("researcher"),
+    )
+    try:
+        child_loop = create_agent_loop(
+            session=child_session,
+            provider=provider,
+            tools=[_tool("view")],
+            cancellation_token=None,
+            background_manager=None,
+            enable_delegate_tool=False,
+            limits=DEFAULT_CHILD_LIMITS,
+            request_options=MainRequestOptions(),
+        )
+        assert child_loop.limits.max_tool_rounds == 20
+        assert child_loop.limits.max_provider_calls == 40
+        assert child_loop.limits.max_turn_seconds == 600
+        assert isinstance(child_loop.limits, AgentLoopLimits)
+    finally:
+        runner._delete_child_session(child_session.session_id)
+
+
+def test_child_delegate_does_not_inherit_parent_guardrail_limits(make_loop, tmp_path) -> None:
+    """Delegate children keep the tight child budget, not the parent's limits.
+
+    The parent is configured with ``max_provider_calls=1``; a child that needed
+    2 provider calls would stop after the first if it inherited that budget. It
+    completes both calls, proving the production child factory forwards the tight
+    child default, not the parent's limits.
+    """
+
+    from lanscoder.agent.loop_limits import AgentLoopLimits
+    from lanscoder.permissions.manager import PermissionManager
+    from lanscoder.permissions.policy import DefaultPermissionPolicy
+    from lanscoder.permissions.types import PermissionMode
+
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(
+        store=store,
+        session_id="parent_tight_budget",
+        tools=[_tool("view")],
+        permission_manager=PermissionManager(policy=DefaultPermissionPolicy(tmp_path), mode=PermissionMode.BYPASS),
+    )
+    provider = FakeProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="",
+                tool_calls=[ToolCall(id="c1", name="view", arguments={"text": "a"})],
+                finish_reason="tool_calls",
+            ),
+            ChatResponse(provider="fake", model="fake-model", content="child done"),
+        ]
+    )
+    make_loop(
+        session=session,
+        provider=provider,
+        limits=AgentLoopLimits(max_provider_calls=1, max_tool_rounds=5, max_turn_seconds=60),
+    )
+
+    result = session.tool_registry.execute("delegate", {"role": "researcher", "task": "read docs"})
+
+    assert result.ok is True
+    # The child needed 2 provider calls; inheriting the parent's max_provider_calls=1
+    # would have stopped it after the first with a provider-call-limit response.
+    assert len(provider.requests) == 2
+
+
+def test_child_failure_message_surfaces_to_parent(tmp_path) -> None:
+    """A crashing child surfaces its concrete error message in the SubagentResult.
+
+    Regression for the whole-branch finding: generic child failures must reach
+    the parent model again (base surfaced ``str(exc)``), not a generic
+    "child_loop_failed" summary with only a log trace.
+    """
+
+    store = JsonlSessionStore(tmp_path)
+
+    class ExplodingProvider(FakeProvider):
+        def complete(self, request):
+            raise RuntimeError("child exploded")
+
+    provider = ExplodingProvider([])
+    runner = SubagentEngine(
+        store=store,
+        provider=provider,
+        tools=[_tool("view")],
+        permission_coordinator=_engine_coordinator(),
+        child_runner_factory=_child_runner_factory(provider),
+    )
+
+    result = runner.run(SubagentRequest(role="researcher", task="inspect", parent_session_id="p1"))
+
+    assert result.ok is False
+    assert result.error == "child exploded"
+    assert "child exploded" in result.summary
