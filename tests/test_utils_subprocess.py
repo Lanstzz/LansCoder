@@ -38,16 +38,19 @@ class TestRunCommand:
 
     @pytest.mark.skipif(os.name == "nt", reason="进程组断言使用 POSIX 进程组语义")
     def test_timeout_kills_process_group_and_collects_partial_output(self, tmp_path):
+        # 子进程 sleep 必须远大于 0.1s 超时：留给超时触发足够的余量，否则高负载下
+        # communicate 可能等命令自己跑完才返回，把超时"错过"（历史 flaky 根因）。
         marker = tmp_path / "grandchild-survived"
-        child_code = "import pathlib, time; time.sleep(0.5); " f"pathlib.Path({str(marker)!r}).write_text('survived')"
-        command = f"printf 'before-timeout\\n'; " f'{sys.executable} -c "{child_code}" & ' "wait"
+        child_code = f"import pathlib, time; time.sleep(2); pathlib.Path({str(marker)!r}).write_text('survived')"
+        command = f"printf 'before-timeout\\n'; {sys.executable} -c \"{child_code}\" & wait"
 
         result = run_command(command, cwd=tmp_path, timeout_seconds=0.1, shell=True)
 
         assert result.ok is False
         assert result.error == "命令执行超时"
         assert "before-timeout" in result.stdout
-        time.sleep(0.7)
+        # 等过子进程的 marker deadline（2s）再断言：幸存者若存在此时必然已写入。
+        time.sleep(2.2)
         assert not marker.exists()
 
     def test_os_error(self, tmp_path):

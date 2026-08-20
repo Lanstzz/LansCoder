@@ -118,6 +118,13 @@ def _run_command_with_process_group(
                 timed_out = True
                 break
 
+    if not interrupted and not timed_out and time.monotonic() >= deadline:
+        # communicate() enforces its own timeout, but under load that check can
+        # return normally after the process already overshot the wall-clock
+        # deadline.  Honor the deadline even then, so a command that finished
+        # late is still reported as timed out and its process group is killed.
+        timed_out = True
+
     if interrupted or timed_out:
         _terminate_process_group(process)
         # communicate() again drains everything the process group emitted before
