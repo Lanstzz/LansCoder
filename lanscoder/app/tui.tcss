@@ -135,7 +135,6 @@ ScrollBarCorner {
 .tool-running,
 .tool-done,
 .tool-failed,
-.tool-skipped,
 .tool-denied {
     color: #808185;
     background: #0f1014;

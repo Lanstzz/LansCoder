@@ -3477,21 +3477,6 @@ def test_lanscoder_app_renders_bypass_prewrite_review_without_permission_prompt(
     assert app._activity_text != "waiting · permission"
 
 
-def test_tool_skipped_has_stable_gray_tool_class() -> None:
-    assert (
-        entry_classes(
-            TuiTranscriptEntry(
-                id=1,
-                kind=TuiEntryKind.TOOL,
-                body="已暂停等待用户输入，跳过同批次后续工具调用。",
-                label="tool shell skipped",
-                status="skipped",
-            )
-        )
-        == "message tool-message tool-skipped"
-    )
-
-
 def test_plain_static_renders_tool_arguments_with_markup_characters_as_text() -> None:
     content = "tool shell running\n" '  正在调用工具：shell {"cmd": "python -m pytest tests/test_app_tui.py -q", "args": ["-q"]}'
     widget = _plain_static(content, classes="message tool-message tool-running")

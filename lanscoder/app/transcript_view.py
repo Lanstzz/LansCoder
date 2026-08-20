@@ -56,8 +56,6 @@ def entry_classes(entry: TuiTranscriptEntry) -> str:
             return f"{base} tool-message tool-done"
         if entry.status in {"error", "denied", "failed"}:
             return f"{base} tool-message tool-failed"
-        if entry.status == "skipped":
-            return f"{base} tool-message tool-skipped"
         return f"{base} tool-message"
     return f"{base} system-message"
 
