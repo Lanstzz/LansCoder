@@ -1,10 +1,14 @@
-"""RequestBuilder 契约测试：签名固定 + 纯变换行为（零 loop 状态）。"""
+"""Loop 协作对象契约测试：签名固定 + 纯变换行为（零 loop 状态）。"""
 
 from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass, field
 
+import pytest
+
+from lanscoder.agent.guardrails import TurnGuardrails
+from lanscoder.agent.loop_limits import _AgentLoopLimitReached, AgentLoopLimits
 from lanscoder.agent.request_builder import PreparedMainRequest, RequestBuilder
 from lanscoder.agent.session import AgentSession
 from lanscoder.context.context_builder import ContextBuilder
@@ -68,3 +72,34 @@ def test_request_builder_build_pure_behavior(tmp_path) -> None:
     assert prepared.tool_result_part_ids == context_builder.projected_tool_result_part_ids(view)
     assert prepared.request_id
     assert prepared.projection_fingerprint
+
+
+def test_turn_guardrails_contract_signature() -> None:
+    for name in ("reserve_call", "check_timeout", "begin_turn"):
+        assert list(inspect.signature(getattr(TurnGuardrails, name)).parameters) == ["self"]
+    assert "reason" in inspect.signature(TurnGuardrails.limit_response).parameters
+    guardrails = TurnGuardrails(provider=FakeProvider(), limits=AgentLoopLimits.default())
+    assert isinstance(guardrails.call_count, int)
+
+
+def test_turn_guardrails_behavior() -> None:
+    clock_now = {"value": 100.0}
+
+    def clock() -> float:
+        return clock_now["value"]
+
+    guardrails = TurnGuardrails(
+        provider=FakeProvider(),
+        limits=AgentLoopLimits(max_provider_calls=1, max_turn_seconds=5),
+        clock=clock,
+    )
+    guardrails.begin_turn()
+    guardrails.reserve_call()
+    assert guardrails.call_count == 1
+    with pytest.raises(_AgentLoopLimitReached):
+        guardrails.reserve_call()
+    guardrails.begin_turn()
+    assert guardrails.call_count == 0
+    clock_now["value"] = 110.0
+    with pytest.raises(_AgentLoopLimitReached):
+        guardrails.check_timeout()
