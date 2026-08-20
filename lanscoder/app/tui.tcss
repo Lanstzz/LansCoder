@@ -201,3 +201,12 @@ ScrollBarCorner {
     height: 1;
     color: #808185;
 }
+#subagent-panel Static.selected {
+    background: #2b5fd9;
+    color: #ffffff;
+    text-style: bold;
+}
+#subagent-panel .subagent-hint {
+    color: #5a5c64;
+    text-style: dim;
+}

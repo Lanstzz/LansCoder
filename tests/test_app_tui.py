@@ -436,6 +436,40 @@ def test_lanscoder_app_can_be_created_with_command_handler() -> None:
     assert app.config.title == "TestCoder"
 
 
+class _FakeForegroundChatRunner:
+    def __init__(self) -> None:
+        self.background_manager = None
+        self.interrupted_turns = 0
+        self._foreground = {
+            "label": "researcher",
+            "started_at": 0.0,
+            "provider_calls": 0,
+            "total_tokens": 0,
+        }
+
+    def foreground_subagent(self) -> dict | None:
+        return self._foreground
+
+    def cancel_current_turn(self) -> None:
+        self.interrupted_turns += 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_subagent_panel_highlights_selected_row_and_shows_hint() -> None:
+    app = LansCoderApp(chat_runner=_FakeForegroundChatRunner())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._subagent_select_mode = True
+        app._subagent_selected = "fg"
+        app._refresh_subagent_progress()
+        panel = app.query_one("#subagent-panel")
+        selected = [s for s in panel.query("Static") if s.has_class("selected")]
+        assert [s.id for s in selected] == ["subagent-row-fg"]
+        hint = app.query_one("#subagent-hint")
+        assert "x 停止" in str(hint.render())
+
+
 def test_lanscoder_app_copies_to_macos_clipboard(monkeypatch) -> None:
     app = LansCoderApp()
     pbcopy = Mock()
@@ -497,7 +531,7 @@ def test_lanscoder_app_topbar_colors_each_permission_mode(mode, color) -> None:
     session.mode = mode
     app = LansCoderApp(current_session=session)
 
-    assert app._topbar_text() == ("[#4f8cff]LansCoder[/]   [#303238]·[/]   [#4f8cff]idle · ready[/]   " f"[#303238]·[/]   [{color}]{mode}[/]")
+    assert app._topbar_text() == (f"[#4f8cff]LansCoder[/]   [#303238]·[/]   [#4f8cff]idle · ready[/]   [#303238]·[/]   [{color}]{mode}[/]")
     assert "sess_test" not in app._topbar_text()
 
 
@@ -779,7 +813,7 @@ async def test_subagent_panel_caps_visible_lines_with_remainder_footer() -> None
         app._refresh_subagent_progress()
         await pilot.pause()
         statics = list(app.query_one("#subagent-panel").query("Static"))
-        assert len(statics) == 4  # 3 running lines + remainder footer
+        assert len(statics) == 5  # 3 running lines + remainder footer + binding hint
         assert "还有 1 个子agent在跑" in statics[3].content
 
 
@@ -791,7 +825,7 @@ async def test_subagent_panel_no_footer_under_cap() -> None:
         app._refresh_subagent_progress()
         await pilot.pause()
         statics = list(app.query_one("#subagent-panel").query("Static"))
-        assert len(statics) == 3
+        assert len(statics) == 4  # 3 running lines + binding hint
         assert all("还有" not in s.content for s in statics)
 
 
@@ -868,7 +902,7 @@ def test_lanscoder_app_topbar_highlights_bypass_mode_and_truncates_long_session(
 
     app = LansCoderApp(current_session=BypassSession())
 
-    assert app._topbar_text() == ("[#4f8cff]LansCoder[/]   [#303238]·[/]   [#4f8cff]idle · ready[/]   " "[#303238]·[/]   [#ff6b5f]bypass[/]")
+    assert app._topbar_text() == ("[#4f8cff]LansCoder[/]   [#303238]·[/]   [#4f8cff]idle · ready[/]   [#303238]·[/]   [#ff6b5f]bypass[/]")
 
 
 def test_lanscoder_app_topbar_includes_live_activity_status() -> None:
@@ -1082,7 +1116,7 @@ def test_task_plan_panel_text_renders_dag_levels_dependencies_and_derived_status
                 },
             ],
         }
-    ) == ("Task Plan · dag\n" "Level 0 · parallel\n" "  [→] 调研 A (research_a)\n" "  [~] 调研 B (research_b)\n" "Level 1\n" "  [!] 汇总 (summary) · depends on: research_a, research_b")
+    ) == ("Task Plan · dag\nLevel 0 · parallel\n  [→] 调研 A (research_a)\n  [~] 调研 B (research_b)\nLevel 1\n  [!] 汇总 (summary) · depends on: research_a, research_b")
 
 
 def test_lanscoder_app_records_rendered_messages_in_transcript(monkeypatch) -> None:
@@ -1117,16 +1151,19 @@ class FakeChatRunner:
 
 
 class _PanelJob:
-    def __init__(self, created_at: float, label: str = "researcher"):
+    def __init__(self, created_at: float, label: str = "researcher", job_id: str | None = None):
         self.created_at = created_at
         self.tool_name = "delegate"
         self.label = label
         self.progress = {"provider_calls": 3, "total_tokens": 2500}
+        self.id = job_id or f"panel-{created_at}"
+        self.status = "running"
+        self.cancel_requested = False
 
 
 class _PanelManager:
     def __init__(self, count: int = 1):
-        self._jobs = [_PanelJob(created_at=100.0 + i, label=f"researcher{i}") for i in range(count)]
+        self._jobs = [_PanelJob(created_at=100.0 + i, label=f"researcher{i}", job_id=f"bg_{i:04d}") for i in range(count)]
 
     def active_jobs(self):
         return self._jobs
@@ -3290,7 +3327,7 @@ def test_lanscoder_app_replays_dag_task_plan_from_current_session_view(
     monkeypatch.setattr(app, "query_one", query_one)
     app._replay_current_session()
 
-    assert panel.updates[-1] == ("Task Plan · dag\n" "Level 0 · parallel\n" "  [✓] 调研 A (a)\n" "  [~] 调研 B (b)\n" "Level 1\n" "  [!] 汇总 (c) · depends on: a, b")
+    assert panel.updates[-1] == ("Task Plan · dag\nLevel 0 · parallel\n  [✓] 调研 A (a)\n  [~] 调研 B (b)\nLevel 1\n  [!] 汇总 (c) · depends on: a, b")
 
 
 def test_lanscoder_app_refreshes_task_plan_immediately_after_successful_plan_tool(
@@ -3565,7 +3602,7 @@ def test_lanscoder_app_renders_bypass_prewrite_review_without_permission_prompt(
 
 
 def test_plain_static_renders_tool_arguments_with_markup_characters_as_text() -> None:
-    content = "tool shell running\n" '  正在调用工具：shell {"cmd": "python -m pytest tests/test_app_tui.py -q", "args": ["-q"]}'
+    content = 'tool shell running\n  正在调用工具：shell {"cmd": "python -m pytest tests/test_app_tui.py -q", "args": ["-q"]}'
     widget = _plain_static(content, classes="message tool-message tool-running")
 
     rendered = widget.render()

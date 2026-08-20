@@ -38,6 +38,11 @@ from lanscoder.app.picker_adapters import (
     skill_picker_item,
 )
 from lanscoder.app.session_commands import SESSION_LIST_VISIBLE_LIMIT
+from lanscoder.app.subagent_panel_state import (
+    FG_ID,
+    SubagentRow,
+    build_rows,
+)
 from lanscoder.app.permission_view import (
     ask_user_choice_for_text,
     permission_choice_for_text,
@@ -204,6 +209,8 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._provider_glow_frame = 0
         self._subagent_progress_timer: Timer | None = None
         self._activity_frame = 0
+        self._subagent_selected: str | None = None
+        self._subagent_select_mode = False
         self._pending_user_input: str | None = None
         self._pending_user_attachments: list[UserAttachment] | None = None
         self.transcript = TuiTranscript()
@@ -258,7 +265,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             pass
 
     def _refresh_subagent_progress(self) -> None:
-        """Periodic timer: render running sub-agents (foreground first, then background), capped."""
+        """Periodic timer: render running sub-agents (foreground first, then background)."""
         manager = None
         foreground = None
         if self.chat_runner is not None:
@@ -268,42 +275,67 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             panel = self.query_one("#subagent-panel")
         except Exception:
             return
-        panel.remove_children()
         jobs = manager.active_jobs() if manager is not None else []
-        if not jobs and foreground is None:
+        rows = build_rows(foreground, jobs)
+        self._sync_subagent_selection(rows)
+        panel.remove_children()
+        if not rows:
             panel.add_class("hidden")
             return
         panel.remove_class("hidden")
         self._activity_frame += 1
         indicator = _progress_indicator(self._activity_frame)
         now = time.monotonic()
-        lines: list[str] = []
+        lines_by_id: dict[str, str] = {}
         if foreground is not None:
-            lines.append(
-                _format_subagent_line(
-                    label=foreground.get("label") or "delegate",
-                    elapsed=now - foreground["started_at"],
-                    calls=foreground.get("provider_calls", 0),
-                    tokens=foreground.get("total_tokens", 0),
-                    indicator=indicator,
-                )
+            lines_by_id[FG_ID] = _format_subagent_line(
+                label=foreground.get("label") or "delegate",
+                elapsed=now - foreground["started_at"],
+                calls=foreground.get("provider_calls", 0),
+                tokens=foreground.get("total_tokens", 0),
+                indicator=indicator,
             )
         for job in jobs:
-            progress = job.progress
-            lines.append(
-                _format_subagent_line(
-                    label=job.label or job.tool_name,
-                    elapsed=now - job.created_at,
-                    calls=progress.get("provider_calls", 0) if progress else 0,
-                    tokens=progress.get("total_tokens", 0) if progress else 0,
-                    indicator=indicator,
-                )
+            progress = job.progress or {}
+            line = _format_subagent_line(
+                label=job.label or job.tool_name,
+                elapsed=now - job.created_at,
+                calls=progress.get("provider_calls", 0),
+                tokens=progress.get("total_tokens", 0),
+                indicator=indicator,
             )
-        for line in lines[:_MAX_VISIBLE_SUBAGENT_LINES]:
-            panel.mount(Static(line))
-        hidden = len(lines) - _MAX_VISIBLE_SUBAGENT_LINES
+            if job.cancel_requested:
+                line = f"{line} · cancelling"
+            lines_by_id[job.id] = line
+        for row in rows[:_MAX_VISIBLE_SUBAGENT_LINES]:
+            static = Static(lines_by_id[row.id], id=f"subagent-row-{row.id}")
+            if row.id == self._subagent_selected:
+                static.add_class("selected")
+            panel.mount(static)
+        hidden = len(rows) - _MAX_VISIBLE_SUBAGENT_LINES
         if hidden > 0:
             panel.mount(Static(f"…还有 {hidden} 个子agent在跑"))
+        panel.mount(
+            Static(
+                "↑/↓ 选择 · x 停止 · Esc 返回" if self._subagent_select_mode else "↓ 进入选择 · 点击选择子agent",
+                id="subagent-hint",
+                classes="subagent-hint",
+            )
+        )
+
+    def _subagent_rows(self) -> list[SubagentRow]:
+        manager = None
+        foreground = None
+        if self.chat_runner is not None:
+            manager = getattr(self.chat_runner, "background_manager", None)
+            foreground = getattr(self.chat_runner, "foreground_subagent", lambda: None)()
+        jobs = manager.active_jobs() if manager is not None else []
+        return build_rows(foreground, jobs)
+
+    def _sync_subagent_selection(self, rows: list[SubagentRow]) -> None:
+        if self._subagent_selected is not None and not any(row.id == self._subagent_selected for row in rows):
+            self._subagent_selected = None
+            self._subagent_select_mode = False
 
     def _on_subagent_completed(self, job) -> None:
         """Called from background thread when a job finishes."""
