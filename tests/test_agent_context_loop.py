@@ -1716,7 +1716,7 @@ def test_agent_loop_passes_tool_choice_none_for_final_only_completion(tmp_path) 
         limits=AgentLoopLimits.default(),
     )
 
-    response = loop._complete_once_sync(tool_choice="none")
+    response = asyncio.run(loop._complete_once(streaming=False, tool_choice="none"))
 
     assert response.content == "final"
     assert provider.requests[0].tool_choice == "none"
@@ -1777,8 +1777,8 @@ def test_runtime_instruction_is_ephemeral_and_only_applies_to_one_request(tmp_pa
     )
     loop = AgentLoop(session=session, provider=provider)
 
-    loop._complete_once_sync(runtime_instruction="Reconcile task plan state")
-    loop._complete_once_sync()
+    asyncio.run(loop._complete_once(streaming=False, runtime_instruction="Reconcile task plan state"))
+    asyncio.run(loop._complete_once(streaming=False))
 
     assert any(message.role == "system" and message.content == "Reconcile task plan state" for message in provider.requests[0].messages)
     assert all(message.content != "Reconcile task plan state" for message in provider.requests[1].messages)
@@ -1801,7 +1801,7 @@ def test_runtime_instruction_survives_prompt_too_long_retry(tmp_path) -> None:
         context_manager=PromptTooLongSuccessContextManager(),
     )
 
-    response = loop._complete_once_sync_with_recovery(runtime_instruction="Reconcile task plan state")
+    response = asyncio.run(loop._complete_once_with_recovery(streaming=False, runtime_instruction="Reconcile task plan state"))
 
     assert response.content == "ok"
     assert len(provider.requests) == 2
@@ -2739,7 +2739,7 @@ def test_sync_main_request_records_projected_tool_result_as_consumed(tmp_path) -
     )
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
 
-    AgentLoop(session=session, provider=provider, tools=[_echo_tool()])._complete_once_sync()
+    asyncio.run(AgentLoop(session=session, provider=provider, tools=[_echo_tool()])._complete_once(streaming=False))
 
     tool_part = next(part for message in session.rebuild_view().messages for part in message.parts if part.kind == "tool_result")
     assert tool_part.id in session.runtime_state.consumed_tool_result_part_ids
