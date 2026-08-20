@@ -19,7 +19,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("module", ["lanscoder.tools", "lanscoder.tools.delegate"])
+@pytest.mark.parametrize("module", ["lanscoder.tools", "lanscoder.tools.delegate", "lanscoder.tools.background"])
 def test_tools_import_does_not_pull_agent(module: str) -> None:
     code = (
         "import sys\n"
