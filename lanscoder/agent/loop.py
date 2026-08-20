@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -201,10 +202,10 @@ class AgentLoop:
         self._ensure_delegate_tool()
 
     # ----------------------------------------------------------------------------
-    # run_user_turn — 异步统一入口
+    # run_user_turn — 统一 async 入口
     # ----------------------------------------------------------------------------
     # 一个 turn = "用户说一句话 → 模型回答（可能带多轮工具调用）→ 返回最终 response"。
-    # 根据 streaming 参数分流到流式实现或同步实现（在 worker 线程中跑，避免阻塞事件循环）。
+    # 根据 streaming 参数分流到流式实现或统一 async 核心（工具执行在 to_thread 上）。
     async def run_user_turn(
         self,
         content: str,
@@ -216,7 +217,7 @@ class AgentLoop:
 
         if streaming:
             return await self._run_user_turn_streaming(content, attachments=attachments)
-        return await anyio.to_thread.run_sync(lambda: self._run_user_turn_sync(content, attachments=attachments))
+        return await self._run_user_turn_async(content, attachments=attachments)
 
     async def run_nudge_turn(self, *, streaming: bool = False) -> AgentTurnResult:
         """Execute one provider turn with no user message (subagent wake-up).
@@ -229,7 +230,7 @@ class AgentLoop:
 
         if streaming:
             return await self._run_nudge_turn_streaming()
-        return await anyio.to_thread.run_sync(self._run_nudge_turn_sync)
+        return await self._run_nudge_turn_async()
 
     def replace_cancellation_token(self, token: CancellationToken | None) -> None:
         """Rebind cooperative cancellation when a paused turn resumes in the runner."""
@@ -241,22 +242,34 @@ class AgentLoop:
         self.last_stream_events = []
 
     # ============================================================================
-    # _run_user_turn_sync — 同步路径的完整 turn 启动流程
+    # _run_user_turn_sync — 供同步测试调用的薄 facade（内部转调 async 核心）
     # ============================================================================
-    # 1. 检查 pending_permission_execution：上一轮可能因权限确认暂停，
-    #    此时历史里已经有 assistant tool_call 等待 tool_result，不能再追加用户消息。
-    # 2. _begin_turn()：重置 provider_call_count / turn_started_at 等 turn 级计数器。
-    # 3. _repair_interrupted_tool_calls_before_provider_request()：修复上一轮意外中断
-    #    留下的"有 tool_call 但缺 tool_result"的非法序列（补一条 canceled tool_result）。
-    # 4. append_user_message()：把用户输入写入 JSONL。
-    # 5. 进入 _run_tool_loop_interactive 核心循环（见下方）。
     def _run_user_turn_sync(
         self,
         content: str,
         *,
         attachments: list[UserAttachment] | None = None,
     ) -> AgentTurnResult:
-        """Synchronous implementation kept private behind ``run_user_turn``."""
+        """Synchronous facade kept for legacy sync call sites."""
+
+        return asyncio.run(self._run_user_turn_async(content, attachments=attachments))
+
+    async def _run_user_turn_async(
+        self,
+        content: str,
+        *,
+        attachments: list[UserAttachment] | None = None,
+    ) -> AgentTurnResult:
+        """统一 async 核心：非流式 turn 的完整启动流程。
+
+        1. 检查 pending_permission_execution：上一轮可能因权限确认暂停，
+           此时历史里已经有 assistant tool_call 等待 tool_result，不能再追加用户消息。
+        2. _begin_turn()：重置 provider_call_count / turn_started_at 等 turn 级计数器。
+        3. _repair_interrupted_tool_calls_before_provider_request()：修复上一轮意外中断
+           留下的"有 tool_call 但缺 tool_result"的非法序列（补一条 canceled tool_result）。
+        4. append_user_message()：把用户输入写入 JSONL。
+        5. 进入 _run_tool_loop 核心循环（见下方）。
+        """
 
         if self.session.pending_permission_execution is not None:
             # 上一轮已经把 assistant tool_call 写进历史，但还缺一个匹配的 tool_result。
@@ -272,13 +285,15 @@ class AgentLoop:
         self._check_cancelled()
         self.session.append_user_message(content, attachments=attachments)  # 把用户消息写进jsonl
 
-        # run_tool_loop_interactive 是核心循环的外壳, 它负责捕获异常
-        return self._run_tool_loop_interactive(
-            self._complete_once_sync_with_recovery,
-        )
+        return await self._run_tool_loop(partial(self._complete_once_with_recovery, streaming=False))
 
     def _run_nudge_turn_sync(self) -> AgentTurnResult:
-        """同步版唤醒轮次：不追加用户消息，仅投递后台完成通知并跑工具循环。"""
+        """薄 sync facade：内部转调 async 唤醒轮次。"""
+
+        return asyncio.run(self._run_nudge_turn_async())
+
+    async def _run_nudge_turn_async(self) -> AgentTurnResult:
+        """统一 async 核心：唤醒轮次，不追加用户消息，仅投递后台完成通知并跑工具循环。"""
 
         if self.session.pending_permission_execution is not None:
             pending = self.session.pending_permission_execution
@@ -293,7 +308,7 @@ class AgentLoop:
         self._begin_turn()
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
-        return self._run_tool_loop_interactive(self._complete_once_sync_with_recovery)
+        return await self._run_tool_loop(partial(self._complete_once_with_recovery, streaming=False))
 
     # ============================================================================
     # resume_with_user_input — 权限确认恢复的异步入口
@@ -315,24 +330,26 @@ class AgentLoop:
 
         if streaming:
             return await self._resume_with_user_input_streaming(request_id, answer)
-        return await anyio.to_thread.run_sync(lambda: self._resume_with_user_input_sync(request_id, answer))
+        return await self._resume_with_user_input_async(request_id, answer)
 
     # ----------------------------------------------------------------------------
-    # _resume_with_user_input_sync — 用用户的回答恢复暂停的 turn
+    # _resume_with_user_input_sync — 供同步测试调用的薄 facade（内部转调 async 核心）
     # ----------------------------------------------------------------------------
-    # 权限确认与 ask_user 都走这里（统一 pending 协议）：
-    #   1. 校验超时 / 取消 / pending 状态存在
-    #   2. _prepare_permission_resume：权限按答复决定 allow / deny / 预览过期；
-    #      ask_user 直接用回答合成最终 tool_result
-    #   3. _execute_resumed_permission_tool_call：用 session 保存的原始 tool_call 执行
-    #      （注意：绝对不能相信 UI 回传的 tool_call 参数，防止参数篡改攻击）
-    #   4. _finish_permission_resume：把 tool_result 写入 JSONL，清理 pending 状态，
-    #      并续跑同批次剩余工具（deferred batch continuation）；若剩余里又有工具
-    #      需要用户输入，链式返回新的 pending
-    #   5. _begin_turn(new_user_turn=False)：重置 turn 计时但不重置 turn 序号
-    #   6. 进入 _run_tool_loop_interactive 继续工具循环
     def _resume_with_user_input_sync(self, request_id: str, answer: str) -> AgentTurnResult:
-        """用用户回答恢复一个暂停中的权限确认或 ask_user。
+        """薄 sync facade：用用户回答恢复暂停的 turn。"""
+
+        return asyncio.run(self._resume_with_user_input_async(request_id, answer))
+
+    async def _resume_with_user_input_async(self, request_id: str, answer: str) -> AgentTurnResult:
+        """统一 async 核心：用用户的回答恢复暂停的 turn。
+
+        权限确认与 ask_user 都走这里（统一 pending 协议）：
+          1. 校验超时 / 取消 / pending 状态存在
+          2. _append_permission_resume_result：按答复决定 allow / deny / 预览过期，
+             并续跑同批次剩余工具（deferred batch continuation）；若剩余里又有工具
+             需要用户输入，链式返回新的 pending
+          3. _begin_turn(new_user_turn=False)：重置 turn 计时但不重置 turn 序号
+          4. 进入 _run_tool_loop 继续工具循环
 
         权限确认不能走”下一条用户消息”，因为模型原始 tool_call 已经在历史里等待一个
         匹配的 tool_result。ask_user 也统一走这里，这样回答后能继续执行同批次剩余
@@ -346,13 +363,13 @@ class AgentLoop:
             return self._complete_turn(self._limit_response(exc.reason))
         except AgentCancelledError:
             return self._complete_turn(self._interrupted_response())
-        result = self._append_permission_resume_result(request_id, answer)
+        result = await self._append_permission_resume_result(request_id, answer)
         if result is not None:
             return result
         self._begin_turn(new_user_turn=False)
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
-        return self._run_tool_loop_interactive(self._complete_once_sync_with_recovery)
+        return await self._run_tool_loop(partial(self._complete_once_with_recovery, streaming=False))
 
     async def _resume_with_user_input_streaming(self, request_id: str, answer: str) -> AgentTurnResult:
         """流式模式下恢复权限确认，并继续消费 provider stream。"""
@@ -364,12 +381,12 @@ class AgentLoop:
             return self._complete_turn(self._limit_response(exc.reason))
         except AgentCancelledError:
             return self._complete_turn(self._interrupted_response())
-        result = await self._append_permission_resume_result_async(request_id, answer)
+        result = await self._append_permission_resume_result(request_id, answer)
         if result is not None:
             return result
         self._begin_turn(new_user_turn=False)
         self._check_cancelled()
-        return await self._run_tool_loop_interactive_async(partial(self._complete_once_with_recovery, streaming=True))
+        return await self._run_tool_loop(partial(self._complete_once_with_recovery, streaming=True))
 
     async def _run_user_turn_streaming(
         self,
@@ -397,7 +414,7 @@ class AgentLoop:
         self._check_cancelled()
         self.session.append_user_message(content, attachments=attachments)
 
-        result = await self._run_tool_loop_interactive_async(
+        result = await self._run_tool_loop(
             partial(self._complete_once_with_recovery, streaming=True),
         )
         return result
@@ -419,9 +436,9 @@ class AgentLoop:
         self._begin_turn()
         self._repair_interrupted_tool_calls_before_provider_request()
         self._check_cancelled()
-        return await self._run_tool_loop_interactive_async(partial(self._complete_once_with_recovery, streaming=True))
+        return await self._run_tool_loop(partial(self._complete_once_with_recovery, streaming=True))
 
-    def _append_permission_resume_result(self, request_id: str, answer: str) -> AgentTurnResult | None:
+    async def _append_permission_resume_result(self, request_id: str, answer: str) -> AgentTurnResult | None:
         """用回答恢复一个暂停的权限/ask_user。
 
         返回 AgentTurnResult 表示本轮必须立即结束（请求不存在，或延迟批次续跑时又
@@ -434,22 +451,9 @@ class AgentLoop:
             return pending
         result = self._prepare_permission_resume(pending, answer)
         if result is None:
-            result = self._execute_resumed_permission_tool_call(pending)
-            self._emit_finished_permission_resume(pending, result)
-        chained = self._finish_permission_resume(pending, result)
-        if chained is not None:
-            return self._pending_turn_result(chained)
-        return None
-
-    async def _append_permission_resume_result_async(self, request_id: str, answer: str) -> AgentTurnResult | None:
-        pending = self._pending_permission_for_resume(request_id)
-        if isinstance(pending, AgentTurnResult):
-            return pending
-        result = self._prepare_permission_resume(pending, answer)
-        if result is None:
             result = await anyio.to_thread.run_sync(self._execute_resumed_permission_tool_call, pending)
             self._emit_finished_permission_resume(pending, result)
-        chained = await self._finish_permission_resume_async(pending, result)
+        chained = await self._finish_permission_resume(pending, result)
         if chained is not None:
             return self._pending_turn_result(chained)
         return None
@@ -529,24 +533,13 @@ class AgentLoop:
             permission_request=pending.permission_request,
         )
 
-    def _finish_permission_resume(self, pending: PendingPermissionExecution, result: ToolResult) -> UserInputRequest | None:
+    async def _finish_permission_resume(self, pending: PendingPermissionExecution, result: ToolResult) -> UserInputRequest | None:
         """写回已恢复工具的 result，续跑同批次剩余工具。
 
         剩余工具（``deferred_tool_calls``）作为新一批交给 ToolExecutor 继续执行：
         - 全部跑完：返回 None，调用方进入工具循环回问模型。
         - 又有工具需要用户输入：返回链式 pending，本轮立即暂停等下一次回答。
         """
-        self.session.pending_permission_execution = None
-        self.session.append_tool_result(tool_call=pending.tool_call, result=result)
-        self._tool_rounds_completed += 1
-        if not pending.deferred_tool_calls:
-            return None
-        execution = self.tool_executor.execute_interactive(pending.deferred_tool_calls)
-        return execution.pending_input
-
-    async def _finish_permission_resume_async(self, pending: PendingPermissionExecution, result: ToolResult) -> UserInputRequest | None:
-        """流式版本的 _finish_permission_resume，续跑走 worker 线程避免阻塞事件循环。"""
-
         self.session.pending_permission_execution = None
         self.session.append_tool_result(tool_call=pending.tool_call, result=result)
         self._tool_rounds_completed += 1
@@ -606,43 +599,20 @@ class AgentLoop:
         )
 
     # ============================================================================
-    # _complete_once_sync — 单次 provider 调用（不处理工具循环）
+    # _complete_once — 单次 provider 调用（不处理工具循环）
     # ============================================================================
     # 这是”问模型一次”的最小单元，拆出来后：
-    #   - 同步调用、streaming 调用、prompt-too-long 恢复都能复用同一套上下文构造
+    #   - 同步调用（streaming=False，provider.complete 走 to_thread）、streaming 调用、
+    #     prompt-too-long 恢复都能复用同一套上下文构造
     #   - 调用前后有明确的”检查点”序列，便于插入超时/取消/追踪逻辑
     #
     # 流程：
     #   1. _prepare_main_provider_request：构造 ChatRequest（含 projection / budget / compact）
     #   2. _reserve_provider_call：检查是否达到 max_provider_calls 上限
     #   3. _check_turn_timeout / _check_cancelled：超时或取消则抛异常提前退出
-    #   4. provider.complete(prepared.request)：实际调用模型 API
+    #   4. provider.complete / provider.astream：实际调用模型 API
     #   5. _record_projection_consumed：记录本次投影被哪些 tool_result part 消费，
     #      便于后续 compact 判断哪些 tool_result 已经”被模型看过了”
-    def _complete_once_sync(
-        self,
-        *,
-        tool_choice="auto",
-        runtime_instruction: str | None = None,
-    ) -> ChatResponse:
-        """构造一次 provider 请求并获得模型响应。
-
-        这一步只负责”问模型一次”，不处理工具循环。拆开后，同步调用、streaming 调用、
-        prompt-too-long 恢复都可以复用同一套上下文构造逻辑。
-        """
-
-        prepared = self._prepare_main_provider_request(
-            tool_choice=tool_choice,
-            runtime_instruction=runtime_instruction,
-        )
-        self._reserve_provider_call()
-        self._check_turn_timeout()
-        self._check_cancelled()
-        response = self.provider.complete(prepared.request)
-        self._record_projection_consumed(prepared)
-        self._report_progress(response)
-        return response
-
     def _main_chat_request(self, messages, definitions, tool_choice) -> ChatRequest:
         return ChatRequest(
             messages=messages,
@@ -650,34 +620,6 @@ class AgentLoop:
             tool_choice=tool_choice,
             **self.request_options.as_chat_request_kwargs(),
         )
-
-    def _complete_once_sync_with_recovery(
-        self,
-        *,
-        tool_choice="auto",
-        runtime_instruction: str | None = None,
-    ) -> ChatResponse:
-        """同步模式下一次 provider 调用，并处理 prompt-too-long 的单次恢复。
-
-        provider 如果拒绝请求，说明 assistant 回复还没有产生，也就没有新消息要落库。
-        这时可以先触发 blocking compact，再重建 provider messages 重试一次。
-        """
-
-        try:
-            return self._complete_once_sync(
-                tool_choice=tool_choice,
-                runtime_instruction=runtime_instruction,
-            )
-        except ProviderError as exc:
-            if not exc.requires_compaction:
-                raise
-            result = self._compact_for_prompt_too_long(runtime_instruction=runtime_instruction)
-            if result is None or result.status != "success":
-                raise
-            return self._complete_once_sync(
-                tool_choice=tool_choice,
-                runtime_instruction=runtime_instruction,
-            )
 
     async def _complete_once(
         self,
@@ -763,7 +705,7 @@ class AgentLoop:
                 )
 
     # ============================================================================
-    # _run_tool_loop_interactive — 核心工具循环（本文件最关键的函数）
+    # _run_tool_loop — 核心工具循环（本文件最关键的函数）
     # ============================================================================
     # 退出条件（三类，互斥）：
     #   (a) 模型返回的 response 没有 tool_calls：最终回答，直接 _complete_turn
@@ -775,7 +717,7 @@ class AgentLoop:
     #     ├─ 如果无 tool_calls → 退出循环，这就是最终回答
     #     └─ 有 tool_calls → _continue_tool_loop_from_response 内循环
     #          1. 写 assistant tool_call 到 JSONL
-    #          2. ToolExecutor.execute_interactive 执行所有 tool_call
+    #          2. ToolExecutor.execute_interactive_async 执行所有 tool_call
     #          3. 写 tool_result 到 JSONL
     #          4. 递增 tool_rounds
     #          5. 再次 complete_once()，让模型基于工具结果继续
@@ -784,7 +726,7 @@ class AgentLoop:
     #   - _AgentLoopLimitReached：达到 provider 调用上限 / turn 超时 → 优雅退出
     #   - AgentCancelledError：被外部 CancellationToken 取消 → 补中断 tool_result 后退出
     # ============================================================================
-    def _run_tool_loop_interactive(self, complete_once, *, initial_tool_choice="auto") -> AgentTurnResult:
+    async def _run_tool_loop(self, complete_once, *, initial_tool_choice="auto") -> AgentTurnResult:
         """核心工具循环：问模型，执行工具，再把工具结果回喂给模型。
 
         退出条件只有三类：
@@ -797,9 +739,9 @@ class AgentLoop:
         try:
             if self.max_tool_rounds is not None and self._tool_rounds_completed >= self.max_tool_rounds:
                 return self._complete_turn(self._limit_response(AgentLoopStopReason.TOOL_ROUND_LIMIT))
-            response = self._drop_unsupported_tool_calls(complete_once(tool_choice=initial_tool_choice))
+            response = self._drop_unsupported_tool_calls(await complete_once(tool_choice=initial_tool_choice))
             tool_rounds = self._tool_rounds_completed
-            response, pending_input, tool_rounds = self._continue_tool_loop_from_response(
+            response, pending_input, tool_rounds = await self._continue_tool_loop_from_response(
                 response,
                 complete_once,
                 tool_rounds,
@@ -807,7 +749,7 @@ class AgentLoop:
             if pending_input is not None:
                 return self._pending_turn_result(pending_input)
             if response.finish_reason != AgentLoopStopReason.TOOL_ROUND_LIMIT.value:
-                response, pending_input, _ = self._run_task_plan_reconciliation_if_needed(
+                response, pending_input, _ = await self._run_task_plan_reconciliation_if_needed(
                     response,
                     complete_once,
                     tool_rounds,
@@ -832,46 +774,6 @@ class AgentLoop:
         # 一条纯文本说明，避免保存未执行的 tool_call。
         return self._complete_turn(response)
 
-    async def _run_tool_loop_interactive_async(self, complete_once, *, initial_tool_choice="auto") -> AgentTurnResult:
-        """streaming 版本的工具循环，语义与同步版本一致。"""
-
-        guardrail_stop = False
-        try:
-            if self.max_tool_rounds is not None and self._tool_rounds_completed >= self.max_tool_rounds:
-                return self._complete_turn(self._limit_response(AgentLoopStopReason.TOOL_ROUND_LIMIT))
-            response = self._drop_unsupported_tool_calls(await complete_once(tool_choice=initial_tool_choice))
-            tool_rounds = self._tool_rounds_completed
-            response, pending_input, tool_rounds = await self._continue_tool_loop_from_response_async(
-                response,
-                complete_once,
-                tool_rounds,
-            )
-            if pending_input is not None:
-                return self._pending_turn_result(pending_input)
-            if response.finish_reason != AgentLoopStopReason.TOOL_ROUND_LIMIT.value:
-                response, pending_input, _ = await self._run_task_plan_reconciliation_if_needed_async(
-                    response,
-                    complete_once,
-                    tool_rounds,
-                )
-                if pending_input is not None:
-                    return self._pending_turn_result(pending_input)
-        except _AgentLoopLimitReached as exc:
-            response = self._limit_response(exc.reason)
-            guardrail_stop = True
-        except AgentCancelledError:
-            self._append_interrupted_tool_results()
-            response = self._interrupted_response()
-
-        if self._is_cancelled():
-            self._append_interrupted_tool_results()
-            response = self._interrupted_response()
-            return self._complete_turn(response)
-        if guardrail_stop:
-            return self._complete_turn(response)
-
-        return self._complete_turn(response)
-
     @staticmethod
     def _pending_turn_result(pending_input: UserInputRequest) -> AgentTurnResult:
         return AgentTurnResult(status=AgentTurnStatus.WAITING_FOR_USER_INPUT, pending_input=pending_input)
@@ -891,51 +793,10 @@ class AgentLoop:
     # 给定一个已包含 tool_calls 的 response，持续执行工具并回问模型，
     # 直到模型不再调用工具 / 命中轮次上限 / 需要用户输入。
     #
-    # 关键顺序（L745 附近）：必须先写 assistant tool_call，再写对应 tool_result。
+    # 关键顺序：必须先写 assistant tool_call，再写对应 tool_result。
     # 这是 provider 消息序列的合法性要求——OpenAI/Anthropic 都要求每条 tool result
     # 前面必须有对应的 assistant tool_call，否则下一次 complete 会报 400。
-    def _continue_tool_loop_from_response(
-        self,
-        response: ChatResponse,
-        complete_once,
-        tool_rounds: int,
-    ) -> tuple[ChatResponse, UserInputRequest | None, int]:
-        while response.tool_calls:
-            self._check_cancelled()
-            if self.max_tool_rounds is not None and tool_rounds >= self.max_tool_rounds:
-                return self._tool_round_limit_response(response), None, tool_rounds
-
-            # 关键顺序：必须先写 assistant tool_call，再写对应 tool_result。provider 后续
-            # 才能看到合法的 “assistant(tool_calls) -> tool(result)” 消息序列。
-            self.session.append_assistant_response(response)
-            # ToolExecutor.execute_interactive: 逐个执行 tool_call，
-            # 如果某个工具需要用户输入 → 返回 pending_input 暂停循环
-            execution = self.tool_executor.execute_interactive(response.tool_calls)
-            if execution.pending_input is not None:
-                return response, execution.pending_input, tool_rounds
-
-            tool_rounds += 1
-            self._tool_rounds_completed = tool_rounds
-            if self.max_tool_rounds is not None and tool_rounds >= self.max_tool_rounds:
-                return self._tool_round_limit_response(response), None, tool_rounds
-            self._check_cancelled()
-            # 把工具结果回喂给模型，得到下一轮 response
-            response = self._drop_unsupported_tool_calls(complete_once())
-        return response, None, tool_rounds
-
-    def _run_task_plan_reconciliation_if_needed(
-        self,
-        response: ChatResponse,
-        complete_once,
-        tool_rounds: int,
-    ) -> tuple[ChatResponse, UserInputRequest | None, int]:
-        instruction = self._final_reconciliation_instruction()
-        if instruction is None:
-            return response, None, tool_rounds
-        response = self._drop_unsupported_tool_calls(complete_once(runtime_instruction=instruction))
-        return self._continue_tool_loop_from_response(response, complete_once, tool_rounds)
-
-    async def _run_task_plan_reconciliation_if_needed_async(
+    async def _run_task_plan_reconciliation_if_needed(
         self,
         response: ChatResponse,
         complete_once,
@@ -945,7 +806,7 @@ class AgentLoop:
         if instruction is None:
             return response, None, tool_rounds
         response = self._drop_unsupported_tool_calls(await complete_once(runtime_instruction=instruction))
-        return await self._continue_tool_loop_from_response_async(response, complete_once, tool_rounds)
+        return await self._continue_tool_loop_from_response(response, complete_once, tool_rounds)
 
     def _final_reconciliation_instruction(self) -> str | None:
         if self._task_plan_reconciliation_attempted:
@@ -956,7 +817,7 @@ class AgentLoop:
         self._task_plan_reconciliation_attempted = True
         return instruction
 
-    async def _continue_tool_loop_from_response_async(
+    async def _continue_tool_loop_from_response(
         self,
         response: ChatResponse,
         complete_once,
@@ -1435,7 +1296,7 @@ class AgentLoop:
 # _AgentLoopLimitReached — 内部异常，用于在嵌套调用中传递"停止原因"
 # ----------------------------------------------------------------------------
 # 以 _ 前缀表示模块私有。当 _reserve_provider_call / _check_turn_timeout 发现
-# 达到 limits 上限时抛出，由 _run_tool_loop_interactive 的外层 except 捕获，
+# 达到 limits 上限时抛出，由 _run_tool_loop 的外层 except 捕获，
 # 转换成优雅退出的 _limit_response(reason)。这样可以把"为什么停"的语义
 # （PROVIDER_CALL_LIMIT / TURN_TIMEOUT / TOOL_ROUND_LIMIT）从深层调用栈
 # 传回到 turn 出口，而不需要在每一层函数签名里加 reason 参数。
