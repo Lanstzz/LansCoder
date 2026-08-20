@@ -7,7 +7,10 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from lanscoder.agent._builders import register_loop_tools
+from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.guardrails import TurnGuardrails
+from lanscoder.agent.loop import AgentLoop
 from lanscoder.agent.loop_limits import _AgentLoopLimitReached, AgentLoopLimits
 from lanscoder.agent.request_builder import PreparedMainRequest, RequestBuilder
 from lanscoder.agent.session import AgentSession
@@ -21,6 +24,7 @@ from lanscoder.providers.types import (
     ProviderCapabilities,
     ToolDefinition,
 )
+from lanscoder.tools.types import Tool, make_text_result
 
 
 @dataclass
@@ -103,3 +107,48 @@ def test_turn_guardrails_behavior() -> None:
     clock_now["value"] = 110.0
     with pytest.raises(_AgentLoopLimitReached):
         guardrails.check_timeout()
+
+
+def test_registry_complete_before_loop(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_registry_single_source", agents_md="")
+    provider = FakeProvider()
+    manager = BackgroundJobManager()
+    caller_tool = Tool(
+        definition=ToolDefinition(
+            name="caller_tool",
+            description="a caller-supplied tool",
+            parameters={"type": "object", "properties": {}},
+        ),
+        executor=lambda: make_text_result("caller_tool", "ok"),
+    )
+    try:
+        register_loop_tools(
+            session,
+            caller_tools=[caller_tool],
+            background_manager=manager,
+            provider=provider,
+            request_options=MainRequestOptions(),
+        )
+
+        # AgentLoop 构造之前，registry 已是单一工具源：caller + 后台控制 + delegate 全齐。
+        names = session.tool_registry.names()
+        for expected in ("caller_tool", "background_status", "background_cancel", "delegate"):
+            assert expected in names
+        # runtime 通过 _current_tools() 喂入的每个工具，register_loop_tools 都已放入 registry。
+        for tool in [caller_tool]:
+            assert tool.name in names
+
+        # 工具注册完全上移到组装根：构造 AgentLoop 期间 register 零新增。
+        original_register = session.tool_registry.register
+        register_calls: list[str] = []
+
+        def _spy_register(tool):
+            register_calls.append(tool.name)
+            return original_register(tool)
+
+        session.tool_registry.register = _spy_register
+        AgentLoop(session=session, provider=provider)
+        assert register_calls == []
+    finally:
+        manager.shutdown()

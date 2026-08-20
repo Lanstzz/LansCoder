@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from lanscoder.app.factory import create_lanscoder_app
+from lanscoder.agent._builders import create_agent_loop
 from lanscoder.agent.loop import AgentLoop
 from lanscoder.agent.session import AgentSession
 from lanscoder.context.llm_compact import LlmCompactService
@@ -88,7 +89,7 @@ def test_agent_tool_call_e2e_uses_real_view_tool_and_persists_result(tmp_path) -
         ]
     )
 
-    response = AgentLoop(
+    response = create_agent_loop(
         session=session,
         provider=provider,
         tools=[create_view_tool(tmp_path)],
@@ -338,7 +339,7 @@ def test_auto_large_single_tool_result_does_not_bypass_dynamic_watermark(tmp_pat
         ]
     )
 
-    response = AgentLoop(
+    response = create_agent_loop(
         session=session,
         provider=provider,
         tools=[_echo_tool(output="large output\n" * 50)],
@@ -369,7 +370,7 @@ def test_auto_large_turn_tool_results_do_not_bypass_dynamic_watermark(tmp_path) 
         ]
     )
 
-    response = AgentLoop(
+    response = create_agent_loop(
         session=session,
         provider=provider,
         tools=[_echo_tool(output="turn output\n" * 8)],

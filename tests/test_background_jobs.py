@@ -26,6 +26,7 @@ from lanscoder.agent.background import (
     strip_background_controls,
     with_background_controls,
 )
+from lanscoder.agent._builders import create_agent_loop
 from lanscoder.agent.loop import AgentLoop
 from lanscoder.agent.session import AgentSession
 from lanscoder.context.context_builder import ContextBuilder
@@ -403,7 +404,7 @@ def test_manager_abandon_since_cleans_worktree_for_running_job() -> None:
 def _loop_with_manager(store, session_id, *, tools, manager, provider=None):
     session = AgentSession.create(store=store, session_id=session_id)
     provider = provider or FakeProvider([ChatResponse(provider="fake", model="fake-model", content="done")])
-    return AgentLoop(
+    return create_agent_loop(
         session=session,
         provider=provider,
         tools=tools,
@@ -924,7 +925,7 @@ def test_end_to_end_model_receives_task_notification(tmp_path) -> None:
 
     try:
         session = AgentSession.create(store=store, session_id="sess_bg_e2e")
-        loop = AgentLoop(
+        loop = create_agent_loop(
             session=session,
             provider=provider,
             tools=[_bg_tool("shell", executor=blocking), _bg_tool("note")],
@@ -1145,7 +1146,7 @@ def test_agent_loop_registers_background_control_tools_for_custom_tool_sets(tmp_
     manager = BackgroundJobManager()
     try:
         session = AgentSession.create(store=store, session_id="sess_bg_control_tools", tools=[_bg_tool("shell")])
-        loop = AgentLoop(
+        loop = create_agent_loop(
             session=session,
             provider=FakeProvider([ChatResponse(provider="fake", model="fake-model", content="done")]),
             background_manager=manager,

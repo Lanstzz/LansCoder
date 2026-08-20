@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+from lanscoder.agent._builders import create_agent_loop
 from lanscoder.agent.loop import AgentLoop, ToolExecutionEvent
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.user_input import AgentTurnStatus
@@ -595,7 +596,7 @@ def test_agent_loop_executes_tool_call_and_appends_tool_result(tmp_path) -> None
         ]
     )
 
-    result = AgentLoop(session=session, provider=provider, tools=[_echo_tool()])._run_user_turn_sync("调用工具")
+    result = create_agent_loop(session=session, provider=provider, tools=[_echo_tool()])._run_user_turn_sync("调用工具")
 
     assert result.content == "完成"
     assert len(provider.requests) == 2
@@ -625,7 +626,7 @@ def test_sync_and_streaming_tool_loops_persist_equivalent_terminal_state(tmp_pat
         ChatResponse(provider="fake", model="fake-model", content="完成"),
     ]
     provider = StreamingProvider(responses) if streaming else FakeProvider(responses)
-    loop = AgentLoop(session=session, provider=provider, tools=[_echo_tool()])
+    loop = create_agent_loop(session=session, provider=provider, tools=[_echo_tool()])
 
     response = _run_streaming(loop, "调用工具") if streaming else loop._run_user_turn_sync("调用工具")
 
@@ -660,7 +661,7 @@ def test_agent_loop_runs_readonly_tool_calls_in_parallel_and_appends_results_in_
     )
     tool_events: list[ToolExecutionEvent] = []
     execution_intervals: dict[str, tuple[float, float]] = {}
-    loop = AgentLoop(
+    loop = create_agent_loop(
         session=session,
         provider=provider,
         tools=[
@@ -754,7 +755,7 @@ def test_agent_loop_streaming_runs_readonly_tool_calls_in_parallel(tmp_path) -> 
         ]
     )
     execution_intervals: dict[str, tuple[float, float]] = {}
-    loop = AgentLoop(
+    loop = create_agent_loop(
         session=session,
         provider=provider,
         tools=[
@@ -811,7 +812,7 @@ def test_agent_loop_streaming_tool_call_executes_after_message_completed(tmp_pat
             ChatResponse(provider="fake-stream", model="fake-stream-model", content="完成"),
         ]
     )
-    loop = AgentLoop(session=session, provider=provider, tools=[_echo_tool()])
+    loop = create_agent_loop(session=session, provider=provider, tools=[_echo_tool()])
 
     result = _run_streaming(loop, "调用工具")
 
@@ -859,7 +860,7 @@ async def test_agent_loop_streaming_tool_execution_does_not_block_event_loop(tmp
         executor=execute,
     )
     events: list[ToolExecutionEvent] = []
-    loop = AgentLoop(session=session, provider=provider, tools=[tool], tool_event_handler=events.append)
+    loop = create_agent_loop(session=session, provider=provider, tools=[tool], tool_event_handler=events.append)
     task = asyncio.create_task(loop._run_user_turn_streaming("调用慢工具"))
 
     while not started.is_set():
@@ -896,7 +897,7 @@ def test_agent_loop_streaming_does_not_execute_tool_before_message_completed(tmp
     )
     provider = ObservingStreamingProvider(response=response, session=session)
 
-    _run_streaming(AgentLoop(session=session, provider=provider, tools=[_echo_tool()]), "调用工具")
+    _run_streaming(create_agent_loop(session=session, provider=provider, tools=[_echo_tool()]), "调用工具")
 
     assert provider.tool_results_before_message_completed == 0
     view = store.rebuild_session_view("sess_stream_atomic")
@@ -1689,7 +1690,7 @@ def test_agent_loop_does_not_persist_unexecuted_tool_calls_after_round_limit(tmp
         ]
     )
 
-    result = AgentLoop(
+    result = create_agent_loop(
         session=session,
         provider=provider,
         tools=[_echo_tool()],
@@ -2403,7 +2404,7 @@ def test_agent_loop_injects_guidance_before_next_provider_call(tmp_path) -> None
             return []
         return guidance.pop(0).splitlines() if guidance else []
 
-    response = AgentLoop(
+    response = create_agent_loop(
         session=session,
         provider=provider,
         tools=[_echo_tool()],
@@ -2535,7 +2536,7 @@ def test_agent_loop_allows_unlimited_tool_rounds_when_limit_is_none(tmp_path) ->
         ]
     )
 
-    response = AgentLoop(
+    response = create_agent_loop(
         session=session,
         provider=provider,
         tools=[_echo_tool()],
@@ -2573,7 +2574,7 @@ def test_agent_loop_continues_after_successful_verification(tmp_path) -> None:
         ]
     )
 
-    response = AgentLoop(
+    response = create_agent_loop(
         session=session,
         provider=provider,
         tools=[_success_tool(), _echo_tool()],
@@ -2610,7 +2611,7 @@ def test_agent_loop_does_not_force_final_answer_after_failed_verification(tmp_pa
         ]
     )
 
-    response = AgentLoop(
+    response = create_agent_loop(
         session=session,
         provider=provider,
         tools=[_failed_test_tool()],
@@ -2636,7 +2637,7 @@ def test_agent_loop_stops_when_provider_call_limit_is_reached(tmp_path) -> None:
         ]
     )
 
-    response = AgentLoop(
+    response = create_agent_loop(
         session=session,
         provider=provider,
         tools=[_echo_tool()],
@@ -2666,7 +2667,7 @@ def test_agent_loop_stops_when_turn_timeout_is_reached(tmp_path) -> None:
         ]
     )
 
-    response = AgentLoop(
+    response = create_agent_loop(
         session=session,
         provider=provider,
         tools=[_echo_tool()],
@@ -2710,7 +2711,7 @@ def test_agent_loop_runs_auto_once_before_each_main_provider_request(tmp_path) -
 
     context_manager = FakeContextManager()
 
-    AgentLoop(
+    create_agent_loop(
         session=session,
         provider=provider,
         tools=[_echo_tool()],
@@ -2742,7 +2743,7 @@ def test_sync_main_request_records_projected_tool_result_as_consumed(tmp_path) -
     )
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")])
 
-    asyncio.run(AgentLoop(session=session, provider=provider, tools=[_echo_tool()])._complete_once(streaming=False))
+    asyncio.run(create_agent_loop(session=session, provider=provider, tools=[_echo_tool()])._complete_once(streaming=False))
 
     tool_part = next(part for message in session.rebuild_view().messages for part in message.parts if part.kind == "tool_result")
     assert tool_part.id in session.runtime_state.consumed_tool_result_part_ids
