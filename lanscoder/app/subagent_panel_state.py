@@ -53,9 +53,7 @@ def has_running(rows: list[SubagentRow]) -> bool:
     return any(row.cancellable for row in rows)
 
 
-def move_selection(
-    rows: list[SubagentRow], selected: str | None, direction: str
-) -> str | None:
+def move_selection(rows: list[SubagentRow], selected: str | None, direction: str) -> str | None:
     if not rows:
         return None
     if selected is None:

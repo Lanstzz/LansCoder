@@ -19,6 +19,7 @@ from uuid import uuid4
 
 import anyio
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.events import Key, Paste
@@ -42,6 +43,9 @@ from lanscoder.app.subagent_panel_state import (
     FG_ID,
     SubagentRow,
     build_rows,
+    can_enter_selection,
+    move_selection,
+    stop_target,
 )
 from lanscoder.app.permission_view import (
     ask_user_choice_for_text,
@@ -278,8 +282,10 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         jobs = manager.active_jobs() if manager is not None else []
         rows = build_rows(foreground, jobs)
         self._sync_subagent_selection(rows)
-        panel.remove_children()
         if not rows:
+            for child in list(panel.children):
+                if isinstance(child.id, str):
+                    child.remove()
             panel.add_class("hidden")
             return
         panel.remove_class("hidden")
@@ -307,21 +313,38 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             if job.cancel_requested:
                 line = f"{line} · cancelling"
             lines_by_id[job.id] = line
-        for row in rows[:_MAX_VISIBLE_SUBAGENT_LINES]:
-            static = Static(lines_by_id[row.id], id=f"subagent-row-{row.id}")
-            if row.id == self._subagent_selected:
-                static.add_class("selected")
-            panel.mount(static)
         hidden = len(rows) - _MAX_VISIBLE_SUBAGENT_LINES
+        hint = "↑/↓ 选择 · x 停止 · Esc 返回" if self._subagent_select_mode else "↓ 进入选择 · 点击选择子agent"
+        row_ids = [row.id for row in rows[:_MAX_VISIBLE_SUBAGENT_LINES]]
+        keep_ids = {f"subagent-row-{row_id}" for row_id in row_ids}
+        children_by_id = {child.id: child for child in panel.children if isinstance(child.id, str)}
+        # Textual's remove() prunes asynchronously, so remounting a same-id row
+        # in the same turn would raise DuplicateIds before the old one detaches.
+        # Update matching rows in place and only mount genuinely new ones.
+        for child in list(panel.children):
+            if isinstance(child.id, str) and child.id not in keep_ids and child.id not in {"subagent-hint", "subagent-footer"}:
+                child.remove()
+        for row_id in row_ids:
+            static = children_by_id.get(f"subagent-row-{row_id}")
+            if static is None:
+                static = Static(lines_by_id[row_id], id=f"subagent-row-{row_id}")
+                panel.mount(static)
+            else:
+                static.update(lines_by_id[row_id])
+            static.set_class(row_id == self._subagent_selected, "selected")
+        footer_widget = children_by_id.get("subagent-footer")
         if hidden > 0:
-            panel.mount(Static(f"…还有 {hidden} 个子agent在跑"))
-        panel.mount(
-            Static(
-                "↑/↓ 选择 · x 停止 · Esc 返回" if self._subagent_select_mode else "↓ 进入选择 · 点击选择子agent",
-                id="subagent-hint",
-                classes="subagent-hint",
-            )
-        )
+            if footer_widget is None:
+                panel.mount(Static(f"…还有 {hidden} 个子agent在跑", id="subagent-footer"))
+            else:
+                footer_widget.update(f"…还有 {hidden} 个子agent在跑")
+        elif footer_widget is not None:
+            footer_widget.remove()
+        hint_widget = children_by_id.get("subagent-hint")
+        if hint_widget is None:
+            panel.mount(Static(hint, id="subagent-hint", classes="subagent-hint"))
+        else:
+            hint_widget.update(hint)
 
     def _subagent_rows(self) -> list[SubagentRow]:
         manager = None
@@ -350,6 +373,8 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         is idle.  When a turn is already running, that turn consumes the result
         itself — no redundant session write or extra reporting turn is needed.
         """
+        if not getattr(self, "is_mounted", False):
+            return
         label = job.label or job.tool_name
         if job.status == "completed":
             ui_msg = f"✅ 子agent [{label}] 已完成"
@@ -488,10 +513,26 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return
         await self._submit_composer()
 
+    async def on_event(self, event: events.Event) -> None:
+        # Printable keys are consumed by the focused TextArea before they would
+        # bubble up to on_key, so intercept selection-mode keys here, before the
+        # App forwards them to the focused widget.
+        if isinstance(event, Key) and not event.is_forwarded and self._subagent_select_mode:
+            if self._handle_subagent_select_key(event):
+                event.stop()
+                event.prevent_default()
+                return
+        await super().on_event(event)
+
     def on_key(self, event: Key) -> None:
         if self._picker is not None and self._handle_picker_key(event):
             event.stop()
             event.prevent_default()
+            return
+        if self._subagent_select_mode:
+            if self._handle_subagent_select_key(event):
+                event.stop()
+                event.prevent_default()
             return
         if event.key == "escape":
             if self._handle_escape_interrupt():
@@ -505,6 +546,11 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return
         input_widget = self.query_one("#input", TextArea)
         recalled = self._recall_input_history(event.key)
+        if event.key == "down" and can_enter_selection(self._subagent_rows(), recalled):
+            self._enter_subagent_selection()
+            event.stop()
+            event.prevent_default()
+            return
         if recalled is None:
             return
         event.stop()
@@ -531,6 +577,14 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         super().copy_to_clipboard(text)
         if platform.system() == "Darwin":
             subprocess.run(["pbcopy"], input=text, text=True, check=False)
+
+    def on_click(self, event: events.Click) -> None:
+        widget_id = getattr(event.widget, "id", None)
+        if isinstance(widget_id, str) and widget_id.startswith("subagent-row-"):
+            self._subagent_selected = widget_id[len("subagent-row-") :]
+            self._subagent_select_mode = True
+            self._refresh_subagent_progress()
+            event.stop()
 
     def on_paste(self, event: Paste) -> None:
         """Turn pasted file paths or clipboard images into pending attachments."""
@@ -672,6 +726,40 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if not self._input_history or self._input_history[-1] != text:
             self._input_history.append(text)
         self._input_history_index = None
+
+    def _handle_subagent_select_key(self, event: Key) -> bool:
+        """选择模式下的按键：↑/↓ 移动、x 停止、Esc 返回；其它键退出选择并交由原逻辑。"""
+        if event.key == "escape":
+            self._subagent_select_mode = False
+            return True
+        if event.key in {"up", "down"}:
+            self._subagent_selected = move_selection(self._subagent_rows(), self._subagent_selected, event.key)
+            self._refresh_subagent_progress()
+            return True
+        if event.key == "x":
+            self._stop_selected_subagent()
+            return True
+        self._subagent_select_mode = False
+        return False
+
+    def _enter_subagent_selection(self) -> None:
+        self._subagent_select_mode = True
+        self._subagent_selected = move_selection(self._subagent_rows(), None, "down")
+        self._refresh_subagent_progress()
+
+    def _stop_selected_subagent(self) -> None:
+        rows = self._subagent_rows()
+        target = stop_target(rows, self._subagent_selected)
+        if target is None:
+            return
+        if target == FG_ID:
+            cancel = getattr(self.chat_runner, "cancel_current_turn", None)
+            if cancel is not None:
+                cancel()
+            return
+        manager = getattr(self.chat_runner, "background_manager", None) if self.chat_runner is not None else None
+        if manager is not None:
+            manager.cancel(target)
 
     def _recall_input_history(self, direction: str) -> str | None:
         if not self._input_history:

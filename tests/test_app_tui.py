@@ -12,6 +12,7 @@ from textual.widgets import Markdown
 from textual.widgets import TextArea
 
 from lanscoder.agent.background import BackgroundJob
+from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.loop import ToolExecutionEvent
 from lanscoder.app.commands import CommandResult
 from lanscoder.app.commands import ContextCommandHandler
@@ -63,6 +64,7 @@ from lanscoder.providers.types import (
     ToolCall,
 )
 from lanscoder.tools.types import ToolResult
+from lanscoder.tools.types import make_text_result
 from lanscoder.planning.models import Task, TaskPlan
 
 
@@ -468,6 +470,66 @@ async def test_subagent_panel_highlights_selected_row_and_shows_hint() -> None:
         assert [s.id for s in selected] == ["subagent-row-fg"]
         hint = app.query_one("#subagent-hint")
         assert "x 停止" in str(hint.render())
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_subagent_panel_x_stops_foreground_turn() -> None:
+    fake = _FakeForegroundChatRunner()
+    app = LansCoderApp(chat_runner=fake)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._refresh_subagent_progress()
+        await pilot.press("down")
+        assert app._subagent_select_mode is True
+        assert app._subagent_selected == "fg"
+        await pilot.press("x")
+        assert fake.interrupted_turns == 1
+        await pilot.press("escape")
+        assert app._subagent_select_mode is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_subagent_panel_x_stops_background_job() -> None:
+    gate = threading.Event()
+
+    class _FakeManagerChatRunner:
+        def __init__(self, manager) -> None:
+            self.background_manager = manager
+
+        def foreground_subagent(self) -> dict | None:
+            return None
+
+        def cancel_current_turn(self) -> None:
+            pass
+
+        async def anudge_turn(self) -> ChatResponse:
+            self.background_manager.collect_completed()
+            return ChatResponse(provider="fake", model="fake", content="")
+
+    manager = BackgroundJobManager()
+    fake = _FakeManagerChatRunner(manager)
+    app = LansCoderApp(chat_runner=fake)
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            job = manager.start(
+                lambda: gate.wait(5) or make_text_result("delegate", "done"),
+                tool_name="delegate",
+            )
+            app._refresh_subagent_progress()
+            await pilot.press("down")
+            assert app._subagent_selected == job.id
+            await pilot.press("x")
+            assert job.cancel_requested is True
+            gate.set()
+            await pilot.pause()
+            await pilot.pause()
+    finally:
+        gate.set()
+        manager.wait(timeout=5)
+        manager.shutdown()
 
 
 def test_lanscoder_app_copies_to_macos_clipboard(monkeypatch) -> None:
