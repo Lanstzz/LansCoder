@@ -1,14 +1,7 @@
 from __future__ import annotations
 
 from lanscoder.app.activity_view import single_line_activity
-from lanscoder.app.tui_state import (
-    BlockKind,
-    ChildItem,
-    ChildKind,
-    TranscriptBlock,
-    TuiEntryKind,
-    TuiTranscriptEntry,
-)
+from lanscoder.app.tui_state import BlockKind, ChildItem, ChildKind, TranscriptBlock
 
 
 def looks_like_markdown_response(line: str) -> bool:
@@ -23,64 +16,10 @@ def normalize_stream_text(text: str) -> str:
     return text.strip()
 
 
-def display_line_kind(line: str) -> TuiEntryKind:
-    if line.startswith(("Tool call:", "Tool result:")):
-        return TuiEntryKind.TOOL
-    return TuiEntryKind.SYSTEM
-
-
-def display_line_status(line: str) -> str | None:
-    if line.startswith("Tool call:"):
-        return "running"
-    if line.startswith("Tool result:"):
-        return "success"
-    return None
-
-
-def entry_classes(entry: TuiTranscriptEntry) -> str:
-    base = "message"
-    if entry.kind == TuiEntryKind.SYSTEM:
-        return f"{base} system-message"
-    if entry.kind == TuiEntryKind.COMMAND:
-        return f"{base} command-message"
-    if entry.kind == TuiEntryKind.USER:
-        return f"{base} user-message"
-    if entry.kind == TuiEntryKind.ASSISTANT:
-        return f"{base} assistant-message"
-    if entry.kind == TuiEntryKind.REASONING:
-        return f"{base} reasoning-message"
-    if entry.kind == TuiEntryKind.PERMISSION:
-        if entry.status == "permission_requested":
-            return f"{base} permission-message permission-requested"
-        return f"{base} permission-message"
-    if entry.kind == TuiEntryKind.ERROR:
-        return f"{base} error-message"
-    if entry.kind == TuiEntryKind.TOOL:
-        if entry.status == "running":
-            return f"{base} tool-message tool-running"
-        if entry.status == "success":
-            return f"{base} tool-message tool-done"
-        if entry.status in {"error", "denied", "failed"}:
-            return f"{base} tool-message tool-failed"
-        return f"{base} tool-message"
-    return f"{base} system-message"
-
-
-def entry_plain_text(entry: TuiTranscriptEntry) -> str:
-    if entry.kind in {TuiEntryKind.USER, TuiEntryKind.ASSISTANT, TuiEntryKind.TOOL, TuiEntryKind.REASONING}:
-        return f"{entry.label}\n  {entry.body}"
-    return entry.body
-
-
-def entry_markdown_text(entry: TuiTranscriptEntry) -> str:
-    return f"{entry.label}\n\n{entry.body}"
-
-
-def tool_event_entry_kind(event) -> TuiEntryKind:
-    kind = str(getattr(event, "kind", "") or "")
-    if kind == "permission_requested":
-        return TuiEntryKind.PERMISSION
-    return TuiEntryKind.TOOL
+def entry_markdown_text_block(block: TranscriptBlock) -> str:
+    if block.kind == BlockKind.ASSISTANT:
+        return f"LansCoder:\n\n{block.text}"
+    return block.text
 
 
 _BLOCK_CLASSES = {
@@ -120,7 +59,5 @@ def child_expanded_text(child: ChildItem) -> str:
 def child_row_classes(child: ChildItem) -> str:
     if child.kind == ChildKind.THINKING:
         return "child-row child-thinking"
-    status_class = {"running": "tool-running", "success": "tool-done", "error": "tool-failed", "denied": "tool-denied"}.get(
-        child.status or "", ""
-    )
+    status_class = {"running": "tool-running", "success": "tool-done", "error": "tool-failed", "denied": "tool-denied"}.get(child.status or "", "")
     return f"child-row child-tool {status_class}".rstrip()

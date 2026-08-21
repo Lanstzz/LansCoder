@@ -8,13 +8,12 @@ from textual.css.query import NoMatches
 
 from lanscoder.app import model_topbar_themes, theme
 from lanscoder.app.activity_view import (
+    compact_tool_arguments,
+    compact_tool_content,
     post_tool_reasoning_text,
     task_plan_panel_text,
     tool_activity_line_text,
-    tool_activity_summary,
-    tool_event_label,
     tool_event_status,
-    tool_status_text,
     single_line_activity,
     truncate_activity_text,
     turn_metrics_text,
@@ -28,13 +27,15 @@ from lanscoder.app.topbar_view import (
     _truncate_markup,
 )
 from lanscoder.app.transcript_view import (
-    entry_classes,
-    entry_markdown_text,
-    entry_plain_text,
-    tool_event_entry_kind,
+    block_classes,
+    child_collapsed_text,
+    child_expanded_text,
+    child_row_classes,
+    entry_markdown_text_block,
 )
-from lanscoder.app.tui_state import TuiEntryKind, TuiTranscriptEntry
+from lanscoder.app.tui_state import BlockKind, ChildItem, ChildKind, TranscriptBlock
 from lanscoder.app.tui_widgets import (
+    ChildRow,
     LansCoderMarkdown,
     _observe_markdown_update,
     _plain_static,
@@ -45,8 +46,8 @@ from lanscoder.planning.projection import project_plan
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 
 
-def _entry_renderable(entry: TuiTranscriptEntry, rendered: str) -> object:
-    if entry.kind != TuiEntryKind.COMMAND:
+def _entry_renderable_block(block: TranscriptBlock, rendered: str) -> object:
+    if block.kind != BlockKind.COMMAND:
         return rendered
     if not any(line.startswith("> ") for line in rendered.splitlines()):
         return rendered
@@ -129,7 +130,6 @@ class LansCoderViewMixin:
         self._stream_text_needs_newline = False
         self._stream_text_buffer = ""
         self._stream_text_widget = None
-        self._stream_text_entry = None
         self._stream_rendered_text = ""
         self._stream_flush_timer = None
         self._stream_markdown_update = None
@@ -192,21 +192,11 @@ class LansCoderViewMixin:
                 return
             if event_kind == "permission_requested":
                 return
-            line = tool_status_text(event)
-            if not line:
-                return
             self._live_tool_events_seen = True
             self._call_ui_thread(self._close_stream_segment_for_tool)
             self._call_ui_thread(self._record_tool_activity, event)
-            if tool_name in {"task_create", "task_update", "task_revise"} and str(getattr(event, "kind", "") or "") == "finished":
+            if tool_name in {"task_create", "task_update", "task_revise"} and event_kind == "finished":
                 self._call_ui_thread(self._refresh_task_plan_panel_from_current_session)
-            self._call_ui_thread(
-                self._write_line,
-                line,
-                kind=tool_event_entry_kind(event),
-                label=tool_event_label(event),
-                status=tool_event_status(event),
-            )
 
         setattr(self.chat_runner, "tool_event_handler", handle_event)
         return previous_handler
@@ -293,30 +283,94 @@ class LansCoderViewMixin:
         if hasattr(output, "scroll_end"):
             output.scroll_end(animate=False)
 
-    def _write_line(
-        self,
-        text: str,
-        *,
-        classes: str | None = None,
-        kind: TuiEntryKind = TuiEntryKind.SYSTEM,
-        label: str | None = None,
-        status: str | None = None,
-    ) -> TuiTranscriptEntry:
-        entry = self.transcript.add(kind, text, label=label, status=status)
-        classes = classes or entry_classes(entry)
-        rendered = entry_plain_text(entry)
+    def _append_block(self, block: TranscriptBlock) -> None:
+        rendered = block.text
         output = self.query_one("#output")
-        if hasattr(output, "mount"):
-            widget = _plain_static(_entry_renderable(entry, rendered), classes=classes)
-            entry.widget = widget
+        classes = block_classes(block)
+        if block.kind == BlockKind.ASSISTANT:
+            markdown = LansCoderMarkdown(classes=classes, selectable=False)
             was_pinned = self._is_output_pinned_to_bottom(output)
-            output.mount(widget)
+            output.mount(markdown)
+            _observe_markdown_update(markdown.update(entry_markdown_text_block(block)))
             if was_pinned:
                 self._scroll_output_end(output)
-            return entry
-        if hasattr(output, "write_line"):
-            output.write_line(rendered)
-        return entry
+            return
+        rendered_text = _entry_renderable_block(block, rendered)
+        was_pinned = self._is_output_pinned_to_bottom(output)
+        output.mount(_plain_static(rendered_text, classes=classes))
+        if was_pinned:
+            self._scroll_output_end(output)
+
+    def _ui_line(self, kind: BlockKind, text: str) -> None:
+        if kind == BlockKind.USER:
+            self.projector.start_user(text)
+        else:
+            self.projector.flat_block(kind, text)
+        block = self.transcript.blocks[-1]
+        self._append_block(block)
+
+    def render_block_into(self, block: TranscriptBlock, block_index: int) -> None:
+        output = self.query_one("#output")
+        was_pinned = self._is_output_pinned_to_bottom(output)
+        if block.kind == BlockKind.ASSISTANT:
+            markdown = LansCoderMarkdown(entry_markdown_text_block(block), classes="message assistant-message")
+            output.mount(markdown)
+            for child in block.children:
+                self._mount_child_row(output, block_index, child)
+            if was_pinned:
+                self._scroll_output_end(output)
+            return
+        output.mount(_plain_static(block.text, classes=block_classes(block)))
+        if was_pinned:
+            self._scroll_output_end(output)
+
+    def _mount_child_row(self, output, block_index: int, child: ChildItem) -> None:
+        if child.expanded:
+            content = child_expanded_text(child)
+        else:
+            content = child_collapsed_text(child)
+        width = getattr(getattr(output, "size", None), "width", None)
+        if isinstance(width, int) and width > 0 and not child.expanded:
+            content = truncate_activity_text(content, max(1, width - 6))
+        row = ChildRow(
+            content,
+            block_index=block_index,
+            child_key=child.key,
+            id=f"child-{block_index}-{child.key}",
+            classes=child_row_classes(child),
+        )
+        output.mount(row)
+
+    def _refresh_child_row(self, block_index: int, child: ChildItem) -> None:
+        if not getattr(self, "is_running", False):
+            return
+        output = self._query_mounted("#output")
+        if output is None:
+            return
+        row = self._query_mounted(f"#child-{block_index}-{child.key}")
+        if isinstance(row, ChildRow):
+            self.refresh_block_row(row)
+            return
+        self._mount_child_row(output, block_index, child)
+
+    def _toggle_child_expanded(self, block_index: int, key: str) -> None:
+        block = self.transcript.blocks[block_index]
+        child = next((c for c in block.children if c.key == key), None)
+        if child is None:
+            return
+        child.expanded = not child.expanded
+
+    def refresh_block_row(self, row: ChildRow) -> None:
+        try:
+            block = self.transcript.blocks[row.block_index]
+        except IndexError:
+            return
+        child = next((c for c in block.children if c.key == row.child_key), None)
+        if child is None:
+            row.update("")
+            return
+        content = child_expanded_text(child) if child.expanded else child_collapsed_text(child)
+        row.update(content)
 
     def _show_welcome(self) -> None:
         output = self.query_one("#output")
@@ -432,8 +486,27 @@ class LansCoderViewMixin:
                 self._running_tool_call_ids.add(tool_call_id)
         elif tool_call_id:
             self._running_tool_call_ids.discard(tool_call_id)
-        summary = tool_activity_summary(event)
-        self.transcript.record_tool_activity(name, status, summary)
+        if status == "running":
+            status_kind = "started"
+        elif status in {"success", "error"}:
+            status_kind = "finished"
+        else:
+            status_kind = "denied"
+        result = getattr(event, "result", None)
+        self.projector.tool_event(
+            tool_call_id,
+            name,
+            status_kind,
+            arguments=compact_tool_arguments(getattr(tool_call, "arguments", None)),
+            ok=bool(getattr(result, "ok", False)) if status_kind == "finished" else None,
+            result_body=compact_tool_content(str(getattr(result, "content", "") or "")) if status_kind == "finished" else "",
+        )
+        block_index = len(self.transcript.blocks) - 1
+        block = self.transcript.last_block()
+        if block is not None and block.kind == BlockKind.ASSISTANT:
+            child = next((c for c in block.children if c.kind == ChildKind.TOOL and c.key == tool_call_id), None)
+            if child is not None:
+                self._refresh_child_row(block_index, child)
         if status == "success":
             self._show_working_indicator(post_tool_reasoning_text(name))
             return
@@ -477,8 +550,10 @@ class LansCoderViewMixin:
         self.task_plan_panel_state.last_rendered_revision = task_plan.revision
 
     def _write_markdown_message(self, content: str, *, classes: str = "message assistant-message") -> None:
-        entry = self.transcript.add(TuiEntryKind.ASSISTANT, content)
-        text = entry_markdown_text(entry)
+        self.projector.start_assistant()
+        self.projector.append_assistant_text(content)
+        block = self.transcript.blocks[-1]
+        text = entry_markdown_text_block(block)
         output = self.query_one("#output")
         if hasattr(output, "mount"):
             markdown = LansCoderMarkdown(classes=classes)
@@ -532,6 +607,7 @@ class LansCoderViewMixin:
             self._reasoning_is_fallback = False
             self._working_text = ""
         self._reasoning_buffer += text
+        self.projector.append_thinking(text)
         self._set_activity(self._working_indicator_body(self._reasoning_buffer))
         self._start_working_animation()
 
@@ -638,11 +714,9 @@ class LansCoderViewMixin:
     def _append_stream_text(self, text: str) -> None:
         if self._stream_segment_closed_for_tool:
             self._start_new_stream_segment()
+        self.projector.start_assistant()
+        self.projector.append_assistant_text(text)
         self._stream_text_buffer += text
-        if self._stream_text_entry is None:
-            self._stream_text_entry = self.transcript.add(TuiEntryKind.ASSISTANT, self._stream_text_buffer)
-        else:
-            self._stream_text_entry.body = self._stream_text_buffer
         output = self.query_one("#output")
         if hasattr(output, "mount"):
             if self._stream_text_widget is None:
@@ -668,7 +742,6 @@ class LansCoderViewMixin:
         self._stream_segment_closed_for_tool = True
 
     def _finalize_stream_widget(self) -> None:
-
         widget = self._stream_text_widget
         if widget is None:
             return
@@ -727,7 +800,6 @@ class LansCoderViewMixin:
         )
 
     async def wait_for_stream_finalization(self, widget: LansCoderMarkdown) -> None:
-
         completion = self._stream_finalizations.get(widget)
         if completion is not None:
             await completion
@@ -735,7 +807,6 @@ class LansCoderViewMixin:
     def _start_new_stream_segment(self) -> None:
         self._stream_text_buffer = ""
         self._stream_text_widget = None
-        self._stream_text_entry = None
         self._stream_rendered_text = ""
         self._stream_flush_timer = None
         self._stream_markdown_update = None

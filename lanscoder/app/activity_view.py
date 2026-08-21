@@ -72,26 +72,6 @@ def tool_event_status(event) -> str | None:
     return None
 
 
-def tool_event_label(event) -> str:
-    tool_call = getattr(event, "tool_call", None)
-    name = str(getattr(tool_call, "name", "") or "tool")
-    status = tool_event_status(event)
-    if status == "permission_requested":
-        return "permission requested"
-    return f"tool {name} {status}" if status else f"tool {name}"
-
-
-def tool_activity_summary(event) -> str:
-    kind = str(getattr(event, "kind", "") or "")
-    if kind == "started":
-        tool_call = getattr(event, "tool_call", None)
-        return compact_tool_arguments(getattr(tool_call, "arguments", None))
-    if kind == "finished":
-        result = getattr(event, "result", None)
-        return compact_tool_content(str(getattr(result, "content", "") or ""))
-    return ""
-
-
 def tool_activity_line_text(name: str, status: str) -> str:
     if status == "running":
         return f"running · {name}"
@@ -109,7 +89,6 @@ def post_tool_reasoning_text(name: str) -> str:
 
 
 def task_plan_panel_text(projection: Mapping[str, object]) -> str:
-
     mode = str(projection["mode"])
     tasks = _task_lookup(projection.get("tasks"))
     ready = _task_id_set(projection.get("ready_task_ids"))
@@ -181,33 +160,6 @@ def _dependency_text(task: Mapping[str, object]) -> str:
     if not isinstance(dependencies, list) or not dependencies:
         return ""
     return " · depends on: " + ", ".join(str(dependency) for dependency in dependencies)
-
-
-def tool_status_text(event) -> str:
-    tool_call = getattr(event, "tool_call", None)
-    name = str(getattr(tool_call, "name", "") or "tool")
-    kind = str(getattr(event, "kind", "") or "")
-    if kind == "prewrite_review":
-        return ""
-    if kind == "started":
-        arguments = compact_tool_arguments(getattr(tool_call, "arguments", None))
-        suffix = f" {arguments}" if arguments else ""
-        return f"正在调用工具：{name}{suffix}"
-    if kind == "finished":
-        result = getattr(event, "result", None)
-        status = "完成" if getattr(result, "ok", False) else "失败"
-        content = compact_tool_content(str(getattr(result, "content", "") or ""))
-        suffix = f"：{content}" if content else ""
-        return f"工具{status}：{name}{suffix}"
-    if kind == "permission_requested":
-        request = getattr(event, "permission_request", None)
-        target = str(getattr(request, "target", "") or "")
-        action = str(getattr(request, "action", "") or "")
-        suffix = f"  {action} {target}".rstrip() if action or target else f"  {name}"
-        return f"permission requested{suffix}"
-    if kind == "denied":
-        return f"工具已拒绝：{name}"
-    return ""
 
 
 def compact_tool_arguments(arguments) -> str:

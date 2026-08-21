@@ -48,23 +48,19 @@ from lanscoder.app.permission_view import (
     ask_user_prompt_text,
     permission_choice_for_text,
     permission_option_label,
-    permission_options_text,
     permission_prompt_text,
 )
 from lanscoder.app.review_view import render_prewrite_review, review_command_from_text
 from lanscoder.app.transcript_view import (
-    display_line_kind,
-    display_line_status,
-    entry_plain_text,
     looks_like_markdown_response,
     looks_like_tool_display_line,
     normalize_stream_text,
 )
 from lanscoder.app import model_topbar_themes
-from lanscoder.app.activity_view import compact_tool_arguments, compact_tool_content
-from lanscoder.app.tui_state import TuiEntryKind, TuiTaskPlanPanelState, TuiTranscript, TuiTranscriptEntry
+from lanscoder.app.projector import TranscriptProjector, replay_messages
+from lanscoder.app.tui_state import BlockKind, TuiTaskPlanPanelState, TranscriptModel
 from lanscoder.app.topbar_view import _provider_name_markup, _provider_model_markup
-from lanscoder.app.tui_view import LansCoderViewMixin, _entry_renderable
+from lanscoder.app.tui_view import LansCoderViewMixin
 from lanscoder.app.tui_widgets import (
     ComposerTextArea,
     LansCoderMarkdown,
@@ -80,7 +76,6 @@ __all__ = [
     "LansCoderApp",
     "LansCoderMarkdown",
     "LansCoderTuiConfig",
-    "_entry_renderable",
     "_format_subagent_line",
     "_observe_markdown_update",
     "_plain_static",
@@ -173,7 +168,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._stream_text_needs_newline = False
         self._stream_text_buffer = ""
         self._stream_text_widget = None
-        self._stream_text_entry: TuiTranscriptEntry | None = None
         self._stream_rendered_text = ""
         self._stream_flush_timer: Timer | None = None
         self._stream_markdown_update = None
@@ -217,7 +211,8 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._foreground_cancel_requested = False
         self._pending_user_input: str | None = None
         self._pending_user_attachments: list[UserAttachment] | None = None
-        self.transcript = TuiTranscript()
+        self.transcript = TranscriptModel()
+        self.projector = TranscriptProjector(self.transcript)
         self.task_plan_panel_state = TuiTaskPlanPanelState()
 
     def compose(self) -> ComposeResult:
@@ -393,7 +388,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         else:
             ui_msg = f"⚠️ 子agent [{label}] {job.status}"
 
-        self._write_line(ui_msg, kind=TuiEntryKind.SYSTEM)
+        self._ui_line(BlockKind.SYSTEM, ui_msg)
 
         if not self._chat_busy and self.chat_runner is not None:
             self._submit_nudge_turn()
@@ -451,14 +446,14 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                 return
 
         attachment_chips = "\n".join(format_attachment_chip(item) for item in attachments)
-        user_display = f"> {text}"
+        user_text = text
         if attachment_chips:
-            user_display = f"{user_display}\n{attachment_chips}"
-        self._write_line(user_display, kind=TuiEntryKind.USER)
+            user_text = f"{user_text}\n{attachment_chips}"
+        self._ui_line(BlockKind.USER, user_text)
 
         if text.startswith("/"):
             if self.command_handler is None:
-                self._write_line("Command handler is not configured.", kind=TuiEntryKind.ERROR)
+                self._ui_line(BlockKind.ERROR, "Command handler is not configured.")
                 return
 
             if " ".join(text.split()) == "/compact":
@@ -467,11 +462,11 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
 
             result = self.command_handler.handle(text)
             if result.handled:
-                self._write_line(result.output, kind=TuiEntryKind.COMMAND)
+                self._ui_line(BlockKind.COMMAND, result.output)
                 self._handle_command_action(result.action, output=result.output)
                 self._refresh_session_subtitle()
                 return
-            self._write_line(f"Unknown command: {text}", kind=TuiEntryKind.ERROR)
+            self._ui_line(BlockKind.ERROR, f"Unknown command: {text}")
             return
 
         self._staged_attachments.clear()
@@ -480,13 +475,13 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
     def _submit_manual_compact(self, text: str) -> None:
         """手动 /compact:校验空闲且无重复任务后启动压缩 worker。"""
         if self._chat_busy:
-            self._write_line("Chat is still running. Please wait before compacting context.", kind=TuiEntryKind.SYSTEM)
+            self._ui_line(BlockKind.SYSTEM, "Chat is still running. Please wait before compacting context.")
             return
         if self._compact_worker is not None:
-            self._write_line("Manual compact is already running.", kind=TuiEntryKind.SYSTEM)
+            self._ui_line(BlockKind.SYSTEM, "Manual compact is already running.")
             return
         self._set_activity("compacting context...")
-        self._write_line("Manual compact started.", kind=TuiEntryKind.SYSTEM)
+        self._ui_line(BlockKind.SYSTEM, "Manual compact started.")
         self._compact_worker = self.run_worker(self._run_manual_compact_command(text))
 
     async def _run_manual_compact_command(self, text: str) -> None:
@@ -497,17 +492,17 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         except asyncio.CancelledError:
             return
         except Exception as exc:
-            self._write_line(f"Manual compact error: {exc}", kind=TuiEntryKind.ERROR)
+            self._ui_line(BlockKind.ERROR, f"Manual compact error: {exc}")
             return
         finally:
             self._compact_worker = None
 
         if result.handled:
-            self._write_line(result.output, kind=TuiEntryKind.COMMAND)
+            self._ui_line(BlockKind.COMMAND, result.output)
             self._handle_command_action(result.action, output=result.output)
             self._refresh_session_subtitle()
         else:
-            self._write_line(f"Unknown command: {text}", kind=TuiEntryKind.ERROR)
+            self._ui_line(BlockKind.ERROR, f"Unknown command: {text}")
         self._set_activity("done")
 
     async def on_composer_text_area_submitted(self, event: ComposerTextArea.Submitted) -> None:
@@ -616,18 +611,14 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return self._stage_paste_attachments(None)
 
     def _notify_clipboard_image_unavailable(self) -> None:
-
-        self._write_line(
-            "No clipboard image found. Copy an image first, or paste an image file path instead.",
-            kind=TuiEntryKind.SYSTEM,
-        )
+        self._ui_line(BlockKind.SYSTEM, "No clipboard image found. Copy an image first, or paste an image file path instead.")
 
     def _stage_paste_attachments(self, paste_text: str | None) -> bool:
         """解析并去重暂存粘贴的附件,写入附件提示行。"""
         try:
             attachments = resolve_paste_attachments(paste_text)
         except (OSError, ValueError) as exc:
-            self._write_line(f"Could not attach pasted image: {exc}", kind=TuiEntryKind.ERROR)
+            self._ui_line(BlockKind.ERROR, f"Could not attach pasted image: {exc}")
             return True
         if not attachments:
             return False
@@ -637,7 +628,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return True
         self._staged_attachments.extend(added)
         chips = ", ".join(format_attachment_chip(item) for item in added)
-        self._write_line(f"Attached: {chips}", kind=TuiEntryKind.SYSTEM)
+        self._ui_line(BlockKind.SYSTEM, f"Attached: {chips}")
         return True
 
     def _next_chat_turn_token(self) -> int:
@@ -668,7 +659,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return token == self._chat_turn_token
 
     def is_turn_active(self) -> bool:
-
         return self._active_chat_turn is not None
 
     def _finish_chat_turn(self, token: int) -> None:
@@ -723,8 +713,9 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._running_tool_call_ids.clear()
         self._stop_working_animation()
         self._stop_activity_animation()
+        self.projector.end_turn()
         self._set_activity("interrupted")
-        self._write_line("Interrupted current turn.", kind=TuiEntryKind.SYSTEM)
+        self._ui_line(BlockKind.SYSTEM, "Interrupted current turn.")
 
     def _record_input_history(self, text: str) -> None:
         if not self._input_history or self._input_history[-1] != text:
@@ -799,20 +790,17 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
     def _submit_chat_text(self, text: str, *, attachments: list[UserAttachment] | None = None) -> None:
         """核心提交入口:忙态排队消息,处理挂起的权限/ask_user,否则启动新回合。"""
         if self.chat_runner is None:
-            self._write_line("普通聊天入口尚未接入 AgentLoop。", kind=TuiEntryKind.ERROR)
+            self._ui_line(BlockKind.ERROR, "普通聊天入口尚未接入 AgentLoop。")
             return
 
         if self._compact_worker is not None:
-            self._write_line("Manual compact is still running. Please wait before sending a chat message.", kind=TuiEntryKind.SYSTEM)
+            self._ui_line(BlockKind.SYSTEM, "Manual compact is still running. Please wait before sending a chat message.")
             return
 
         if self._chat_busy:
             self._pending_user_input = text
             self._pending_user_attachments = attachments
-            self._write_line(
-                "消息已排队。当前 turn 结束后自动发送。",
-                kind=TuiEntryKind.SYSTEM,
-            )
+            self._ui_line(BlockKind.SYSTEM, "消息已排队。当前 turn 结束后自动发送。")
             self._set_activity("running · message queued")
             return
 
@@ -834,7 +822,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                     return
             choice = permission_choice_for_text(text, pending)
             if choice is None:
-                self._write_line(permission_options_text(pending), kind=TuiEntryKind.PERMISSION)
+                self._show_permission_zone()
                 return
             self._submit_permission_choice(choice)
             return
@@ -865,10 +853,12 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return
         zone = self.query_one("#permission-zone", Static)
         zone.remove_class("hidden")
-        if getattr(pending, "kind", None) == "permission_confirmation":
+        pending_kind = getattr(pending, "kind", None)
+        if pending_kind == "permission_confirmation":
             payload = getattr(pending, "payload", {}) or {}
             review_payload = payload.get("prewrite_review")
             if isinstance(review_payload, dict):
+                self._review_expanded_paths.clear()
                 text = render_prewrite_review(review_payload, expanded_paths=self._review_expanded_paths).plain
             else:
                 text = permission_prompt_text(pending)
@@ -882,15 +872,12 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             label = str(getattr(option, "label", "") or option_id)
             label = permission_option_label(label, option_id)
             button_id = f"permission-{option_id}" if option_id else f"permission-opt-{index}"
-            wanted.append((Button(label, id=button_id, classes="permission-button"), option_id or label))
+            submit_choice = label if pending_kind == "ask_user" else (option_id or label)
+            wanted.append((Button(label, id=button_id, classes="permission-button"), submit_choice))
         # 同一次消息循环内可能连续显示 zone(点击按钮后 pending 未清时 worker 会再显示),
         # 而按钮移除是异步 prune,旧按钮在节点表里仍存在;直接重挂同名按钮会触发 DuplicateIds,
         # 这里按 id 复用/更新,只移除这次不需要的按钮。
-        existing = {
-            child.id: child
-            for child in list(zone.children)
-            if isinstance(child, Button) and isinstance(child.id, str)
-        }
+        existing = {child.id: child for child in list(zone.children) if isinstance(child, Button) and isinstance(child.id, str)}
         wanted_ids = {str(button.id) for button, _ in wanted}
         for button_id in sorted(set(existing).difference(wanted_ids)):
             existing[button_id].remove()
@@ -946,7 +933,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             self._picker = None
             self._clear_output()
             if output:
-                self._write_line(output, kind=TuiEntryKind.COMMAND)
+                self._ui_line(BlockKind.COMMAND, output)
             return False
         picker_specs = {
             "resume_picker": (
@@ -1037,7 +1024,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if event.key == "escape":
             kind = picker.kind
             self._picker = None
-            self._write_line(f"{kind.capitalize()} selection cancelled.", kind=TuiEntryKind.COMMAND)
+            self._ui_line(BlockKind.COMMAND, f"{kind.capitalize()} selection cancelled.")
             return True
         return False
 
@@ -1047,7 +1034,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return False
         index = number - 1
         if index < 0 or index >= len(picker.items):
-            self._write_line("Invalid selection.", kind=TuiEntryKind.ERROR)
+            self._ui_line(BlockKind.ERROR, "Invalid selection.")
             return True
         self._picker_select_index(index)
         return True
@@ -1065,7 +1052,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return
         result = self.command_handler.handle(command)
         if result.output:
-            self._write_line(result.output, kind=TuiEntryKind.COMMAND)
+            self._ui_line(BlockKind.COMMAND, result.output)
         self._handle_command_action(result.action)
         self._refresh_session_subtitle()
 
@@ -1096,35 +1083,27 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         input_widget.focus()
 
     def _replace_last_command_output(self, text: str) -> None:
-        """就地更新最后一条命令输出行,找不到时追加新行。"""
-        for entry in reversed(self.transcript.entries):
-            if entry.kind == TuiEntryKind.COMMAND:
-                entry.body = text
-                rendered = entry_plain_text(entry)
-                widget = entry.widget
-                if widget is not None and hasattr(widget, "update"):
-                    widget.update(_entry_renderable(entry, rendered))
-                    return
-                self._rerender_transcript()
-                return
-        self._write_line(text, kind=TuiEntryKind.COMMAND)
+        """就地更新最后一条命令输出块,找不到时追加新行。"""
+        block = self.transcript.find_last_command_block()
+        if block is not None:
+            block.text = text
+            self._rerender_transcript()
+            return
+        self._ui_line(BlockKind.COMMAND, text)
 
     def _clear_output(self) -> None:
         self._clear_task_plan_panel_if_mounted()
-        self.transcript = TuiTranscript()
+        self.transcript = TranscriptModel()
+        self.projector = TranscriptProjector(self.transcript)
         self.task_plan_panel_state = TuiTaskPlanPanelState()
         self._remove_output_children()
 
     def _rerender_transcript(self) -> None:
-        """按 transcript 记录重建输出区内容。"""
-        entries = list(self.transcript.entries)
-        self.transcript = TuiTranscript()
+        """按 transcript 块重建输出区内容,保留模型与块索引(供子行点击定位)。"""
+        self.projector.end_turn()
         self._remove_output_children()
-        for entry in entries:
-            if entry.kind == TuiEntryKind.ASSISTANT:
-                self._write_markdown_message(entry.body)
-            else:
-                self._write_line(entry.body, kind=entry.kind, label=entry.label, status=entry.status)
+        for index, block in enumerate(self.transcript.blocks):
+            self.render_block_into(block, index)
 
     def _remove_output_children(self) -> None:
         output = self.query_one("#output")
@@ -1149,45 +1128,10 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._clear_output()
         if view.task_plan is not None:
             self._render_task_plan_panel(view.task_plan)
-        for message in getattr(view, "messages", []):
-            if message.role == "user":
-                content = "\n".join(part.content for part in message.parts if getattr(part, "content", ""))
-                if not content:
-                    continue
-                self._write_line(f"> {content}", kind=TuiEntryKind.USER)
-            elif message.role == "assistant":
-                for part in message.parts:
-                    if part.kind == "text" and part.content:
-                        self._write_markdown_message(part.content)
-                    elif part.kind == "tool_call":
-                        name = str(part.metadata.get("tool_name") or "tool")
-                        arguments = compact_tool_arguments(part.metadata.get("arguments"))
-                        suffix = f" {arguments}" if arguments else ""
-                        self._write_line(
-                            f"正在调用工具：{name}{suffix}",
-                            kind=TuiEntryKind.TOOL,
-                            label=f"tool {name} running",
-                            status="running",
-                        )
-            elif message.role == "notification":
-                content = "\n".join(part.content for part in message.parts if part.kind == "text" and part.content)
-                if content:
-                    self._write_line(content, kind=TuiEntryKind.SYSTEM)
-            else:
-                for part in message.parts:
-                    if part.kind != "tool_result":
-                        continue
-                    name = str(part.metadata.get("tool_name") or "tool")
-                    ok = bool(part.metadata.get("ok", True))
-                    status = "success" if ok else "error"
-                    result = compact_tool_content(part.content)
-                    suffix = f"：{result}" if result else ""
-                    self._write_line(
-                        f"工具{'完成' if ok else '失败'}：{name}{suffix}",
-                        kind=TuiEntryKind.TOOL,
-                        label=f"tool {name} {status}",
-                        status=status,
-                    )
+        self.projector = TranscriptProjector(self.transcript)
+        replay_messages(self.projector, getattr(view, "messages", []))
+        for index, block in enumerate(self.transcript.blocks):
+            self.render_block_into(block, index)
         sync_pending = getattr(self.chat_runner, "sync_pending_input_from_current_session", None)
         if sync_pending is not None:
             sync_pending()
@@ -1207,7 +1151,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return
         except Exception as exc:
             if self._is_current_chat_turn(token):
-                self._write_line(f"Chat error: {exc}", kind=TuiEntryKind.ERROR)
+                self._ui_line(BlockKind.ERROR, f"Chat error: {exc}")
                 self._refresh_session_subtitle()
             return
         finally:
@@ -1243,7 +1187,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return
         except Exception as exc:
             if self._is_current_chat_turn(token):
-                self._write_line(f"Chat error: {exc}", kind=TuiEntryKind.ERROR)
+                self._ui_line(BlockKind.ERROR, f"Chat error: {exc}")
                 self._refresh_session_subtitle()
             return
         finally:
@@ -1273,7 +1217,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return
         except Exception as exc:
             if self._is_current_chat_turn(token):
-                self._write_line(f"Chat error: {exc}", kind=TuiEntryKind.ERROR)
+                self._ui_line(BlockKind.ERROR, f"Chat error: {exc}")
                 self._refresh_session_subtitle()
             return
         finally:
@@ -1295,8 +1239,9 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             # 工具前的文本在尾部块里重复渲染(已 finalize 的前段块不会改变)。
             if not self._live_tool_events_seen and content and normalize_stream_text(content) != normalize_stream_text(self._stream_text_buffer):
                 self._stream_text_buffer = content
-                if self._stream_text_entry is not None:
-                    self._stream_text_entry.body = content
+                block = self.transcript.last_block()
+                if block is not None and block.kind == BlockKind.ASSISTANT:
+                    block.text = content
             display_lines = [line for line in display_lines if looks_like_tool_display_line(line) or normalize_stream_text(line) != normalize_stream_text(self._stream_text_buffer)]
             self._finalize_stream_widget()
         if self._live_tool_events_seen:
@@ -1307,8 +1252,8 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             for line in display_lines:
                 if line == content or looks_like_markdown_response(line):
                     self._write_markdown_message(line)
-                else:
-                    self._write_line(line, kind=display_line_kind(line), status=display_line_status(line))
+                elif not looks_like_tool_display_line(line):
+                    self._ui_line(BlockKind.SYSTEM, line)
         elif not self._stream_text_started:
             self._write_markdown_message(content or "[assistant response has no text content]")
         self._write_pending_input()
