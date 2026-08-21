@@ -225,8 +225,9 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             yield VerticalScroll(id="output")
             yield _plain_static("", id="task-plan-panel", classes="task-plan-panel hidden")
             yield Static("idle · ready", id="activity", classes="activity-line")
+            # 联想栏放在 composer 上方的兄弟位置:弹出时不再把输入框往下推
+            yield SlashSuggest(id="slash-suggest")
             with Vertical(id="composer", classes="composer"):
-                yield SlashSuggest(id="slash-suggest")
                 yield ComposerTextArea(
                     placeholder="输入消息，Enter 发送，Shift+Enter 换行，Ctrl/Cmd+V 粘贴图片",
                     id="input",
@@ -313,14 +314,19 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             if job.cancel_requested:
                 line = f"{line} · cancelling"
             lines_by_id[job.id] = line
-        hidden = len(rows) - _MAX_VISIBLE_SUBAGENT_LINES
-        hint = "↑/↓ 选择 · x 停止 · Esc 返回" if self._subagent_select_mode else "↓ 进入选择 · 点击选择子agent"
         row_ids = [row.id for row in rows[:_MAX_VISIBLE_SUBAGENT_LINES]]
-        keep_ids = {f"subagent-row-{row_id}" for row_id in row_ids}
+        # 选中的行即使超出可见上限也要保留,否则选择会指向一个被删除的行
+        if self._subagent_selected is not None and self._subagent_selected not in row_ids and any(row.id == self._subagent_selected for row in rows):
+            row_ids.append(self._subagent_selected)
+        hidden = len(rows) - len(row_ids)
+        hint = "↑/↓ 选择 · x 停止 · Esc 返回" if self._subagent_select_mode else "↓ 进入选择 · 点击选择子agent"
         children_by_id = {child.id: child for child in panel.children if isinstance(child.id, str)}
+        keep_ids = {f"subagent-row-{row_id}" for row_id in row_ids}
         for child in list(panel.children):
             if isinstance(child.id, str) and child.id not in keep_ids and child.id not in {"subagent-hint", "subagent-footer"}:
                 child.remove()
+        anchors = [child for child in panel.children if isinstance(child.id, str) and child.id in {"subagent-footer", "subagent-hint"}]
+        anchor = anchors[0] if anchors else None
         for row_id in row_ids:
             static = children_by_id.get(f"subagent-row-{row_id}")
             if static is None:
@@ -329,10 +335,13 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             else:
                 static.update(lines_by_id[row_id])
             static.set_class(row_id == self._subagent_selected, "selected")
+            if anchor is not None:
+                panel.move_child(static, before=anchor)
         footer_widget = children_by_id.get("subagent-footer")
         if hidden > 0:
             if footer_widget is None:
-                panel.mount(Static(f"…还有 {hidden} 个子agent在跑", id="subagent-footer"))
+                hint_for_order = children_by_id.get("subagent-hint")
+                panel.mount(Static(f"…还有 {hidden} 个子agent在跑", id="subagent-footer"), before=hint_for_order)
             else:
                 footer_widget.update(f"…还有 {hidden} 个子agent在跑")
         elif footer_widget is not None:
@@ -565,10 +574,15 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             await result
 
     def copy_to_clipboard(self, text: str) -> None:
-        """复制到剪贴板;macOS 上额外用 pbcopy 兜底。"""
+        """复制到剪贴板;macOS 上额外用 pbcopy 兜底(后台线程执行,避免阻塞事件循环)。"""
         super().copy_to_clipboard(text)
         if platform.system() == "Darwin":
-            subprocess.run(["pbcopy"], input=text, text=True, check=False)
+            self.run_worker(
+                lambda: subprocess.run(["pbcopy"], input=text, text=True, check=False),
+                thread=True,
+                exclusive=False,
+                exit_on_error=False,
+            )
 
     def on_click(self, event: events.Click) -> None:
         """点击子agent 行时选中并进入选择模式。"""
@@ -1202,7 +1216,10 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         display_lines = list(getattr(self.chat_runner, "last_display_lines", []) or [])
         content = getattr(response, "content", "")
         if self._stream_text_started:
-            if content and normalize_stream_text(content) != normalize_stream_text(self._stream_text_buffer):
+            # 无工具切分时,流缓冲与最终 content 对齐(流被截断时兜底);
+            # 有工具事件时缓冲只含工具后的尾段,若用完整 content 覆盖会导致
+            # 工具前的文本在尾部块里重复渲染(已 finalize 的前段块不会改变)。
+            if not self._live_tool_events_seen and content and normalize_stream_text(content) != normalize_stream_text(self._stream_text_buffer):
                 self._stream_text_buffer = content
                 if self._stream_text_entry is not None:
                     self._stream_text_entry.body = content

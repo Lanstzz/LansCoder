@@ -50,6 +50,7 @@ class ComposerTextArea(TextArea):
         pass
 
     _suppress_suggest = False
+    _suggest_highlight_moved = False
 
     def _get_slash_suggest(self):
         try:
@@ -63,6 +64,8 @@ class ComposerTextArea(TextArea):
             suggest.update_suggestions(self.text)
 
     def _on_text_area_changed(self, _event: TextArea.Changed) -> None:
+        # 文本变化会重建联想列表并重置高亮,手动移动标记随之失效
+        self._suggest_highlight_moved = False
         if self._suppress_suggest:
             return
         self._update_slash_suggest()
@@ -76,6 +79,15 @@ class ComposerTextArea(TextArea):
             if event.key == "enter":
                 event.stop()
                 event.prevent_default()
+                # 只有用户手动移动过高亮时才把高亮命令补全后提交,
+                # 避免输入 / + Enter 这类只打算提交原文的场景被改写
+                if self._suggest_highlight_moved:
+                    cmd = suggest.selected_command()
+                    if cmd:
+                        self._suppress_suggest = True
+                        self.load_text(cmd + " ")
+                        self.cursor_location = self.document.end
+                        self.call_after_refresh(self._clear_suppress)
                 suggest.remove_class("--visible")
                 self.post_message(self.Submitted())
                 return
@@ -98,12 +110,14 @@ class ComposerTextArea(TextArea):
             if event.key == "up":
                 event.stop()
                 event.prevent_default()
+                self._suggest_highlight_moved = True
                 if suggest.highlighted is not None and suggest.highlighted > 0:
                     suggest.action_cursor_up()
                 return
             if event.key == "down":
                 event.stop()
                 event.prevent_default()
+                self._suggest_highlight_moved = True
                 if suggest.highlighted is not None and suggest.highlighted < suggest.option_count - 1:
                     suggest.action_cursor_down()
                 return

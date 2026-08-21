@@ -1,5 +1,7 @@
 import asyncio
 
+import anyio
+
 import threading
 from unittest.mock import Mock
 
@@ -20,6 +22,7 @@ from lanscoder.runtime.user_input import UserInputOption, UserInputRequest
 from lanscoder.app.router import CompositeCommandHandler
 from lanscoder.app.runtime import CurrentSessionState
 from lanscoder.app.session_commands import SessionCommandHandler
+from lanscoder.app.slash_suggest import SlashSuggest
 from lanscoder.app.tui import (
     ComposerTextArea,
     LansCoderApp,
@@ -571,13 +574,19 @@ async def test_subagent_panel_x_stops_background_job() -> None:
         manager.shutdown()
 
 
-def test_lanscoder_app_copies_to_macos_clipboard(monkeypatch) -> None:
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_lanscoder_app_copies_to_macos_clipboard(monkeypatch) -> None:
     app = LansCoderApp()
-    pbcopy = Mock()
+    done = threading.Event()
+    pbcopy = Mock(side_effect=lambda *args, **kwargs: done.set())
     monkeypatch.setattr("lanscoder.app.tui.platform.system", lambda: "Darwin")
     monkeypatch.setattr("lanscoder.app.tui.subprocess.run", pbcopy)
 
-    app.copy_to_clipboard("copied text")
+    async with app.run_test() as pilot:
+        app.copy_to_clipboard("copied text")
+        assert await anyio.to_thread.run_sync(done.wait, 5.0)
+        await pilot.pause()
 
     pbcopy.assert_called_once_with(["pbcopy"], input="copied text", text=True, check=False)
 
@@ -3976,3 +3985,162 @@ async def test_lanscoder_app_permission_resume_keeps_same_active_turn_metrics(
     assert app._active_chat_turn is None
     assert app._turn_started_at == started_at
     assert app._turn_tool_count == 2
+
+
+class _RecordingSlashCommands:
+    """记录被提交的斜杠命令;all_commands 供联想栏使用。"""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def all_commands(self):
+        return [("/help", "显示帮助"), ("/model", "切换模型")]
+
+    def handle(self, text: str) -> CommandResult:
+        self.calls.append(text)
+        return CommandResult(handled=True, output=f"handled:{text}")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_slash_suggest_appears_above_input_without_moving_it() -> None:
+    class _ManyCommands(_RecordingSlashCommands):
+        def all_commands(self):
+            return [
+                ("/help", "显示帮助"),
+                ("/model", "切换模型"),
+                ("/resume", "恢复会话"),
+                ("/skills", "技能列表"),
+                ("/new", "新建会话"),
+                ("/compact", "压缩上下文"),
+                ("/sessions", "会话列表"),
+                ("/clear", "清空输出"),
+            ]
+
+    app = LansCoderApp(command_handler=_ManyCommands(), config=LansCoderTuiConfig(title="TestCoder"))
+    async with app.run_test(size=(80, 24)) as pilot:
+        input_w = app.query_one("#input")
+        suggest = app.query_one("#slash-suggest", SlashSuggest)
+        assert suggest.has_class("--visible") is False
+        before = input_w.region
+        await pilot.click("#input")
+        await pilot.press("/")
+        await pilot.pause()
+        assert suggest.has_class("--visible") is True
+        assert input_w.region == before
+        assert suggest.region.bottom <= input_w.region.y
+        # 联想栏完全可见(未被终端底边裁剪),输入框也完整可见
+        assert suggest.region.bottom <= app.screen.size.height
+        assert input_w.region.y + input_w.region.height <= app.screen.size.height
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_tool_split_keeps_tail_buffer_without_duplicating_pre_tool_text() -> None:
+    app = LansCoderApp()
+
+    async with app.run_test():
+        app._append_stream_text("before the tool")
+        first = app.query_one("LansCoderMarkdown.streaming", LansCoderMarkdown)
+        app._close_stream_segment_for_tool()
+        await app.wait_for_stream_finalization(first)
+        assert first._markdown == "LansCoder:\n\nbefore the tool"
+
+        app._stream_text_started = True
+        app._live_tool_events_seen = True
+        app._append_stream_text("after the tool")
+        second = list(app.query("LansCoderMarkdown.streaming"))[-1]
+        assert second is not first
+
+        app._write_chat_response(ChatResponse(provider="fake", model="fake", content="before the tool after the tool"))
+        await app.wait_for_stream_finalization(second)
+        # 工具前的文本只出现一次;尾部块不被完整 content 覆盖
+        assert first._markdown == "LansCoder:\n\nbefore the tool"
+        assert second._markdown == "LansCoder:\n\nafter the tool"
+        assert app.transcript.entries[-1].body == "after the tool"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_composer_enter_completes_highlighted_suggestion_after_arrow_move() -> None:
+    handler = _RecordingSlashCommands()
+    app = LansCoderApp(command_handler=handler)
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        await pilot.press("/")
+        await pilot.press("m")
+        suggest = app.query_one("#slash-suggest", SlashSuggest)
+        assert suggest.has_class("--visible")
+        await pilot.press("down")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert handler.calls == ["/model"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_composer_enter_without_arrow_keeps_typed_text() -> None:
+    handler = _RecordingSlashCommands()
+    app = LansCoderApp(command_handler=handler)
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        await pilot.press("/")
+        await pilot.press("m")
+        await pilot.press("enter")
+        await pilot.pause()
+        # 未手动移动高亮时,Enter 保持提交原输入文本
+        assert handler.calls == ["/m"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_subagent_panel_keeps_selected_row_beyond_cap_visible() -> None:
+    app = LansCoderApp(chat_runner=_PanelRunner(count=4))
+    async with app.run_test(size=(120, 40)) as pilot:
+        app._subagent_selected = "bg_0003"
+        app._subagent_select_mode = True
+        app._refresh_subagent_progress()
+        await pilot.pause()
+        panel = app.query_one("#subagent-panel")
+        statics = list(panel.query("Static"))
+        row_ids = [s.id for s in statics if s.id.startswith("subagent-row-")]
+        # 前 3 行之外被选中的第 4 行仍然保持渲染
+        assert "subagent-row-bg_0003" in row_ids
+        selected = [s for s in statics if s.has_class("selected")]
+        assert [s.id for s in selected] == ["subagent-row-bg_0003"]
+        # 4 行全部可见,无剩余,不显示 footer
+        assert len(row_ids) == 4
+        assert all("还有" not in s.content for s in statics)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_subagent_panel_rows_rebuild_in_order_above_footer_and_hint() -> None:
+    manager = _PanelManager(count=2)
+    runner = _PanelRunner(count=0)
+    runner.background_manager = manager
+    runner._foreground = None
+    app = LansCoderApp(chat_runner=runner)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app._refresh_subagent_progress()
+        await pilot.pause()
+        panel = app.query_one("#subagent-panel")
+        statics = list(panel.query("Static"))
+        assert [s.id for s in statics] == [
+            "subagent-row-bg_0000",
+            "subagent-row-bg_0001",
+            "subagent-hint",
+        ]
+        # 新任务出现在运行中,刷新后仍按行在前、提示在后的顺序
+        manager._jobs.append(_PanelJob(created_at=200.0, label="researcher2", job_id="bg_0002"))
+        manager._jobs.append(_PanelJob(created_at=201.0, label="researcher3", job_id="bg_0003"))
+        app._refresh_subagent_progress()
+        await pilot.pause()
+        statics = list(panel.query("Static"))
+        assert [s.id for s in statics] == [
+            "subagent-row-bg_0000",
+            "subagent-row-bg_0001",
+            "subagent-row-bg_0002",
+            "subagent-footer",
+            "subagent-hint",
+        ]

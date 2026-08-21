@@ -64,6 +64,11 @@ ScrollBarCorner {
     border-top: solid #626263;
 }
 
+/* 联想栏是 composer 上方的兄弟节点:左右对齐输入框,弹出时不推挤输入框。 */
+#main SlashSuggest {
+    margin: 0 2 1 2;
+}
+
 #input {
     height: 3;
     margin: 0;
