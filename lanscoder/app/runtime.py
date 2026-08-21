@@ -267,8 +267,11 @@ class AgentChatRunner:
     _cancellation_lock: threading.Lock = field(default_factory=threading.Lock)
     _active_cancellation_token: CancellationToken | None = None
     _pending_permission_loop: AgentLoop | None = None
-    # 本回合按序的 (reasoning 文本, 秒数, 消息是否含 text/tool part)；
+    # 本回合按序的 (reasoning 文本, 秒数, 消息是否以 tool_call 收尾)；
     # 供 TUI 收尾 reconcile 把 store 里的时长回填到 live thinking 子行。
+    # 合并边界是 tool_call 而非 text:replay/live 的 append_thinking 只查末位
+    # child 是否为 THINKING,text 结束结算后仍是末位,仅 tool_call 追加 TOOL
+    # child 顶掉末位、切断下一条 reasoning 的合并链。
     _turn_reasonings: list[tuple[str, float | None, bool]] = field(default_factory=list)
 
     def set_provider(self, provider: ChatProvider, *, use_streaming: bool) -> None:
@@ -383,8 +386,10 @@ class AgentChatRunner:
             reasoning, seconds = _reasoning_entry(message)
             if not reasoning and seconds is None:
                 continue
-            had_parts = any(part.kind in {"text", "tool_call"} for part in getattr(message, "parts", []) or [])
-            self._turn_reasonings.append((reasoning, seconds, had_parts))
+            # 合并边界:仅 tool_call part 切断合并链(text part 结算后 THINKING
+            # child 仍在块末尾,下一条 reasoning 会继续合并进它)。
+            ended_with_tool = any(part.kind == "tool_call" for part in getattr(message, "parts", []) or [])
+            self._turn_reasonings.append((reasoning, seconds, ended_with_tool))
 
     @property
     def last_turn_reasonings(self) -> list[tuple[str, float | None, bool]]:

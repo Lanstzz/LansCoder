@@ -795,7 +795,7 @@ def test_runner_last_turn_reasonings_reset_and_accumulate(tmp_path) -> None:
     runner._start_turn(streaming=False)
     runner._accumulate_turn_reasonings(before_count)
     assert len(runner.last_turn_reasonings) == 1
-    assert runner.last_turn_reasonings[0] == ("r", 9.0, True)  # 含 text part
+    assert runner.last_turn_reasonings[0] == ("r", 9.0, False)  # 仅 text part,不切断合并链
 
     # 新回合重置: 上一回合的 reasoning 不进新窗口。
     session.append_user_message("again")
@@ -838,4 +838,36 @@ def test_runner_last_turn_reasonings_accumulates_across_resume_without_reset(tmp
     )
     runner._resume_turn(streaming=False)
     runner._accumulate_turn_reasonings(before_count)
-    assert runner.last_turn_reasonings == [("r", 9.0, True), ("r2", 3.0, True)]
+    assert runner.last_turn_reasonings == [("r", 9.0, False), ("r2", 3.0, False)]
+
+
+def test_runner_last_turn_reasonings_tool_call_sets_ended_with_tool(tmp_path) -> None:
+    """含 tool_call part 的 assistant 消息第三元组为 True(tool_call 切断合并链)。"""
+    store = JsonlSessionStore(tmp_path)
+    session = _reasoning_session_with_messages(store)
+    runner = AgentChatRunner(
+        current_session=CurrentSessionState(session),
+        provider=FakeProvider([]),
+        tools=[],
+    )
+    session.append_user_message("run tool")
+    before_count = len(session.rebuild_view().messages)  # tool_call 消息加入之前的边界
+    message_id = new_message_id()
+    parts = [
+        MessagePart(
+            id=new_part_id(),
+            message_id=message_id,
+            kind="tool_call",
+            content="",
+            metadata={"tool_call_id": "call_1", "tool_name": "echo", "arguments": {}},
+        )
+    ]
+    session.writer.append_assistant_parts(
+        parts,
+        message_id=message_id,
+        metadata={"provider": "p", "model": "m", "diagnostics": {"reasoning": "rt", "reasoning_seconds": 2.0}},
+    )
+    runner._start_turn(streaming=False)
+    runner._accumulate_turn_reasonings(before_count)
+    assert len(runner.last_turn_reasonings) == 1
+    assert runner.last_turn_reasonings[0] == ("rt", 2.0, True)  # 以 tool_call 收尾,切断合并链
