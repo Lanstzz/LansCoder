@@ -495,6 +495,8 @@ class AgentSession:
         status: str,
         task_id: str | None = None,
         observed_revision: int | None = None,
+        label: str | None = None,
+        error: str | None = None,
     ) -> str:
         """把后台任务完成通知写入会话。"""
 
@@ -505,6 +507,8 @@ class AgentSession:
             status=status,
             task_id=task_id,
             observed_revision=observed_revision,
+            label=label,
+            error=error,
         )
         self.known_message_ids.add(message_id)
         return message_id

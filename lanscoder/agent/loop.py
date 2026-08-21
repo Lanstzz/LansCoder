@@ -714,6 +714,8 @@ class AgentLoop:
                 status=notification.status,
                 task_id=notification.task_id,
                 observed_revision=notification.observed_revision,
+                label=notification.label,
+                error=notification.error,
             )
 
     def _is_cancelled(self) -> bool:

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from lanscoder.agent.session import AgentSession
 from lanscoder.context.events import SessionEvent
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.writer import SessionEventWriter
@@ -181,3 +182,37 @@ def test_transcript_builder_rejects_empty_session_with_session_error(tmp_path: P
 
     with pytest.raises(SessionEmptyError):
         TranscriptBuilder(store).build("sess_empty")
+
+
+def test_background_notification_metadata_carries_label_and_error(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="meta1")
+    session.append_background_notification(
+        content="<task_notification>...</task_notification>",
+        job_id="j1",
+        tool_name="delegate",
+        status="failed",
+        label="researcher",
+        error="boom",
+    )
+    view = session.rebuild_view()
+    notification = next(m for m in view.messages if m.role == "notification")
+    meta = notification.parts[0].metadata
+    assert meta["background_label"] == "researcher"
+    assert meta["background_error"] == "boom"
+
+
+def test_background_notification_metadata_omits_absent_label_and_error(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="meta2")
+    session.append_background_notification(
+        content="<task_notification>...</task_notification>",
+        job_id="j1",
+        tool_name="delegate",
+        status="completed",
+    )
+    view = session.rebuild_view()
+    notification = next(m for m in view.messages if m.role == "notification")
+    meta = notification.parts[0].metadata
+    assert "background_label" not in meta
+    assert "background_error" not in meta
