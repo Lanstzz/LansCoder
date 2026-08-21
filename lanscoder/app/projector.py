@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 
 from lanscoder.app.activity_view import compact_tool_arguments
+from lanscoder.app.transcript_view import background_notification_ui_text
 from lanscoder.app.tui_state import BlockKind, ChildItem, ChildKind, TranscriptBlock, TranscriptModel
 
 
@@ -185,7 +186,18 @@ def replay_messages(projector: TranscriptProjector, messages) -> None:
                     result_body=str(getattr(part, "content", "") or ""),
                 )
         elif role == "notification":
-            text = "\n".join(p.content for p in parts if p.kind == "text" and getattr(p, "content", None))
-            if text:
-                projector.flat_block(BlockKind.SYSTEM, text)
+            for part in parts:
+                if part.kind != "text":
+                    continue
+                meta = getattr(part, "metadata", None) or {}
+                if not isinstance(meta, dict):
+                    meta = {}
+                text = background_notification_ui_text(
+                    label=meta.get("background_label"),
+                    tool_name=str(meta.get("background_tool_name") or "tool"),
+                    status=str(meta.get("background_status") or ""),
+                    error=meta.get("background_error"),
+                )
+                if text:
+                    projector.flat_block(BlockKind.SYSTEM, text)
     projector.end_turn()

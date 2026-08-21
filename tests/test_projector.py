@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from lanscoder.app.projector import TranscriptProjector, replay_messages
 from lanscoder.app.tui_state import BlockKind, ChildKind, TranscriptModel
 
@@ -262,3 +264,41 @@ def test_projector_replay_thinking_sits_before_tool_children():
     replay_messages(p, build_messages())
     kinds = [c.kind for c in model.blocks[1].children]
     assert kinds == [ChildKind.THINKING, ChildKind.TOOL]
+
+
+def _notification_message(meta: dict) -> SimpleNamespace:
+    return SimpleNamespace(
+        role="notification",
+        parts=[SimpleNamespace(kind="text", content="<task_notification>...", metadata=meta)],
+    )
+
+
+def test_replay_background_notification_renders_friendly_line() -> None:
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    replay_messages(
+        p,
+        [
+            _notification_message(
+                {
+                    "background_tool_name": "delegate",
+                    "background_status": "completed",
+                    "background_label": "researcher",
+                }
+            )
+        ],
+    )
+    assert len(model.blocks) == 1
+    assert model.blocks[0].kind == BlockKind.SYSTEM
+    assert model.blocks[0].text == "✅ 子agent [researcher] 已完成"
+    assert "task_notification" not in model.blocks[0].text
+
+
+def test_replay_background_notification_defaults_label_to_tool_name() -> None:
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    replay_messages(
+        p,
+        [_notification_message({"background_tool_name": "web_search", "background_status": "failed"})],
+    )
+    assert model.blocks[0].text == "❌ 子agent [web_search] 失败: 未知错误"
