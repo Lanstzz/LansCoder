@@ -11,7 +11,6 @@ from textual.widgets import Markdown, Static, TextArea
 
 
 class LansCoderMarkdown(Markdown):
-
     ALLOW_SELECT = True
 
     def __init__(self, *args, selectable: bool = True, **kwargs) -> None:
@@ -23,7 +22,6 @@ class LansCoderMarkdown(Markdown):
         return self._selectable
 
     def set_selectable(self, selectable: bool) -> None:
-
         self._selectable = selectable
         self.refresh()
 
@@ -38,8 +36,21 @@ LansCoderMarkdown.BLOCKS = {
 }
 
 
-class ComposerTextArea(TextArea):
+class ChildRow(Static):
+    """Collapsible transcript child row:click toggles the nested child's expansion."""
 
+    def __init__(self, content: object, *, block_index: int, child_key: str, **kwargs) -> None:
+        kwargs.setdefault("markup", False)
+        super().__init__(str(content), **kwargs)
+        self.block_index = block_index
+        self.child_key = child_key
+
+    def on_click(self) -> None:
+        self.app._toggle_child_expanded(self.block_index, self.child_key)  # type: ignore[attr-defined]
+        self.app.refresh_block_row(self)  # type: ignore[attr-defined]
+
+
+class ComposerTextArea(TextArea):
     BINDINGS = [
         Binding("ctrl+v", "paste", show=False, priority=True),
         Binding("super+v", "paste", show=False, priority=True),
@@ -134,7 +145,6 @@ class ComposerTextArea(TextArea):
         await super()._on_key(event)
 
     async def _on_paste(self, event: events.Paste) -> None:
-
         stage_attachments = getattr(self.app, "_stage_paste_attachments", None)
         if callable(stage_attachments) and stage_attachments(event.text):
             event.stop()
@@ -143,13 +153,11 @@ class ComposerTextArea(TextArea):
         await super()._on_paste(event)
 
     def action_paste(self) -> None:
-
         paste_attachment = getattr(self.app, "_paste_composer_clipboard_image", None)
         if callable(paste_attachment) and paste_attachment():
             return
 
     def action_paste_image(self) -> None:
-
         paste_attachment = getattr(self.app, "_paste_composer_clipboard_image", None)
         if callable(paste_attachment) and paste_attachment():
             return
@@ -190,10 +198,8 @@ class LansCoderTuiConfig:
 
 
 class LansCoderScreen(Screen[None]):
-
     @staticmethod
     def _selection_is_blocked_by_streaming_markdown(widget) -> bool:
-
         parent = widget
         while parent is not None:
             if isinstance(parent, LansCoderMarkdown) and not parent.allow_select:

@@ -206,6 +206,22 @@ ScrollBarCorner {
     border-left: solid #4f8cff;
 }
 
+.child-row {
+    width: 100%;
+    height: 1;
+    margin: 0 0 1 3;
+    color: #808185;
+}
+
+.child-thinking {
+    color: #2b5fd9;
+}
+
+.child-tool {
+    color: #b9c2cc;
+    border-left: solid #4f8cff;
+}
+
 #subagent-panel {
     height: auto;
     min-height: 0;

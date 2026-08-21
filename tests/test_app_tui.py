@@ -30,7 +30,7 @@ from lanscoder.app.tui import (
     LansCoderTuiConfig,
 )
 from lanscoder.app.tui import LansCoderMarkdown
-from lanscoder.app.tui import _entry_renderable
+from lanscoder.app.tui_view import _entry_renderable_block
 from lanscoder.app.tui import _provider_name_markup
 from lanscoder.app.tui import _provider_model_markup
 from lanscoder.app.tui import _plain_static
@@ -42,14 +42,18 @@ from lanscoder.app.picker_adapters import render_picker_item
 from lanscoder.app import theme
 from lanscoder.app.activity_view import (
     task_plan_panel_text,
-    tool_event_label,
-    tool_event_status,
     turn_metrics_text,
 )
 from lanscoder.app.welcome import WELCOME_LOGO_PIXELS, welcome_renderable
-from lanscoder.app.transcript_view import entry_classes, tool_event_entry_kind
-from lanscoder.app.tui_state import TuiEntryKind, TuiTaskPlanPanelState, TuiTranscript
-from lanscoder.app.tui_state import TuiTranscriptEntry
+from lanscoder.app.tui_state import (
+    BlockKind,
+    ChildItem,
+    ChildKind,
+    TuiTaskPlanPanelState,
+    TranscriptBlock,
+    TranscriptModel,
+)
+from lanscoder.app.tui_widgets import ChildRow
 from lanscoder.context.models import SessionView
 from lanscoder.context.runtime_state import SessionRuntimeState
 from lanscoder.context.store import JsonlSessionStore
@@ -185,7 +189,7 @@ def test_stage_paste_attachments_adds_clipboard_attachment(monkeypatch, tmp_path
     app = LansCoderApp()
     messages: list[str] = []
     monkeypatch.setattr("lanscoder.app.tui.resolve_paste_attachments", lambda text: [attachment])
-    monkeypatch.setattr(app, "_write_line", lambda text, **kwargs: messages.append(text))
+    monkeypatch.setattr(app, "_ui_line", lambda kind, text: messages.append(text))
 
     assert app._stage_paste_attachments(None) is True
     assert app._staged_attachments == [attachment]
@@ -206,22 +210,22 @@ def test_stage_paste_attachments_does_not_add_duplicates(monkeypatch, tmp_path) 
 
 def test_stage_paste_attachments_reports_attachment_errors(monkeypatch) -> None:
     app = LansCoderApp()
-    messages: list[tuple[str, TuiEntryKind]] = []
+    messages: list[tuple[BlockKind, str]] = []
     monkeypatch.setattr(
         "lanscoder.app.tui.resolve_paste_attachments",
         lambda text: (_ for _ in ()).throw(ValueError("Image exceeds 20MB limit: clipboard.png")),
     )
     monkeypatch.setattr(
         app,
-        "_write_line",
-        lambda text, *, kind: messages.append((text, kind)),
+        "_ui_line",
+        lambda kind, text: messages.append((kind, text)),
     )
 
     assert app._stage_paste_attachments(None) is True
     assert messages == [
         (
+            BlockKind.ERROR,
             "Could not attach pasted image: Image exceeds 20MB limit: clipboard.png",
-            TuiEntryKind.ERROR,
         )
     ]
 
@@ -274,14 +278,9 @@ def test_skill_picker_render_keeps_item_heights_stable_and_detail_in_footer() ->
 
 
 def test_command_picker_renderable_colors_selected_cursor() -> None:
-    entry = TuiTranscriptEntry(
-        id=1,
-        kind=TuiEntryKind.COMMAND,
-        label="command",
-        body="",
-    )
+    block = TranscriptBlock(BlockKind.COMMAND)
 
-    rendered = _entry_renderable(entry, "Select:\n> 1. first\n  2. second")
+    rendered = _entry_renderable_block(block, "Select:\n> 1. first\n  2. second")
 
     assert isinstance(rendered, Text)
     assert rendered.plain == "Select:\n> 1. first\n  2. second"
@@ -289,21 +288,11 @@ def test_command_picker_renderable_colors_selected_cursor() -> None:
     assert any(span.style == "#4f8cff bold" for span in rendered.spans)
 
 
-def test_picker_rerender_updates_existing_command_widget_without_full_rerender(
-    monkeypatch,
-) -> None:
-    class FakeWidget:
-        def __init__(self) -> None:
-            self.updates: list[object] = []
-            self.classes: str | None = None
-
-        def update(self, renderable) -> None:
-            self.updates.append(renderable)
-
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_picker_rerender_updates_last_command_block() -> None:
     app = LansCoderApp()
-    widget = FakeWidget()
-    entry = app.transcript.add(TuiEntryKind.COMMAND, "Select:\n> 1. first\n  2. second")
-    entry.widget = widget
+    app.transcript.add_block(BlockKind.COMMAND, "Select:\n> 1. first\n  2. second")
     app._picker = TuiPickerState(
         kind="model",
         title="Select a model:",
@@ -313,22 +302,16 @@ def test_picker_rerender_updates_existing_command_widget_without_full_rerender(
         ],
         selected_index=0,
     )
-    rerendered = False
 
-    def fail_full_rerender() -> None:
-        nonlocal rerendered
-        rerendered = True
+    async with app.run_test() as pilot:
+        app._picker.move(1)
+        app._render_picker()
+        await pilot.pause()
 
-    monkeypatch.setattr(app, "_rerender_transcript", fail_full_rerender)
-
-    app._picker.move(1)
-    app._render_picker()
-
-    assert rerendered is False
-    assert len(widget.updates) == 1
-    assert getattr(widget.updates[0], "plain", "") == "Select a model:\n  1. old\n> 2. new\nUse up/down and enter to select."
-    assert app.transcript.entries[-1].body.startswith("Select a model:")
-    assert "> 2. new" in app.transcript.entries[-1].body
+    block = app.transcript.blocks[-1]
+    assert block.kind == BlockKind.COMMAND
+    assert block.text.startswith("Select a model:")
+    assert "> 2. new" in block.text
 
 
 class RecordingCommandHandler:
@@ -760,7 +743,7 @@ async def test_static_and_completed_markdown_output_allow_selection() -> None:
     app = LansCoderApp()
 
     async with app.run_test() as pilot:
-        app._write_line("plain output", kind=TuiEntryKind.SYSTEM)
+        app._ui_line(BlockKind.SYSTEM, "plain output")
         app._write_markdown_message("paragraph\n\n- list\n\n```python\nprint('ok')\n```")
         await pilot.pause()
 
@@ -1110,46 +1093,21 @@ def test_lanscoder_app_topbar_single_line_with_multiline_thinking() -> None:
     assert "cwd LansCoder" in plain
 
 
-def test_tui_transcript_records_structured_entries_with_stable_labels() -> None:
-    transcript = TuiTranscript()
+def test_tui_transcript_model_records_blocks_and_children() -> None:
+    transcript = TranscriptModel()
 
-    user = transcript.add(TuiEntryKind.USER, "hello")
-    assistant = transcript.add(TuiEntryKind.ASSISTANT, "hi")
-    tool = transcript.add(
-        TuiEntryKind.TOOL,
-        "rg -n Permission lanscoder",
-        label="tool exec_command running",
-        status="running",
-    )
+    transcript.add_block(BlockKind.USER, "hello")
+    transcript.add_block(BlockKind.ASSISTANT, "hi")
+    tool_block = transcript.add_block(BlockKind.ASSISTANT)
+    tool_block.children.append(ChildItem(ChildKind.TOOL, "c1", "tool exec_command running", status="running"))
 
-    assert [entry.id for entry in transcript.entries] == [
-        user.id,
-        assistant.id,
-        tool.id,
+    assert [block.kind for block in transcript.blocks] == [
+        BlockKind.USER,
+        BlockKind.ASSISTANT,
+        BlockKind.ASSISTANT,
     ]
-    assert [entry.label for entry in transcript.entries] == [
-        "you",
-        "LansCoder",
-        "tool exec_command running",
-    ]
-    assert transcript.entries[-1].status == "running"
-
-
-def test_tui_transcript_tracks_active_tool_until_terminal_status() -> None:
-    transcript = TuiTranscript()
-
-    transcript.record_tool_activity("exec_command", "running", "rg -n Permission lanscoder")
-
-    assert transcript.active_tool is not None
-    assert transcript.active_tool.name == "exec_command"
-    assert transcript.active_tool.status == "running"
-    assert transcript.active_tool.summary == "rg -n Permission lanscoder"
-
-    transcript.record_tool_activity("exec_command", "success", "12 matches")
-
-    assert transcript.active_tool is None
-    assert transcript.recent_tools[-1].name == "exec_command"
-    assert transcript.recent_tools[-1].status == "success"
+    assert [block.text for block in transcript.blocks] == ["hello", "hi", ""]
+    assert transcript.blocks[-1].children[-1].status == "running"
 
 
 def test_task_plan_panel_state_keeps_only_last_rendered_revision() -> None:
@@ -1236,12 +1194,12 @@ def test_lanscoder_app_records_rendered_messages_in_transcript(monkeypatch) -> N
     app = LansCoderApp()
     monkeypatch.setattr(app, "query_one", lambda *args, **kwargs: output)
 
-    app._write_line("> hello", kind=TuiEntryKind.USER)
+    app._ui_line(BlockKind.USER, "hello")
     app._write_markdown_message("**hi**")
 
-    assert [(entry.kind, entry.label, entry.body) for entry in app.transcript.entries] == [
-        (TuiEntryKind.USER, "you", "> hello"),
-        (TuiEntryKind.ASSISTANT, "LansCoder", "**hi**"),
+    assert [(block.kind, block.text) for block in app.transcript.blocks] == [
+        (BlockKind.USER, "hello"),
+        (BlockKind.ASSISTANT, "**hi**"),
     ]
 
 
@@ -1923,9 +1881,10 @@ async def test_lanscoder_app_resume_picker_replays_selected_session_history(
 
     assert state.session.session_id == "sess_one"
     assert "旧问题" in output_text
-    assert any(entry.body == "旧回答" for entry in app.transcript.entries)
-    assert any(entry.label == "tool grep running" for entry in app.transcript.entries)
-    assert any(entry.label == "tool grep success" for entry in app.transcript.entries)
+    assert any(block.text == "旧回答" for block in app.transcript.blocks if block.kind == BlockKind.ASSISTANT)
+    tool_children = [child for block in app.transcript.blocks for child in block.children if child.kind == ChildKind.TOOL]
+    assert any("grep" in child.label for child in tool_children)
+    assert any(child.status == "success" for child in tool_children)
     assert "x" * 300 not in output_text
     assert markdown_rendered
     assert "Select a session" not in output_text
@@ -2066,7 +2025,7 @@ async def test_lanscoder_app_new_command_clears_previous_output(tmp_path) -> Non
     app = LansCoderApp(command_handler=handler, current_session=state)
 
     async with app.run_test() as pilot:
-        app._write_line("> 旧问题", kind=TuiEntryKind.USER)
+        app._ui_line(BlockKind.USER, "旧问题")
         app._write_markdown_message("旧回答")
         await pilot.click("#input")
         await pilot.press(*"/new 新会话")
@@ -2079,7 +2038,7 @@ async def test_lanscoder_app_new_command_clears_previous_output(tmp_path) -> Non
     assert "新会话" in output_text
     assert "旧问题" not in output_text
     assert "旧回答" not in output_text
-    assert [entry.kind for entry in app.transcript.entries] == [TuiEntryKind.COMMAND]
+    assert [block.kind for block in app.transcript.blocks] == [BlockKind.COMMAND]
 
 
 @pytest.mark.anyio
@@ -2471,7 +2430,7 @@ def test_lanscoder_app_streaming_skips_replaying_intermediate_assistant_lines(
 
     assert [type(widget).__name__ for widget in output.mounted] == ["LansCoderMarkdown"]
     assert output.mounted[0].updates[-1] == "LansCoder:\n\n最终结论"
-    assert [entry.body for entry in app.transcript.entries if entry.kind == TuiEntryKind.ASSISTANT] == ["最终结论"]
+    assert [block.text for block in app.transcript.blocks if block.kind == BlockKind.ASSISTANT] == ["最终结论"]
 
 
 def test_lanscoder_app_paces_stream_markdown_updates(monkeypatch) -> None:
@@ -2658,7 +2617,7 @@ def test_lanscoder_app_auto_scroll_fires_when_layout_grows_max_scroll_y_on_mount
     app = LansCoderApp()
     monkeypatch.setattr(app, "query_one", lambda *args, **kwargs: output)
 
-    app._write_line("hello", kind=TuiEntryKind.SYSTEM)
+    app._ui_line(BlockKind.SYSTEM, "hello")
 
     assert output.scroll_end_calls == 1
     # After mount, max_scroll_y grew but scroll_y stayed — the old buggy
@@ -2785,9 +2744,9 @@ def test_lanscoder_app_records_streaming_assistant_text_in_transcript(
     app._append_stream_text("你")
     app._append_stream_text("好")
 
-    assistant_entries = [entry for entry in app.transcript.entries if entry.kind == TuiEntryKind.ASSISTANT]
-    assert len(assistant_entries) == 1
-    assert assistant_entries[0].body == "你好"
+    assistant_blocks = [block for block in app.transcript.blocks if block.kind == BlockKind.ASSISTANT]
+    assert len(assistant_blocks) == 1
+    assert assistant_blocks[0].text == "你好"
 
 
 def test_lanscoder_app_shows_reasoning_delta_in_activity_line(monkeypatch) -> None:
@@ -2806,8 +2765,9 @@ def test_lanscoder_app_shows_reasoning_delta_in_activity_line(monkeypatch) -> No
     app._append_reasoning_text("planning ")
     app._append_reasoning_text("tools")
 
-    reasoning_entries = [entry for entry in app.transcript.entries if entry.kind == TuiEntryKind.REASONING]
-    assert reasoning_entries == []
+    thinking_children = [child for block in app.transcript.blocks for child in block.children if child.kind == ChildKind.THINKING]
+    assert len(thinking_children) == 1
+    assert thinking_children[0].body == "planning tools"
     assert output.mounted == []
     assert activity.updates[0].startswith("thinking [.  ] planning ")
     assert activity.updates[0].rstrip().endswith("0.0s · 0 tools")
@@ -2832,8 +2792,7 @@ def test_lanscoder_app_shows_working_indicator_without_reasoning_delta(
     app._show_working_indicator("planning next step...")
     app._complete_working_indicator()
 
-    reasoning_entries = [entry for entry in app.transcript.entries if entry.kind == TuiEntryKind.REASONING]
-    assert reasoning_entries == []
+    assert app.transcript.blocks == []
     assert output.mounted == []
     assert activity.updates[0].startswith("thinking [.  ] planning next step...")
     assert activity.updates[0].rstrip().endswith("0.0s · 0 tools")
@@ -2863,8 +2822,7 @@ def test_lanscoder_app_animates_working_indicator(monkeypatch) -> None:
     app._show_working_indicator("planning next step...")
     app._advance_working_animation()
 
-    reasoning_entries = [entry for entry in app.transcript.entries if entry.kind == TuiEntryKind.REASONING]
-    assert reasoning_entries == []
+    assert app.transcript.blocks == []
     assert activity.updates[-1].startswith("thinking [.. ] planning next step...")
     assert activity.updates[-1].rstrip().endswith("0.0s · 0 tools")
     assert app._working_timer is timer
@@ -2925,7 +2883,6 @@ def test_lanscoder_app_streaming_final_response_skips_assistant_display_line(
     assert sum(isinstance(widget, Markdown) for widget in output.mounted) == 1
     assert [type(widget).__name__ for widget in output.mounted] == [
         "LansCoderMarkdown",
-        "Static",
     ]
     assert output.mounted[0].allow_select is True
 
@@ -3020,10 +2977,16 @@ def test_lanscoder_app_tool_event_handler_schedules_live_status_on_app_thread(
 ) -> None:
     runner = FakeToolEventAsyncChatRunner()
     app = LansCoderApp(chat_runner=runner)
-    calls: list[str] = []
     scheduled: list[object] = []
+    output = FakeOutput()
+    activity = FakeActivity()
 
-    monkeypatch.setattr(app, "_write_line", lambda text, **kwargs: calls.append(text))
+    def query_one(selector, *args, **kwargs):
+        if selector == "#activity":
+            return activity
+        return output
+
+    monkeypatch.setattr(app, "query_one", query_one)
     monkeypatch.setattr(
         app,
         "_call_ui_thread",
@@ -3039,11 +3002,16 @@ def test_lanscoder_app_tool_event_handler_schedules_live_status_on_app_thread(
     )
     app._restore_tool_event_handler(previous_handler)
 
-    assert calls == []
-    assert len(scheduled) == 3
-    callback, args, kwargs = scheduled[2]
+    assert len(scheduled) == 2
+    callback, args, kwargs = scheduled[1]
     callback(*args, **kwargs)
-    assert calls == ["正在调用工具：echo"]
+    child = next(
+        (c for b in app.transcript.blocks for c in b.children if c.kind == ChildKind.TOOL),
+        None,
+    )
+    assert child is not None
+    assert child.status == "running"
+    assert activity.updates[0].startswith("running [=   ] · echo")
 
 
 def test_lanscoder_app_updates_activity_line_for_tool_events(monkeypatch) -> None:
@@ -3601,14 +3569,16 @@ def test_lanscoder_app_live_tool_events_filter_final_tool_summary(monkeypatch) -
     app._restore_tool_event_handler(previous_handler)
 
     rendered = "\n".join(output.lines)
-    assert "正在调用工具：echo" in rendered
+    tool_children = [child for block in app.transcript.blocks for child in block.children if child.kind == ChildKind.TOOL]
+    assert len(tool_children) == 1
+    assert tool_children[0].label == "tool echo"
+    assert tool_children[0].status == "running"
     assert "Tool call:" not in rendered
     assert "Tool result:" not in rendered
     assert [type(widget).__name__ for widget in output.mounted] == [
-        "Static",
         "LansCoderMarkdown",
     ]
-    assert output.mounted[1].allow_select is True
+    assert output.mounted[0].allow_select is True
 
 
 def test_lanscoder_app_starts_new_stream_block_after_tool_event(monkeypatch) -> None:
@@ -3632,34 +3602,18 @@ def test_lanscoder_app_starts_new_stream_block_after_tool_event(monkeypatch) -> 
     app._restore_stream_event_handler(previous_stream_handler)
 
     mounted_types = [type(widget).__name__ for widget in output.mounted]
-    assert mounted_types == ["LansCoderMarkdown", "Static", "LansCoderMarkdown"]
-    first_markdown, _, second_markdown = output.mounted
+    assert mounted_types == ["LansCoderMarkdown", "LansCoderMarkdown"]
+    first_markdown, second_markdown = output.mounted
     assert first_markdown.allow_select is True
     assert second_markdown.allow_select is False
     assert first_markdown.updates[-1] == "LansCoder:\n\n我先看看。"
     assert second_markdown.updates[-1] == "LansCoder:\n\n看完了。"
-
-
-def test_permission_requested_tool_event_uses_permission_style() -> None:
-    event = ToolExecutionEvent(
-        kind="permission_requested",
-        tool_call=ToolCall(id="call_write", name="apply_patch", arguments={}),
-    )
-
-    assert tool_event_entry_kind(event) == TuiEntryKind.PERMISSION
-    assert tool_event_status(event) == "permission_requested"
-    assert tool_event_label(event) == "permission requested"
     assert (
-        entry_classes(
-            TuiTranscriptEntry(
-                id=1,
-                kind=TuiEntryKind.PERMISSION,
-                body="apply_patch wants to edit lanscoder/app/tui.py",
-                label="permission requested",
-                status="permission_requested",
-            )
-        )
-        == "message permission-message permission-requested"
+        next(
+            (c for b in app.transcript.blocks for c in b.children if c.kind == ChildKind.TOOL),
+            None,
+        ).status
+        == "running"
     )
 
 
@@ -3737,8 +3691,8 @@ async def test_lanscoder_app_displays_live_tool_status_during_turn() -> None:
         output = app.query_one("#output")
         text = "\n".join(str(getattr(widget, "content", getattr(widget, "renderable", ""))) for widget in output.query("Static"))
 
-    assert "正在调用工具：echo" in text
-    assert "工具完成：echo：hello" in text
+    assert "[>] tool echo" in text
+    assert "✓" in text
     assert runner.inputs == ["hello"]
 
 
@@ -3791,7 +3745,7 @@ async def test_lanscoder_app_displays_pending_permission_prompt_in_zone() -> Non
         buttons = {button.id for button in zone.query("Button")}
         assert buttons == {"permission-deny", "permission-allow_once", "permission-allow_always_same_scope"}
         assert app._activity_text == "waiting · permission"
-        assert not [entry for entry in app.transcript.entries if entry.kind == TuiEntryKind.PERMISSION]
+        assert [block.kind for block in app.transcript.blocks] == [BlockKind.ASSISTANT]
 
 
 @pytest.mark.anyio
@@ -4054,7 +4008,7 @@ async def test_tool_split_keeps_tail_buffer_without_duplicating_pre_tool_text() 
         # 工具前的文本只出现一次;尾部块不被完整 content 覆盖
         assert first._markdown == "LansCoder:\n\nbefore the tool"
         assert second._markdown == "LansCoder:\n\nafter the tool"
-        assert app.transcript.entries[-1].body == "after the tool"
+        assert [block.text for block in app.transcript.blocks if block.kind == BlockKind.ASSISTANT] == ["before the toolafter the tool"]
 
 
 @pytest.mark.anyio
@@ -4183,3 +4137,138 @@ async def test_stream_finalization_repeated_close_does_not_render_twice_under_lo
 
         # 挂载初始渲染可能产生空 update,但不能出现第二次 finalize 渲染
         assert calls.count("LansCoder:\n\nfinal answer") == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_ask_user_button_click_submits_option_label() -> None:
+    runner = FakeAskUserResumeRunner()
+    app = LansCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        app._write_pending_input()
+        await pilot.pause()
+        zone = app.query_one("#permission-zone")
+        assert not zone.has_class("hidden")
+        buttons = {button.id: button for button in zone.query("Button")}
+        assert set(buttons) == {"permission-1", "permission-2"}
+        # ask_user 按钮提交选项 label(与键入路径 "2"→"prod" 一致),而非原始 id
+        await pilot.click(buttons["permission-2"])
+        await pilot.pause()
+
+    assert runner.resumes == [("ask_env", "prod")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_permission_zone_removes_stale_buttons_on_rerender() -> None:
+    runner = FakePermissionWaitingRunner()
+    app = LansCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        app._write_pending_input()
+        await pilot.pause()
+        zone = app.query_one("#permission-zone")
+        assert {button.id for button in zone.query("Button")} == {
+            "permission-deny",
+            "permission-allow_once",
+            "permission-allow_always_same_scope",
+        }
+        runner.last_pending_input = UserInputRequest(
+            id="perm_write2",
+            kind="permission_confirmation",
+            question="允许吗？",
+            options=[
+                UserInputOption(id="deny", label="Deny"),
+                UserInputOption(id="allow_once", label="Allow once"),
+            ],
+        )
+        app._write_pending_input()
+        await pilot.pause()
+
+        assert {button.id for button in zone.query("Button")} == {
+            "permission-deny",
+            "permission-allow_once",
+        }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_permission_invalid_typed_answer_reshows_zone_without_writing_block() -> None:
+    runner = FakePermissionResumeRunner()
+    app = LansCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        await pilot.press(*"no such option")
+        await pilot.press("enter")
+        await pilot.pause()
+        zone = app.query_one("#permission-zone")
+        assert not zone.has_class("hidden")
+        assert runner.resumes == []
+        assert app._chat_busy is False
+        # 非法答案只重新展示 zone 提示,不写入新的 transcript 块
+        assert [block.kind for block in app.transcript.blocks] == [BlockKind.USER]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_child_row_click_toggles_collapsed_tool_child() -> None:
+    app = LansCoderApp()
+
+    async with app.run_test() as pilot:
+        block = app.transcript.add_block(BlockKind.ASSISTANT, "reply")
+        block.children.append(ChildItem(ChildKind.TOOL, "c1", "tool read auth.py", status="success", body="ok 200"))
+        app._rerender_transcript()
+        await pilot.pause()
+        row = app.query_one("#child-0-c1", ChildRow)
+        child = app.transcript.blocks[0].children[0]
+        assert child.expanded is False
+        assert "[>] tool read auth.py" in str(row.content)
+
+        await pilot.click(row)
+        await pilot.pause()
+
+        assert child.expanded is True
+        assert "tool: tool read auth.py" in str(row.content)
+        assert "ok 200" in str(row.content)
+
+        await pilot.click(row)
+        await pilot.pause()
+
+        assert child.expanded is False
+        assert "✓" in str(row.content)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_interrupt_chat_turn_settles_running_tool_child_to_error() -> None:
+    runner = FakeToolEventAsyncChatRunner()
+    app = LansCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        app._start_turn_metrics()
+        previous_tool_handler = app._install_tool_event_handler()
+        runner.tool_event_handler(
+            ToolExecutionEvent(
+                kind="started",
+                tool_call=ToolCall(id="call_echo", name="echo", arguments={}),
+            )
+        )
+        app._restore_tool_event_handler(previous_tool_handler)
+        child = next(
+            (c for b in app.transcript.blocks for c in b.children if c.kind == ChildKind.TOOL),
+            None,
+        )
+        assert child.status == "running"
+
+        app._interrupt_chat_turn()
+        await pilot.pause()
+
+        child = next(
+            (c for b in app.transcript.blocks for c in b.children if c.kind == ChildKind.TOOL),
+            None,
+        )
+        assert child.status == "error"
+        assert app.transcript.blocks[-1].kind == BlockKind.SYSTEM
+        assert app.transcript.blocks[-1].text == "Interrupted current turn."
