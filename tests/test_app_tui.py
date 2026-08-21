@@ -3575,10 +3575,17 @@ def test_lanscoder_app_live_tool_events_filter_final_tool_summary(monkeypatch) -
     assert tool_children[0].status == "running"
     assert "Tool call:" not in rendered
     assert "Tool result:" not in rendered
+    # 完成回合与 render_block_into 一致:[正文 markdown, 工具子行] 按模型顺序;
+    # 正文复用占位 widget,因此不残留空占位,也不产生重复 markdown。
     assert [type(widget).__name__ for widget in output.mounted] == [
         "LansCoderMarkdown",
+        "ChildRow",
     ]
-    assert output.mounted[0].allow_select is True
+    answer_markdown = output.mounted[0]
+    assert answer_markdown.allow_select is True
+    assert answer_markdown.updates[-1] == "LansCoder:\n\ndone"
+    assert not answer_markdown.has_class("streaming")
+    assert "[>] tool echo" in str(output.mounted[1].content)
 
 
 def test_lanscoder_app_starts_new_stream_block_after_tool_event(monkeypatch) -> None:
@@ -4339,6 +4346,50 @@ async def test_live_turn_tool_row_before_text_lands_below_markdown() -> None:
         mounted_types = [type(widget).__name__ for widget in output.children]
         assert mounted_types == ["LansCoderMarkdown", "ChildRow"]
         app._restore_tool_event_handler(previous_tool_handler)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_non_streaming_turn_completion_mounts_markdown_then_child_rows() -> None:
+    """A completed non-streaming turn with tools renders [markdown, child rows] in model order.
+
+    The completion markdown must reuse the block's markdown widget (the empty
+    placeholder mounted for live tool rows), so the answer lands above the tool
+    children like render_block_into replay and no empty placeholder survives.
+    """
+    runner = FakeToolEventAsyncChatRunner()
+    app = LansCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        await pilot.press(*"hello")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        output = app.query_one("#output")
+        children = list(output.children)
+        assert [type(widget).__name__ for widget in children] == [
+            "Static",
+            "LansCoderMarkdown",
+            "ChildRow",
+        ]
+
+        markdown, tool_row = children[1:]
+        assert isinstance(markdown, LansCoderMarkdown)
+        # block's markdown carries the answer; no leftover empty placeholder
+        assert markdown.source == "LansCoder:\n\ndone"
+        assert markdown.allow_select is True
+
+        assert isinstance(tool_row, ChildRow)
+        block_index = len(app.transcript.blocks) - 1
+        tool_child = app.transcript.blocks[block_index].children[0]
+        assert tool_row.block_index == block_index
+        assert tool_row.child_key == tool_child.key
+        assert tool_row is app.query_one(f"#child-{block_index}-{tool_child.key}", ChildRow)
+        # child row is drawn below the markdown, in model order
+        assert "[>] tool echo" in str(tool_row.content)
+        assert "✓" in str(tool_row.content)
+        assert tool_row.size.height >= 1
 
 
 @pytest.mark.anyio
