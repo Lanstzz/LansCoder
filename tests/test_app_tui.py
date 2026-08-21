@@ -4733,6 +4733,7 @@ async def test_finish_chat_turn_backfills_reasoning_duration() -> None:
     app = LansCoderApp(chat_runner=runner, current_session=FakeSession())
     async with app.run_test() as pilot:
         app.projector.start_user("hi")
+        app._begin_active_chat_turn()
         app.projector.append_thinking("replayed think", track_duration=True)
         app.projector.end_turn()
         child = app.transcript.blocks[-1].children[0]
@@ -4753,6 +4754,7 @@ async def test_finish_chat_turn_reconcile_survives_nudge_token_advance() -> None
     app = LansCoderApp(chat_runner=runner)
     async with app.run_test() as pilot:
         app.projector.start_user("hi")
+        app._begin_active_chat_turn()
         app.projector.append_thinking("think", track_duration=True)
         app.projector.end_turn()
         child = app.transcript.blocks[-1].children[0]
@@ -4814,3 +4816,27 @@ async def test_finish_chat_turn_tool_call_breaks_merge_chain() -> None:
     thinking = [c for c in block.children if c.kind == ChildKind.THINKING]
     assert len(thinking) == 2
     assert [c.duration_seconds for c in thinking] == [3.0, 4.0]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_finish_chat_turn_second_reconcile_keeps_prior_turn_rows() -> None:
+    """共享同一 assistant 块的 nudge 回合 reconcile 不得覆盖上一回合一行的时长。"""
+    runner = ReasoningRecordingRunner([("first", 3.0, True)])
+    app = LansCoderApp(chat_runner=runner, current_session=FakeSession())
+    async with app.run_test() as pilot:
+        app.projector.start_user("hi")
+        app._begin_active_chat_turn()
+        app.projector.append_thinking("first", track_duration=True)
+        app.projector.tool_event("c1", "read", "started")
+        app._chat_busy = True
+        app._finish_chat_turn(app._chat_turn_token)
+        # 回合2(nudge):同一块共享,不能碰上一回合的行
+        runner.last_turn_reasonings = [("second", 7.0, False)]
+        app._begin_active_chat_turn()
+        app._chat_busy = True
+        app._finish_chat_turn(app._chat_turn_token)
+        await pilot.pause()
+    block = app.transcript.blocks[-1]
+    thinking = [c for c in block.children if c.kind == ChildKind.THINKING]
+    assert [c.duration_seconds for c in thinking] == [3.0, 7.0]

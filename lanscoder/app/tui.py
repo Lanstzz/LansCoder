@@ -109,10 +109,16 @@ def _format_subagent_line(
 
 @dataclass(slots=True)
 class _ActiveChatTurn:
-    """当前正在进行的聊天回合标识:回合 id 与代际 token。"""
+    """当前正在进行的聊天回合标识:回合 id 与代际 token,以及回合起始的 thinking 基线。"""
 
     id: str
     token: int
+    # 回合开始时刻块内已有的 THINKING 子行数,供收尾 reconcile 限定配对窗口,
+    # 避免后开的 nudge/续发回合覆盖上一回合已结算的行。
+    started_thinking_count: int = 0
+    # 回合开始时刻块末位子行是否 THINKING:为真则本回合首条 reasoning 会合并
+    # 进上一行(文本 live/replay 已并入),时长归该行首条 reasoning。
+    started_last_child_was_thinking: bool = False
 
 
 class LansCoderApp(LansCoderViewMixin, App[None]):
@@ -637,13 +643,25 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._chat_turn_token += 1
         return self._chat_turn_token
 
+    def _capture_turn_start_baseline(self) -> tuple[int, bool]:
+        """当前 transcript 末块的 thinking 基线:已有 THINKING 子行数,以及末位子行是否 THINKING。
+
+        回合开始时末块缺席(尚无 assistant 块)即 (0, False)。
+        """
+        block = self.transcript.last_block()
+        thinking = [c for c in (block.children if block else []) if c.kind == ChildKind.THINKING]
+        return len(thinking), bool(block and block.children and block.children[-1].kind == ChildKind.THINKING)
+
     def _begin_active_chat_turn(self) -> int:
-        """开启新聊天回合:分配代际 token 并记录起始指标。"""
+        """开启新聊天回合:分配代际 token,记录起始指标与 thinking 基线。"""
         token = self._next_chat_turn_token()
         self._start_turn_metrics()
+        thinking_count, last_child_was_thinking = self._capture_turn_start_baseline()
         self._active_chat_turn = _ActiveChatTurn(
             id=uuid4().hex,
             token=token,
+            started_thinking_count=thinking_count,
+            started_last_child_was_thinking=last_child_was_thinking,
         )
         return token
 
@@ -690,50 +708,52 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
     def _apply_turn_reasoning_durations(self) -> None:
         """把本回合 store 里记录的 reasoning 秒数回填到 live thinking 子行。
 
-        语义与 replay_messages 的 merge 规则对位:以 tool_call 收尾的消息
-        追加 TOOL child 顶掉末位、切断合并链;未以 tool_call 收尾的消息
-        (即使带 text part)其 THINKING child 结算后仍在块末尾,下一条 reasoning
-        继续合并进上一行,保留该行首条 reasoning 的秒数。物化仅发生在非流式
-        回合(无 live 子行)。
+        与 replay_messages 的 merge 规则逐一对位(append_thinking 只查末位
+        kind==THINKING,text 不断链、tool_call 断链):以本回合起始基线为窗口,
+        只配对窗口内子行;初始合并状态取"回合开始时块末位子行是否 THINKING"。
+        物化仅发生在无对应 live 子行的场合(非流式回合),直接构造 ChildItem 挂载。
         """
         entries = getattr(self.chat_runner, "last_turn_reasonings", None) or []
         if not entries:
             return
-        current_child: ChildItem | None = None
-        prev_ended_with_tool = False
-        counter = 0
+        turn = self._active_chat_turn
+        block = self.transcript.last_block()
+        thinking = [c for c in (block.children if block else []) if c.kind == ChildKind.THINKING]
+        after_baseline = thinking[turn.started_thinking_count :] if turn else thinking
+        idx = 0
+        last_was_thinking = turn.started_last_child_was_thinking if turn else bool(block and block.children and block.children[-1].kind == ChildKind.THINKING)
         for reasoning, seconds, ended_with_tool in entries:
-            if current_child is None or prev_ended_with_tool:
-                block = self.transcript.last_block()
-                block_children = [c for c in (block.children if block else []) if c.kind == ChildKind.THINKING]
-                if counter < len(block_children):
-                    current_child = block_children[counter]
-                else:
-                    if block is None or block.kind != BlockKind.ASSISTANT:
-                        self.projector.start_assistant()
-                        block = self.transcript.last_block()
-                    # 直接构造新 THINKING 子项而非 append_thinking:后者会把
-                    # 文本合并进末位 THINKING 子项(replay/live 里合并链靠
-                    # tool_call 追加的 TOOL child 顶掉末位来断开;物化场景没有
-                    # TOOL child 时 append_thinking 会把下一行误并入上一行)。
-                    current_child = ChildItem(
-                        ChildKind.THINKING,
-                        f"t{len(block.children)}",
-                        "Thinking…",
-                        body=reasoning,
-                    )
-                    block.children.append(current_child)
-                    block_index = len(self.transcript.blocks) - 1
-                    output = self.query_one("#output")
-                    self._mount_child_row(output, block_index, current_child)
-                counter += 1
-                current_child.duration_seconds = seconds
-                current_child.finished = True
+            if last_was_thinking:
+                # 本条目 reasoning 已并入上一行(其文本),时长归该行首条 reasoning;刷新可在外圈做
+                last_was_thinking = not ended_with_tool
+                continue
+            if idx < len(after_baseline):
+                current_child = after_baseline[idx]
+            else:
+                if block is None or block.kind != BlockKind.ASSISTANT:
+                    self.projector.start_assistant()
+                    block = self.transcript.last_block()
+                # 直接构造新 THINKING 子项而非 append_thinking:后者会把文本
+                # 合并进末位 THINKING 子项(replay/live 里合并链靠 tool_call
+                # 追加的 TOOL child 顶掉末位来断开;物化场景没有 TOOL child 时
+                # append_thinking 会把下一行误并入上一行)。
+                current_child = ChildItem(
+                    ChildKind.THINKING,
+                    f"t{len(block.children)}",
+                    "Thinking…",
+                    body=reasoning,
+                    duration_seconds=seconds,
+                    finished=True,
+                )
+                block.children.append(current_child)
                 block_index = len(self.transcript.blocks) - 1
-                self._refresh_child_row(block_index, current_child)
-            # 合并条目(上一消息未以 tool_call 收尾)不进入分支:
-            # live/replay 均已把文本并进同一行,时长保留该行首条 reasoning 的值。
-            prev_ended_with_tool = ended_with_tool
+                self._mount_child_row(self.query_one("#output"), block_index, current_child)
+            idx += 1
+            current_child.duration_seconds = seconds
+            current_child.finished = True
+            block_index = len(self.transcript.blocks) - 1
+            self._refresh_child_row(block_index, current_child)
+            last_was_thinking = not ended_with_tool
 
     def _handle_escape_interrupt(self) -> bool:
         """Esc 双重打断窗口:第一次提示,窗口内再按则中断当前回合。"""
@@ -1263,9 +1283,12 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             previous_tool_handler = self._install_tool_event_handler(token)
             if self._active_chat_turn is None:
                 self._start_turn_metrics()
+                thinking_count, last_child_was_thinking = self._capture_turn_start_baseline()
                 self._active_chat_turn = _ActiveChatTurn(
                     id=uuid4().hex,
                     token=token,
+                    started_thinking_count=thinking_count,
+                    started_last_child_was_thinking=last_child_was_thinking,
                 )
             self._show_working_indicator("planning next step...")
             response = await self.chat_runner.arun_user_turn(text, attachments=attachments) if attachments else await self.chat_runner.arun_user_turn(text)
@@ -1293,9 +1316,12 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             previous_tool_handler = self._install_tool_event_handler(token)
             if self._active_chat_turn is None:
                 self._start_turn_metrics()
+                thinking_count, last_child_was_thinking = self._capture_turn_start_baseline()
                 self._active_chat_turn = _ActiveChatTurn(
                     id=uuid4().hex,
                     token=token,
+                    started_thinking_count=thinking_count,
+                    started_last_child_was_thinking=last_child_was_thinking,
                 )
             self._show_working_indicator("planning next step...")
             response = await self.chat_runner.anudge_turn()
