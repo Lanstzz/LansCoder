@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from rich.markup import escape as rich_escape
-
 from lanscoder.app.activity_view import single_line_activity
 from lanscoder.app.tui_state import (
     BlockKind,
@@ -108,7 +106,7 @@ def child_collapsed_text(child: ChildItem) -> str:
             return f"{base} {single_line_activity(child.body)}"
         return base
     suffix = _TOOL_STATUS_SUFFIX.get(child.status or "", "")
-    return f"[>] {rich_escape(child.label)}{suffix}"
+    return f"[>] {child.label}{suffix}"
 
 
 def child_expanded_text(child: ChildItem) -> str:
