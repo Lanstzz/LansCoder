@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 import re
+import tempfile
 import threading
 import time
 
@@ -3857,3 +3858,56 @@ def test_agent_loop_runs_dag_task_plan_reconciliation_at_most_once_per_user_turn
     assert response.content == "仍有未完成图节点"
     reconciliation_requests = [request for request in provider.requests if any(message.role == "system" and "unfinished dag task plan" in message.content for message in request.messages)]
     assert len(reconciliation_requests) == 1
+
+
+@dataclass
+class ReasoningStreamingProvider(ChatProvider):
+    response: ChatResponse
+
+    @property
+    def name(self) -> str:
+        return "reasoning-stream"
+
+    @property
+    def model(self) -> str:
+        return "reasoning-stream-model"
+
+    def complete(self, request: ChatRequest) -> ChatResponse:
+        raise AssertionError("streaming test should not call complete")
+
+    async def astream(self, request: ChatRequest):
+        yield ChatStreamEvent(kind="message_started")
+        yield ChatStreamEvent(kind="reasoning_delta", text="think part ")
+        yield ChatStreamEvent(kind="reasoning_delta", text="two")
+        await asyncio.sleep(0.01)
+        yield ChatStreamEvent(kind="text_delta", text="answer")
+        yield ChatStreamEvent(kind="message_completed", response=self.response)
+
+
+def _memory_session() -> AgentSession:
+    store = JsonlSessionStore(tempfile.mkdtemp())
+    return AgentSession.create(store=store, session_id="sess_reasoning_seconds", agents_md="")
+
+
+def test_streaming_measurement_records_reasoning_seconds() -> None:
+    response = ChatResponse(
+        provider="reasoning-stream",
+        model="reasoning-stream-model",
+        content="answer",
+        diagnostics=ProviderDiagnostics(reasoning="think part two"),
+    )
+    loop = create_agent_loop(
+        session=_memory_session(),
+        provider=ReasoningStreamingProvider(response),
+        background_manager=None,
+    )
+    result = _run_streaming(loop, "你好")
+    assert result.diagnostics.reasoning_seconds is not None
+    assert result.diagnostics.reasoning_seconds > 0
+
+
+def test_streaming_without_reasoning_keeps_reasoning_seconds_none() -> None:
+    response = ChatResponse(provider="r", model="r", content="plain", diagnostics=ProviderDiagnostics())
+    loop = create_agent_loop(session=_memory_session(), provider=ReasoningStreamingProvider(response), background_manager=None)
+    result = _run_streaming(loop, "你好")
+    assert result.diagnostics.reasoning_seconds is None

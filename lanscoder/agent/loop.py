@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from functools import partial
 from typing import Any, Literal
@@ -333,16 +334,27 @@ class AgentLoop:
         self.guardrails.check_timeout()
         self._check_cancelled()
         if not streaming:
+            started_at = time.monotonic()
             response = await anyio.to_thread.run_sync(self.provider.complete, prepared.request)
+            if response.diagnostics.reasoning:
+                response.diagnostics.reasoning_seconds = max(0.0, time.monotonic() - started_at)
         else:
             start_event_count = len(self.last_stream_events)
             final_response: ChatResponse | None = None
+            reasoning_started_at: float | None = None
+            reasoning_seconds: float | None = None
             try:
                 async for event in self.provider.astream(prepared.request):
                     self._check_cancelled()
                     self.last_stream_events.append(event)
                     self._observer.on_stream_event(event)
-                    if event.kind == "message_completed":
+                    kind = event.kind
+                    if kind == "reasoning_delta":
+                        if reasoning_started_at is None:
+                            reasoning_started_at = time.monotonic()
+                    elif reasoning_started_at is not None and reasoning_seconds is None and kind in {"text_delta", "tool_call_started", "message_completed"}:
+                        reasoning_seconds = max(0.0, time.monotonic() - reasoning_started_at)
+                    if kind == "message_completed":
                         final_response = event.response
                 if final_response is None:
                     raise ProviderError(
@@ -352,6 +364,8 @@ class AgentLoop:
             except ProviderError:
                 del self.last_stream_events[start_event_count:]
                 raise
+            if reasoning_seconds is not None and final_response.diagnostics.reasoning:
+                final_response.diagnostics.reasoning_seconds = reasoning_seconds
             response = final_response
         self._record_projection_consumed(prepared)
         self._report_progress(response)
