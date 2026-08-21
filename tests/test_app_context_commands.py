@@ -131,7 +131,7 @@ def test_manual_compact_command_calls_context_window_manager() -> None:
     result = handler.handle("/compact")
 
     assert result.handled is True
-    assert result.output == "Manual compact success: manual (1000 -> 200 tokens)"
+    assert result.output == "Context compacted: 1000 -> 200 tokens"
     assert len(context_manager.calls) == 1
     assert context_manager.calls[0].trigger == "manual"
     assert context_manager.calls[0].mode == "manual"
@@ -157,7 +157,7 @@ def test_manual_compact_uses_lower_target_than_current_context() -> None:
     assert context_manager.calls[0].target_tokens == 36_000
 
 
-def test_manual_compact_reports_noop_as_skipped() -> None:
+def test_manual_compact_reports_not_enough_messages_when_nothing_changed() -> None:
     session = FakeSession()
     noop_event = CompactionEvent(
         input_fingerprint="fp_noop",
@@ -183,7 +183,43 @@ def test_manual_compact_reports_noop_as_skipped() -> None:
     result = handler.handle("/compact")
 
     assert result.handled is True
-    assert result.output == "Manual compact skipped: already_within_budget (1000 -> 1000 tokens)"
+    assert result.output == "Not enough messages to compact (1000 tokens)"
+
+
+def test_manual_compact_reports_tool_result_reduction_when_l3_has_nothing_to_summarize() -> None:
+    session = FakeSession()
+    compact_result = ContextCompactResult(
+        status="failed",
+        reason="no_summary",
+        view=session.view,
+        before_tokens=25366,
+        after_tokens=23040,
+    )
+    context_manager = FakeContextManager(compact_result)
+    handler = ContextCommandHandler(session=session, budget_provider=_budget_provider, context_manager=context_manager)
+
+    result = handler.handle("/compact")
+
+    assert result.handled is True
+    assert result.output == "Tool results compacted: 25366 -> 23040 tokens (LLM summary skipped: recent turns protected)"
+
+
+def test_manual_compact_reports_genuine_failure_despite_partial_reduction() -> None:
+    session = FakeSession()
+    compact_result = ContextCompactResult(
+        status="failed",
+        reason="provider_error",
+        view=session.view,
+        before_tokens=25366,
+        after_tokens=23040,
+    )
+    context_manager = FakeContextManager(compact_result)
+    handler = ContextCommandHandler(session=session, budget_provider=_budget_provider, context_manager=context_manager)
+
+    result = handler.handle("/compact")
+
+    assert result.handled is True
+    assert result.output == "Manual compact failed: provider_error (25366 -> 23040 tokens)"
 
 
 def test_unknown_slash_command_is_reported() -> None:
