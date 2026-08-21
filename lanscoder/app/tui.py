@@ -52,6 +52,7 @@ from lanscoder.app.permission_view import (
 )
 from lanscoder.app.review_view import render_prewrite_review, review_command_from_text
 from lanscoder.app.transcript_view import (
+    background_notification_ui_text,
     looks_like_markdown_response,
     looks_like_tool_display_line,
     normalize_stream_text,
@@ -388,14 +389,12 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         """子agent 完成后写入 UI 结果行,空闲时补发一次引导回合。"""
         if not getattr(self, "is_mounted", False):
             return
-        label = job.label or job.tool_name
-        if job.status == "completed":
-            ui_msg = f"✅ 子agent [{label}] 已完成"
-        elif job.status == "failed":
-            ui_msg = f"❌ 子agent [{label}] 失败: {job.error or '未知错误'}"
-        else:
-            ui_msg = f"⚠️ 子agent [{label}] {job.status}"
-
+        ui_msg = background_notification_ui_text(
+            label=getattr(job, "label", None),
+            tool_name=job.tool_name,
+            status=job.status,
+            error=getattr(job, "error", None),
+        )
         self._ui_line(BlockKind.SYSTEM, ui_msg)
 
         if not self._chat_busy and self.chat_runner is not None:

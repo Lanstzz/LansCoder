@@ -53,6 +53,7 @@ from lanscoder.app.tui_state import (
     TranscriptBlock,
     TranscriptModel,
 )
+from lanscoder.app.transcript_view import background_notification_ui_text
 from lanscoder.app.tui_widgets import ChildRow
 from lanscoder.context.models import SessionView
 from lanscoder.context.runtime_state import SessionRuntimeState
@@ -4842,3 +4843,11 @@ async def test_finish_chat_turn_second_reconcile_keeps_prior_turn_rows() -> None
     block = app.transcript.blocks[-1]
     thinking = [c for c in block.children if c.kind == ChildKind.THINKING]
     assert [c.duration_seconds for c in thinking] == [3.0, 7.0]
+
+
+def test_background_notification_ui_text_full_matrix() -> None:
+    assert background_notification_ui_text(label="r", tool_name="delegate", status="completed", error=None) == "✅ 子agent [r] 已完成"
+    assert background_notification_ui_text(label=None, tool_name="delegate", status="completed", error=None) == "✅ 子agent [delegate] 已完成"
+    assert background_notification_ui_text(label="r", tool_name="delegate", status="failed", error="boom") == "❌ 子agent [r] 失败: boom"
+    assert background_notification_ui_text(label="r", tool_name="delegate", status="failed", error=None) == "❌ 子agent [r] 失败: 未知错误"
+    assert background_notification_ui_text(label="r", tool_name="delegate", status="cancelled", error=None) == "⚠️ 子agent [r] cancelled"

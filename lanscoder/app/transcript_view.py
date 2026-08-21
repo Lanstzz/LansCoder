@@ -16,6 +16,15 @@ def normalize_stream_text(text: str) -> str:
     return text.strip()
 
 
+def background_notification_ui_text(*, label: str | None, tool_name: str, status: str, error: str | None) -> str:
+    name = label or tool_name
+    if status == "completed":
+        return f"✅ 子agent [{name}] 已完成"
+    if status == "failed":
+        return f"❌ 子agent [{name}] 失败: {error or '未知错误'}"
+    return f"⚠️ 子agent [{name}] {status}"
+
+
 def entry_markdown_text_block(block: TranscriptBlock) -> str:
     if block.kind == BlockKind.ASSISTANT:
         return f"LansCoder:\n\n{block.text}"
