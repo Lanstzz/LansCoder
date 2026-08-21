@@ -108,3 +108,22 @@ def test_projector_replay_messages_builds_nested_tree():
     assert thinking and thinking[0].body == "核心在 session 校验"
     tool = [c for c in block.children if c.kind == ChildKind.TOOL]
     assert len(tool) == 1 and tool[0].status == "success"
+
+
+def test_projector_finished_before_started_settles_orphan_to_success():
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    p.start_user("hi")
+    p.tool_event("c1", "write", "finished", ok=True)
+    child = model.blocks[1].children[0]
+    assert child.kind == ChildKind.TOOL and child.key == "c1"
+    assert child.status == "success"
+
+
+def test_projector_denied_maps_to_denied_status():
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    p.start_user("hi")
+    p.tool_event("c1", "write", "started")
+    p.tool_event("c1", "write", "denied")
+    assert model.blocks[1].children[0].status == "denied"
