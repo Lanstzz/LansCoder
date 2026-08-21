@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Literal
 
 from lanscoder.providers.types import ToolCall
-from lanscoder.tools.apply_patch import PatchPlan, _apply_plan, parse_patch
+from lanscoder.tools.apply_patch import _apply_plan
+from lanscoder.utils.patch import PatchPlan, parse_patch
 from lanscoder.utils.sandbox import PathSandbox
 from lanscoder.utils.sandbox_access import SandboxAccess
 from lanscoder.utils.text import safe_read_text
