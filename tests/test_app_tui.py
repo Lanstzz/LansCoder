@@ -4717,3 +4717,84 @@ async def test_new_turn_cancels_pending_activity_idle_revert() -> None:
         await pilot.pause(0.3)
 
         assert app._activity_text == "running · next turn"
+
+
+class ReasoningRecordingRunner:
+    def __init__(self, reasonings):
+        self.last_turn_reasonings = reasonings
+        self.last_pending_input = None
+        self.background_manager = None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_finish_chat_turn_backfills_reasoning_duration() -> None:
+    runner = ReasoningRecordingRunner([("replayed think", 11.5, True)])
+    app = LansCoderApp(chat_runner=runner, current_session=FakeSession())
+    async with app.run_test() as pilot:
+        app.projector.start_user("hi")
+        app.projector.append_thinking("replayed think", track_duration=True)
+        app.projector.end_turn()
+        child = app.transcript.blocks[-1].children[0]
+        app._chat_busy = True
+        app._finish_chat_turn(app._chat_turn_token)
+        await pilot.pause()
+    assert child.duration_seconds == 11.5
+    assert child.finished is True
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_finish_chat_turn_reconcile_survives_nudge_token_advance() -> None:
+    """P1-1 回归:turn 内待完成后台任务触发 nudge、token 提前推进,reconcile 仍执行。"""
+    job = BackgroundJob(id="bg_1", tool_name="delegate", label="r", status="completed")
+    runner = FakeSubagentRunner(pending=[job])
+    runner.last_turn_reasonings = [("think", 5.0, True)]
+    app = LansCoderApp(chat_runner=runner)
+    async with app.run_test() as pilot:
+        app.projector.start_user("hi")
+        app.projector.append_thinking("think", track_duration=True)
+        app.projector.end_turn()
+        child = app.transcript.blocks[-1].children[0]
+        app._chat_busy = True
+        app._finish_chat_turn(app._chat_turn_token)
+        await pilot.pause()
+    assert child.duration_seconds == 5.0
+    assert runner.nudges == [True]  # nudge 照常触发
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_finish_chat_turn_materializes_non_streaming_thinking_row() -> None:
+    runner = ReasoningRecordingRunner([("offline think", 3.0, True)])
+    app = LansCoderApp(chat_runner=runner, current_session=FakeSession())
+    async with app.run_test() as pilot:
+        app.projector.start_user("hi")
+        app._chat_busy = True
+        app._finish_chat_turn(app._chat_turn_token)
+        await pilot.pause()
+        block = app.transcript.blocks[-1]
+        assert block.kind == BlockKind.ASSISTANT
+        child = [c for c in block.children if c.kind == ChildKind.THINKING]
+        assert len(child) == 1
+        assert child[0].duration_seconds == 3.0
+        # 物化行位于输出区,正文 markdown 随后由 _write_chat_response 挂载在其下方
+        output = app.query_one("#output")
+        assert [w.id for w in output.children if isinstance(w.id, str) and w.id.startswith("child-")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_finish_chat_turn_merges_consecutive_reasoning_only_entries() -> None:
+    """相邻 reasoning-only 消息(无 parts)合并进同一子行,首个秒数胜出。"""
+    runner = ReasoningRecordingRunner([("a", 3.0, False), ("b", 4.0, False)])
+    app = LansCoderApp(chat_runner=runner, current_session=FakeSession())
+    async with app.run_test() as pilot:
+        app.projector.start_user("hi")
+        app._chat_busy = True
+        app._finish_chat_turn(app._chat_turn_token)
+        await pilot.pause()
+    block = app.transcript.blocks[-1]
+    thinking = [c for c in block.children if c.kind == ChildKind.THINKING]
+    assert len(thinking) == 1
+    assert thinking[0].duration_seconds == 3.0
