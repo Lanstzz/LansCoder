@@ -7,6 +7,11 @@ from typing import TYPE_CHECKING, Literal, Protocol
 import anyio
 
 from lanscoder.agent.observer import TurnObserver
+from lanscoder.agent.permission_results import (
+    make_permission_denied_result,
+    make_prewrite_review_failed_result,
+    make_prewrite_review_stale_result,
+)
 from lanscoder.agent.session import AgentSession, PendingPermissionExecution
 from lanscoder.agent.tool_execution import ToolExecutionEvent, ToolExecutor
 from lanscoder.agent.user_input import AgentTurnResult, AgentTurnStatus
@@ -14,11 +19,6 @@ from lanscoder.permissions.types import PermissionDecision, PermissionDecisionKi
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import ChatResponse, ToolCall
 from lanscoder.permissions.user_input import UserInputRequest
-from lanscoder.tools.permission_results import (
-    make_permission_denied_result,
-    make_prewrite_review_failed_result,
-    make_prewrite_review_stale_result,
-)
 from lanscoder.tools.types import ToolResult, make_text_result
 
 if TYPE_CHECKING:

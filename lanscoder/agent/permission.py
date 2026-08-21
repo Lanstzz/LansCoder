@@ -3,6 +3,10 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 
+from lanscoder.agent.permission_results import (
+    make_permission_denied_result,
+    make_prewrite_review_failed_result,
+)
 from lanscoder.agent.prompt_inputs import DEFAULT_PERMISSION_POLICY
 from lanscoder.agent.session import (
     AgentSession,
@@ -24,10 +28,6 @@ from lanscoder.permissions.types import (
 )
 from lanscoder.providers.types import ToolCall
 from lanscoder.permissions.user_input import UserInputRequest
-from lanscoder.tools.permission_results import (
-    make_permission_denied_result,
-    make_prewrite_review_failed_result,
-)
 from lanscoder.tools.review import build_prewrite_review, supports_prewrite_review
 from lanscoder.tools.types import ToolResult
 from lanscoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
