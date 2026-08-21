@@ -641,7 +641,7 @@ def test_lanscoder_app_topbar_colors_each_permission_mode(mode, color) -> None:
     session.mode = mode
     app = LansCoderApp(current_session=session)
 
-    assert app._topbar_text() == (f"[#4f8cff]LansCoder[/]   [#303238]·[/]   [#4f8cff]idle · ready[/]   [#303238]·[/]   [{color}]{mode}[/]")
+    assert app._topbar_text() == (f"[#4f8cff]LansCoder[/]   [#303238]·[/]   [{color}]{mode}[/]")
     assert "sess_test" not in app._topbar_text()
 
 
@@ -657,7 +657,7 @@ def test_lanscoder_app_topbar_shows_model_glow_and_hides_session_id() -> None:
 
     text = app._topbar_text()
 
-    assert Text.from_markup(text).plain == "LansCoder   ·   idle · ready   ·   yurenapi/gpt-5.5   ·   standard   ·   cwd LansCoder"
+    assert Text.from_markup(text).plain == "LansCoder   ·   yurenapi/gpt-5.5   ·   standard   ·   cwd LansCoder"
     assert "[#7eb6ff]r[/]" in text
     assert "sess_test" not in text
 
@@ -997,7 +997,7 @@ def test_lanscoder_app_topbar_uses_spacious_two_sided_layout_when_width_is_known
     text = app._topbar_text(width=120)
 
     assert text.startswith("[#4f8cff]LansCoder[/]")
-    assert "[#4f8cff]idle · ready[/]" in text
+    assert "[#4f8cff]idle · ready[/]" not in text
     assert "sess_test" not in text
     assert "yurenapi/gpt-5.5" in Text.from_markup(text).plain
     assert "[#7eb6ff]r[/]" in text
@@ -1012,18 +1012,20 @@ def test_lanscoder_app_topbar_highlights_bypass_mode_and_truncates_long_session(
 
     app = LansCoderApp(current_session=BypassSession())
 
-    assert app._topbar_text() == ("[#4f8cff]LansCoder[/]   [#303238]·[/]   [#4f8cff]idle · ready[/]   [#303238]·[/]   [#ff6b5f]bypass[/]")
+    assert app._topbar_text() == ("[#4f8cff]LansCoder[/]   [#303238]·[/]   [#ff6b5f]bypass[/]")
 
 
-def test_lanscoder_app_topbar_includes_live_activity_status() -> None:
+def test_lanscoder_app_topbar_excludes_live_activity_status() -> None:
     app = LansCoderApp(current_session=FakeSession())
 
     app._activity_text = "thinking [.. ] planning next step..."
 
-    assert "[#4f8cff]thinking [.. ] planning next step...[/]" in app._topbar_text(width=120)
+    plain = Text.from_markup(app._topbar_text(width=120)).plain
+    assert "thinking" not in plain
+    assert "standard" in plain
 
 
-def test_lanscoder_app_topbar_truncates_long_activity_before_metadata() -> None:
+def test_lanscoder_app_topbar_excludes_long_activity_text() -> None:
     app = LansCoderApp(
         current_session=FakeSession(),
         config=LansCoderTuiConfig(
@@ -1038,8 +1040,8 @@ def test_lanscoder_app_topbar_truncates_long_activity_before_metadata() -> None:
 
     assert "[#4f8cff]yurenapi[/][#6e6d72]/very-long-model-name[/]" in text
     assert "[#6e6d72]cwd LansCoder[/]" in text
-    assert "reading think tool result reading think tool result" not in text
-    assert "thinking" in Text.from_markup(text).plain
+    assert "reading think tool result reading think tool result" not in Text.from_markup(text).plain
+    assert "thinking" not in Text.from_markup(text).plain
 
 
 def test_lanscoder_app_topbar_fits_narrow_width_with_long_activity_and_metadata() -> None:
@@ -1084,7 +1086,7 @@ def test_lanscoder_app_topbar_truncates_narrow_metadata_to_one_row() -> None:
     assert "\n" not in plain
     assert len(plain) <= 60
     assert plain.startswith("LansCoder")
-    assert "idle" in plain
+    assert "idle" not in plain
     assert "sess_test" not in plain
 
 
@@ -2875,7 +2877,7 @@ def test_lanscoder_app_animates_working_indicator(monkeypatch) -> None:
     assert app._working_timer is None
 
 
-def test_lanscoder_app_topbar_shows_only_thinking_head_during_reasoning(
+def test_lanscoder_app_topbar_omits_reasoning_status(
     monkeypatch,
 ) -> None:
     output = FakeOutput()
@@ -2900,9 +2902,9 @@ def test_lanscoder_app_topbar_shows_only_thinking_head_during_reasoning(
 
     # 下栏 #activity 显示全文（含换行折叠后的 reasoning 文本）
     assert "好的，我来分析。" in activity.updates[-1]
-    # 顶栏只显示 thinking 动画头，不含 reasoning 文本
+    # 顶栏不再承载任何 reasoning/thinking 状态,只显示 brand + metadata
     topbar_plain = Text.from_markup(app._topbar_text(width=120)).plain
-    assert "thinking" in topbar_plain
+    assert "thinking" not in topbar_plain
     assert "好的，我来分析。" not in topbar_plain
 
 
@@ -3552,7 +3554,7 @@ def test_lanscoder_app_clear_output_clears_and_hides_rendered_task_plan_panel(
     assert app.task_plan_panel_state.last_rendered_revision is None
 
 
-def test_lanscoder_app_updates_topbar_when_activity_changes(monkeypatch) -> None:
+def test_lanscoder_app_activity_change_updates_activity_line_only(monkeypatch) -> None:
     output = FakeOutput()
     activity = FakeActivity()
     topbar = FakeTopbar()
@@ -3574,7 +3576,7 @@ def test_lanscoder_app_updates_topbar_when_activity_changes(monkeypatch) -> None
     assert activity.updates[0].startswith("waiting · permission")
     assert activity.updates[0].rstrip().endswith("0.0s · 0 tools")
     assert app._activity_text == "waiting · permission"
-    assert "[#b28443]waiting · permission[/]" in topbar.updates[-1]
+    assert topbar.updates == []
 
 
 def test_lanscoder_app_live_tool_events_filter_final_tool_summary(monkeypatch) -> None:
@@ -3771,30 +3773,25 @@ async def test_lanscoder_app_recalls_input_history_with_arrow_keys() -> None:
     assert runner.inputs == ["first", "second"]
 
 
-def test_lanscoder_app_displays_pending_permission_prompt_immediately(
-    monkeypatch,
-) -> None:
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_lanscoder_app_displays_pending_permission_prompt_in_zone() -> None:
     runner = FakePermissionWaitingRunner()
-    output = FakeOutput()
     app = LansCoderApp(chat_runner=runner)
-    monkeypatch.setattr(app, "query_one", lambda *args, **kwargs: output)
 
-    app._write_chat_response(ChatResponse(provider="fake", model="fake", content="等待权限确认。"))
-
-    rendered = "\n".join(
-        [
-            *output.lines,
-            *(str(getattr(widget, "content", "")) for widget in output.mounted),
-        ]
-    )
-    assert "permission requested  write_path README.md" in rendered
-    assert "写入文件需要用户确认。" in rendered
-    assert "Review before writing · 1 file · +1 -1" in rendered
-    assert "-old" in rendered
-    assert "+new" in rendered
-    assert "[1] deny" in rendered
-    assert "[2] allow once" in rendered
-    assert "[3] allow always" in rendered
+    async with app.run_test() as pilot:
+        app._write_chat_response(ChatResponse(provider="fake", model="fake", content="等待权限确认。"))
+        await pilot.pause()
+        zone = app.query_one("#permission-zone")
+        assert not zone.has_class("hidden")
+        rendered = str(zone.render())
+        assert "Review before writing · 1 file · +1 -1" in rendered
+        assert "-old" in rendered
+        assert "+new" in rendered
+        buttons = {button.id for button in zone.query("Button")}
+        assert buttons == {"permission-deny", "permission-allow_once", "permission-allow_always_same_scope"}
+        assert app._activity_text == "waiting · permission"
+        assert not [entry for entry in app.transcript.entries if entry.kind == TuiEntryKind.PERMISSION]
 
 
 @pytest.mark.anyio

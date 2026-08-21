@@ -21,7 +21,7 @@ from textual.containers import Vertical, VerticalScroll
 from textual.events import Key, Paste
 from textual.screen import Screen
 from textual.timer import Timer
-from textual.widgets import Static, TextArea
+from textual.widgets import Button, Static, TextArea
 
 from lanscoder.app.ports import ChatRunnerLike, CommandHandlerLike, CurrentSessionLike
 from lanscoder.app.picker import TuiPickerState, render_picker
@@ -45,10 +45,13 @@ from lanscoder.app.subagent_panel_state import (
 )
 from lanscoder.app.permission_view import (
     ask_user_choice_for_text,
+    ask_user_prompt_text,
     permission_choice_for_text,
+    permission_option_label,
     permission_options_text,
+    permission_prompt_text,
 )
-from lanscoder.app.review_view import review_command_from_text
+from lanscoder.app.review_view import render_prewrite_review, review_command_from_text
 from lanscoder.app.transcript_view import (
     display_line_kind,
     display_line_status,
@@ -196,7 +199,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._live_tool_events_seen = False
         self._stream_segment_closed_for_tool = False
         self._activity_text = "idle · ready"
-        self._topbar_status = ""
+        self._permission_buttons: dict[Button, str] = {}
         self._input_history: list[str] = []
         self._input_history_index: int | None = None
         self._picker: TuiPickerState | None = None
@@ -224,6 +227,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             yield VerticalScroll(id="output")
             yield _plain_static("", id="task-plan-panel", classes="task-plan-panel hidden")
             yield Static("idle · ready", id="activity", classes="activity-line")
+            yield _plain_static("", id="permission-zone", classes="permission-zone hidden")
             # 联想栏放在 composer 上方的兄弟位置:弹出时不再把输入框往下推
             yield SlashSuggest(id="slash-suggest")
             with Vertical(id="composer", classes="composer"):
@@ -252,6 +256,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             suggest.set_commands(commands)
         self.query_one("#output").can_focus = False
         self.set_focus(self.query_one("#input"))
+        self._write_pending_input()
         self._subagent_progress_timer = self.set_interval(0.5, self._refresh_subagent_progress)
         if self.chat_runner is not None:
             mgr = getattr(self.chat_runner, "background_manager", None)
@@ -831,22 +836,92 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             if choice is None:
                 self._write_line(permission_options_text(pending), kind=TuiEntryKind.PERMISSION)
                 return
-            self._chat_busy = True
-            token = self._resume_active_chat_turn()
-            self._chat_worker = self.run_worker(self._resume_permission_turn(pending.id, choice, token))
+            self._submit_permission_choice(choice)
             return
         if getattr(pending, "kind", None) == "ask_user":
             choice = ask_user_choice_for_text(text, pending)
             if choice is not None:
                 text = choice
-            self._chat_busy = True
-            token = self._resume_active_chat_turn()
-            self._chat_worker = self.run_worker(self._resume_permission_turn(pending.id, text, token))
+            self._submit_permission_choice(text)
             return
 
         self._chat_busy = True
         token = self._begin_active_chat_turn()
         self._chat_worker = self.run_worker(self._run_chat_turn(text, token, attachments=attachments))
+
+    def _submit_permission_choice(self, choice: str) -> None:
+        pending = getattr(self.chat_runner, "last_pending_input", None)
+        if pending is None:
+            return
+        self._clear_permission_zone()
+        self._chat_busy = True
+        token = self._resume_active_chat_turn()
+        self._chat_worker = self.run_worker(self._resume_permission_turn(pending.id, choice, token))
+
+    def _show_permission_zone(self) -> None:
+        pending = getattr(self.chat_runner, "last_pending_input", None)
+        if pending is None:
+            self._clear_permission_zone()
+            return
+        zone = self.query_one("#permission-zone", Static)
+        zone.remove_class("hidden")
+        if getattr(pending, "kind", None) == "permission_confirmation":
+            payload = getattr(pending, "payload", {}) or {}
+            review_payload = payload.get("prewrite_review")
+            if isinstance(review_payload, dict):
+                text = render_prewrite_review(review_payload, expanded_paths=self._review_expanded_paths).plain
+            else:
+                text = permission_prompt_text(pending)
+        else:
+            text = ask_user_prompt_text(pending)
+        zone.update(text)
+        options = list(getattr(pending, "options", []) or [])
+        wanted: list[tuple[Button, str]] = []
+        for index, option in enumerate(options):
+            option_id = str(getattr(option, "id", "") or "")
+            label = str(getattr(option, "label", "") or option_id)
+            label = permission_option_label(label, option_id)
+            button_id = f"permission-{option_id}" if option_id else f"permission-opt-{index}"
+            wanted.append((Button(label, id=button_id, classes="permission-button"), option_id or label))
+        # 同一次消息循环内可能连续显示 zone(点击按钮后 pending 未清时 worker 会再显示),
+        # 而按钮移除是异步 prune,旧按钮在节点表里仍存在;直接重挂同名按钮会触发 DuplicateIds,
+        # 这里按 id 复用/更新,只移除这次不需要的按钮。
+        existing = {
+            child.id: child
+            for child in list(zone.children)
+            if isinstance(child, Button) and isinstance(child.id, str)
+        }
+        wanted_ids = {str(button.id) for button, _ in wanted}
+        for button_id in sorted(set(existing).difference(wanted_ids)):
+            existing[button_id].remove()
+        self._permission_buttons = {}
+        for button, choice in wanted:
+            prior = existing.get(str(button.id))
+            if prior is not None:
+                prior.label = button.label
+                live = prior
+            else:
+                zone.mount(button)
+                live = button
+            self._permission_buttons[live] = choice
+        self._set_activity("waiting · permission")
+
+    def _clear_permission_zone(self) -> None:
+        zone = self.query_one("#permission-zone", Static)
+        zone.update("")
+        zone.add_class("hidden")
+        self._permission_buttons = {}
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        widget_id = str(getattr(event.button, "id", "") or "")
+        if not widget_id.startswith("permission-"):
+            return
+        event.stop()
+        choice = self._permission_buttons.get(event.button, "")
+        if not choice:
+            return
+        self._submit_permission_choice(choice)
+        self._clear_permission_zone()
 
     def _submit_nudge_turn(self) -> None:
         """空闲时补发一次引导回合,处理后台任务完成。"""

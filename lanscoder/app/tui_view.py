@@ -8,7 +8,6 @@ from textual.css.query import NoMatches
 
 from lanscoder.app import model_topbar_themes, theme
 from lanscoder.app.activity_view import (
-    activity_markup,
     post_tool_reasoning_text,
     task_plan_panel_text,
     tool_activity_line_text,
@@ -20,7 +19,6 @@ from lanscoder.app.activity_view import (
     truncate_activity_text,
     turn_metrics_text,
 )
-from lanscoder.app.permission_view import ask_user_prompt_text, permission_prompt_text
 from lanscoder.app.review_view import render_prewrite_review
 from lanscoder.app.topbar_view import (
     PERMISSION_MODE_COLORS,
@@ -87,8 +85,6 @@ class LansCoderViewMixin:
         if session_id is None and self.current_session is not None:
             session_id = self.current_session.session_id
         brand = f"[{theme.ACCENT}]LansCoder[/]"
-        status_text = self._topbar_status if self._topbar_status else self._activity_text
-        status = activity_markup(single_line_activity(status_text))
         metadata_values: list[tuple[str | None, str, int | None]] = []
         if self.config.provider_name or self.config.provider_model:
             provider = self.config.provider_name or "provider"
@@ -108,37 +104,21 @@ class LansCoderViewMixin:
         if self.config.project_name:
             metadata_values.append(("#6e6d72", f"cwd {self.config.project_name}", 22))
         top_separator = "   [#303238]·[/]   "
+        if not metadata_values:
+            return brand
         metadata = _metadata_markup(metadata_values, separator=top_separator)
-        compact = f"{brand}{top_separator}{status}{top_separator}{metadata}"
         if width is None:
-            return compact
+            return f"{brand}{top_separator}{metadata}"
         brand_width = _markup_width(brand)
-        status_width = _markup_width(status)
         metadata_width = _markup_width(metadata)
-        top_separator_width = _markup_width(top_separator) * 2
-        content_width = brand_width + status_width + metadata_width + top_separator_width
-        if content_width > width or status_width > max(1, width - brand_width - metadata_width - top_separator_width):
-            fixed_width = brand_width + metadata_width + top_separator_width
-            if fixed_width >= width:
-                metadata_width = max(0, width - brand_width - top_separator_width - 8)
-                metadata = _truncate_markup(metadata, metadata_width)
-                fixed_width = brand_width + _markup_width(metadata) + top_separator_width
-            available_status_width = max(0, width - fixed_width)
-            status = activity_markup(truncate_activity_text(status_text, available_status_width))
-            compact = f"{brand}{top_separator}{status}{top_separator}{metadata}"
-            return _truncate_markup(compact, width) if _markup_width(compact) > width else compact
-        if width - content_width < 8:
-            available_status_width = width - brand_width - metadata_width - top_separator_width
-            if available_status_width < status_width:
-                status = activity_markup(truncate_activity_text(status_text, max(1, available_status_width)))
-                compact = f"{brand}{top_separator}{status}{top_separator}{metadata}"
-            return compact
-        left_gap = max(3, (width // 2) - _markup_width(brand) - (_markup_width(status) // 2))
-        right_gap = width - brand_width - left_gap - _markup_width(status) - metadata_width
-        if right_gap < 3:
-            right_gap = 3
-            left_gap = width - brand_width - _markup_width(status) - metadata_width - right_gap
-        return f"{brand}{' ' * left_gap}{status}{' ' * right_gap}{metadata}"
+        separator_width = _markup_width(top_separator)
+        if brand_width + separator_width + metadata_width > width:
+            available = max(0, width - brand_width - separator_width)
+            metadata = _truncate_markup(metadata, available)
+            return f"{brand}{top_separator}{metadata}"
+        left_gap = max(3, width - brand_width - metadata_width - 3)
+        right_gap = max(3, width - brand_width - metadata_width - left_gap)
+        return f"{brand}{' ' * left_gap}{metadata}{' ' * right_gap}"
 
     def _install_stream_event_handler(self, token: int | None = None):
         if self.chat_runner is None or not hasattr(self.chat_runner, "stream_event_handler"):
@@ -517,17 +497,7 @@ class LansCoderViewMixin:
             return
         self._stop_working_animation()
         self._stop_activity_animation()
-        if getattr(pending, "kind", None) == "permission_confirmation":
-            payload = getattr(pending, "payload", {}) or {}
-            review_payload = payload.get("prewrite_review")
-            if isinstance(review_payload, dict):
-                self._review_expanded_paths.clear()
-                self._write_review_payload(review_payload)
-            self._write_line(permission_prompt_text(pending), kind=TuiEntryKind.PERMISSION)
-            self._set_activity("waiting · permission")
-            return
-        self._write_line(ask_user_prompt_text(pending), kind=TuiEntryKind.PERMISSION)
-        self._set_activity("waiting · input")
+        self._show_permission_zone()
 
     def _write_review_payload(self, payload: dict[str, object]) -> None:
         rendered = render_prewrite_review(payload, expanded_paths=self._review_expanded_paths)
@@ -547,7 +517,7 @@ class LansCoderViewMixin:
         self._reasoning_is_fallback = True
         self._working_text = text
         self._working_frame_index = 0
-        self._set_activity(self._working_indicator_body(), topbar_status=self._working_head())
+        self._set_activity(self._working_indicator_body())
         self._start_working_animation()
 
     def _complete_working_indicator(self) -> None:
@@ -562,10 +532,7 @@ class LansCoderViewMixin:
             self._reasoning_is_fallback = False
             self._working_text = ""
         self._reasoning_buffer += text
-        self._set_activity(
-            self._working_indicator_body(self._reasoning_buffer),
-            topbar_status=self._working_head(),
-        )
+        self._set_activity(self._working_indicator_body(self._reasoning_buffer))
         self._start_working_animation()
 
     def _working_head(self) -> str:
@@ -589,7 +556,7 @@ class LansCoderViewMixin:
     def _advance_working_animation(self) -> None:
         self._working_frame_index += 1
         text = self._working_text or self._reasoning_buffer
-        self._set_activity(self._working_indicator_body(text), topbar_status=self._working_head())
+        self._set_activity(self._working_indicator_body(text))
 
     def _show_static_activity(self, text: str) -> None:
         self._show_activity_animation("static", text)
@@ -638,16 +605,14 @@ class LansCoderViewMixin:
         except NoMatches:
             return None
 
-    def _set_activity(self, text: str, *, topbar_status: str | None = None) -> None:
+    def _set_activity(self, text: str) -> None:
         self._activity_text = text
-        self._topbar_status = text if topbar_status is None else topbar_status
         activity = self._query_mounted("#activity")
         if activity is None:
             return
         rendered = self.tool_activity_line_text(text, activity)
         if hasattr(activity, "update"):
             activity.update(self._activity_renderable(rendered))
-        self._refresh_topbar()
 
     def _refresh_topbar(self) -> None:
         topbar = self._query_mounted("#topbar")
