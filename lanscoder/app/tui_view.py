@@ -287,14 +287,6 @@ class LansCoderViewMixin:
         rendered = block.text
         output = self.query_one("#output")
         classes = block_classes(block)
-        if block.kind == BlockKind.ASSISTANT:
-            markdown = LansCoderMarkdown(classes=classes, selectable=False)
-            was_pinned = self._is_output_pinned_to_bottom(output)
-            output.mount(markdown)
-            _observe_markdown_update(markdown.update(entry_markdown_text_block(block)))
-            if was_pinned:
-                self._scroll_output_end(output)
-            return
         rendered_text = _entry_renderable_block(block, rendered)
         was_pinned = self._is_output_pinned_to_bottom(output)
         output.mount(_plain_static(rendered_text, classes=classes))
@@ -324,6 +316,31 @@ class LansCoderViewMixin:
         if was_pinned:
             self._scroll_output_end(output)
 
+    def _mount_block_children(self, output, block_index: int, block: TranscriptBlock) -> None:
+        """Mount every not-yet-mounted child row of a block, in model order."""
+        for child in block.children:
+            if not isinstance(self._query_mounted(f"#child-{block_index}-{child.key}"), ChildRow):
+                self._mount_child_row(output, block_index, child)
+
+    def _ensure_stream_block_rows(self, block_index: int, block: TranscriptBlock) -> None:
+        """Mount the live assistant block's markdown and child rows in replay order.
+
+        Creates the streaming markdown widget first so a child row arriving before
+        any stream text still lands below the text widget, matching render_block_into.
+        """
+        if block.kind != BlockKind.ASSISTANT:
+            return
+        output = self._query_mounted("#output")
+        if output is None or not hasattr(output, "mount"):
+            return
+        if self._stream_text_widget is None:
+            self._stream_text_widget = LansCoderMarkdown(
+                classes="message assistant-message streaming",
+                selectable=False,
+            )
+            output.mount(self._stream_text_widget)
+        self._mount_block_children(output, block_index, block)
+
     def _mount_child_row(self, output, block_index: int, child: ChildItem) -> None:
         if child.expanded:
             content = child_expanded_text(child)
@@ -339,6 +356,8 @@ class LansCoderViewMixin:
             id=f"child-{block_index}-{child.key}",
             classes=child_row_classes(child),
         )
+        if child.expanded:
+            row.add_class("expanded")
         output.mount(row)
 
     def _refresh_child_row(self, block_index: int, child: ChildItem) -> None:
@@ -351,14 +370,27 @@ class LansCoderViewMixin:
         if isinstance(row, ChildRow):
             self.refresh_block_row(row)
             return
+        block = self.transcript.blocks[block_index] if 0 <= block_index < len(self.transcript.blocks) else None
+        if block is not None and block.kind == BlockKind.ASSISTANT:
+            self._ensure_stream_block_rows(block_index, block)
+            row = self._query_mounted(f"#child-{block_index}-{child.key}")
+            if isinstance(row, ChildRow):
+                self.refresh_block_row(row)
+                return
         self._mount_child_row(output, block_index, child)
 
     def _toggle_child_expanded(self, block_index: int, key: str) -> None:
-        block = self.transcript.blocks[block_index]
+        try:
+            block = self.transcript.blocks[block_index]
+        except IndexError:
+            return
         child = next((c for c in block.children if c.key == key), None)
         if child is None:
             return
         child.expanded = not child.expanded
+        row = self._query_mounted(f"#child-{block_index}-{key}")
+        if isinstance(row, ChildRow):
+            self.refresh_block_row(row)
 
     def refresh_block_row(self, row: ChildRow) -> None:
         try:
@@ -368,9 +400,14 @@ class LansCoderViewMixin:
         child = next((c for c in block.children if c.key == row.child_key), None)
         if child is None:
             row.update("")
+            row.remove_class("expanded")
             return
         content = child_expanded_text(child) if child.expanded else child_collapsed_text(child)
         row.update(content)
+        if child.expanded:
+            row.add_class("expanded")
+        else:
+            row.remove_class("expanded")
 
     def _show_welcome(self) -> None:
         output = self.query_one("#output")
@@ -608,6 +645,12 @@ class LansCoderViewMixin:
             self._working_text = ""
         self._reasoning_buffer += text
         self.projector.append_thinking(text)
+        if self._stream_text_widget is not None:
+            block_index = len(self.transcript.blocks) - 1
+            block = self.transcript.last_block()
+            if block is not None and block.kind == BlockKind.ASSISTANT and block.children:
+                self._ensure_stream_block_rows(block_index, block)
+                self._refresh_child_row(block_index, block.children[-1])
         self._set_activity(self._working_indicator_body(self._reasoning_buffer))
         self._start_working_animation()
 
@@ -748,11 +791,10 @@ class LansCoderViewMixin:
         output = self.query_one("#output")
         if hasattr(output, "mount"):
             if self._stream_text_widget is None:
-                self._stream_text_widget = LansCoderMarkdown(
-                    classes="message assistant-message streaming",
-                    selectable=False,
-                )
-                output.mount(self._stream_text_widget)
+                block_index = len(self.transcript.blocks) - 1
+                block = self.transcript.last_block()
+                if block is not None:
+                    self._ensure_stream_block_rows(block_index, block)
             if not self._stream_rendered_text:
                 self._flush_stream_text()
             else:
@@ -765,6 +807,10 @@ class LansCoderViewMixin:
     def _close_stream_segment_for_tool(self) -> None:
         self._drain_stream_deltas()
         if self._stream_text_widget is None and not self._stream_text_buffer:
+            return
+        if not self._stream_text_buffer and not self._stream_rendered_text:
+            # 占位 markdown 尚无文本流入(为排序先行挂载),保持当前 segment,
+            # 让后续 append_stream_text 继续填充而不是拆成空段。
             return
         self._finalize_stream_widget()
         self._stream_segment_closed_for_tool = True
