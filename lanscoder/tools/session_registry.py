@@ -8,12 +8,10 @@ from lanscoder.context.runtime_state import SessionRuntimeState
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.writer import SessionEventWriter
 from lanscoder.memory.manager import MemoryManager
-from lanscoder.permissions.manager import PermissionManager
 from lanscoder.planning.service import TaskPlanService
 from lanscoder.skills.models import SkillCatalog
 from lanscoder.tools.load_skill import create_load_skill_tool
 from lanscoder.tools.memory_tools import create_memory_tools
-from lanscoder.tools.permission_registry import PermissionAwareToolRegistry
 from lanscoder.tools.retrieve_archive import create_retrieve_archive_tool
 from lanscoder.tools.registry import ToolRegistry
 from lanscoder.tools.task_create import create_task_create_tool
@@ -42,7 +40,6 @@ def create_session_tool_registry(
     runtime_state: SessionRuntimeState | None = None,
     tools: list[Tool] | None = None,
     known_message_ids: Collection[str] | None = None,
-    permission_manager: PermissionManager | None = None,
     archive_root: str | Path | None = None,
     current_turn: Callable[[], int] | None = None,
     store: JsonlSessionStore | None = None,
@@ -94,6 +91,4 @@ def create_session_tool_registry(
                 current_turn=current_turn or (lambda: 0),
             )
         )
-    if permission_manager is not None:
-        return PermissionAwareToolRegistry(registry, permission_manager)
     return registry

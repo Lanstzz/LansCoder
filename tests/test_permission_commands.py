@@ -3,6 +3,7 @@ from lanscoder.app.permission_commands import PermissionCommandHandler
 from lanscoder.app.runtime import CurrentSessionState
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.permissions.types import PermissionMode
+from lanscoder.providers.types import ToolCall
 from lanscoder.tools.builtin import create_builtin_registry
 from lanscoder.utils.sandbox_access import SandboxAccess, SandboxAccessMode
 
@@ -95,21 +96,26 @@ def test_bypass_mode_lets_existing_tools_access_outside_project(tmp_path) -> Non
         tools=create_builtin_registry(tmp_path, access=access).tools(),
         sandbox_access=access,
     )
+    tool_call = ToolCall(id="call_view", name="view", arguments={"path": str(outside)})
 
-    confirmation = session.tool_registry.execute("view", {"path": str(outside)})
+    confirmation = session.permission_coordinator.prepare(tool_call, [])
     session.permission_coordinator.set_mode(PermissionMode.BYPASS)
+    bypass = session.permission_coordinator.prepare(tool_call, [])
     allowed = session.tool_registry.execute("view", {"path": str(outside)})
     session.permission_coordinator.set_mode(PermissionMode.STANDARD)
-    confirmation_again = session.tool_registry.execute("view", {"path": str(outside)})
+    confirmation_again = session.permission_coordinator.prepare(tool_call, [])
 
-    assert confirmation.ok is True
-    assert confirmation.data["requires_user_input"] is True
-    assert confirmation.data["permission_request"]["action"] == "read_path"
+    assert confirmation.pending_input is not None
+    assert confirmation.pending_input.kind == "permission_confirmation"
+    assert confirmation.permission_request is not None
+    assert confirmation.permission_request.action.value == "read_path"
+    assert bypass.pending_input is None
     assert allowed.ok is True
     assert "secret" in allowed.content
-    assert confirmation_again.ok is True
-    assert confirmation_again.data["requires_user_input"] is True
-    assert confirmation_again.data["permission_request"]["action"] == "read_path"
+    assert confirmation_again.pending_input is not None
+    assert confirmation_again.pending_input.kind == "permission_confirmation"
+    assert confirmation_again.permission_request is not None
+    assert confirmation_again.permission_request.action.value == "read_path"
 
 
 def test_permission_mode_command_rejects_unknown_mode(tmp_path) -> None:
