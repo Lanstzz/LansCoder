@@ -665,7 +665,6 @@ class AgentLoop:
         return definitions
 
     def _loop_tool_definitions(self):
-
         return self._provider_tool_definitions()
 
     def _augment_tool_definition(self, definition):
@@ -697,6 +696,10 @@ class AgentLoop:
             text = content.strip()
             if text:
                 self.session.append_user_message(text)
+
+    def flush_background_notifications(self) -> None:
+        """冲刷当前会话所有已完成的待投递后台通知;退出前调用保证通知不丢。"""
+        self._append_background_notifications()
 
     def _append_background_notifications(self) -> None:
         """把已完成的后台任务以通知形式追加进会话。"""
