@@ -267,6 +267,9 @@ class AgentChatRunner:
     _cancellation_lock: threading.Lock = field(default_factory=threading.Lock)
     _active_cancellation_token: CancellationToken | None = None
     _pending_permission_loop: AgentLoop | None = None
+    # 本回合按序的 (reasoning 文本, 秒数, 消息是否含 text/tool part)；
+    # 供 TUI 收尾 reconcile 把 store 里的时长回填到 live thinking 子行。
+    _turn_reasonings: list[tuple[str, float | None, bool]] = field(default_factory=list)
 
     def set_provider(self, provider: ChatProvider, *, use_streaming: bool) -> None:
         """用默认请求选项替换 provider 并设置流式开关。"""
@@ -333,6 +336,7 @@ class AgentChatRunner:
 
     def _start_turn(self, *, streaming: bool = False) -> tuple[int, CancellationToken, AgentLoop]:
         """开始一次新回合:记录起始消息数、重置输出缓冲、创建 AgentLoop。"""
+        self._turn_reasonings.clear()
         before_count = len(self.current_session.rebuild_view().messages)
         self.last_pending_input = None
         token = self._begin_cancellable_turn()
@@ -368,6 +372,24 @@ class AgentChatRunner:
         self.last_stream_events = list(loop.last_stream_events)
         messages = self.current_session.rebuild_view().messages[before_count:]
         self.last_display_lines = _display_lines_from_messages(messages)
+        self._accumulate_turn_reasonings(before_count)
+
+    def _accumulate_turn_reasonings(self, before_count: int) -> None:
+        """把边界后新增 assistant 消息的 reasoning 摘要收进本回合窗口。"""
+        messages = self.current_session.rebuild_view().messages[before_count:]
+        for message in messages:
+            if getattr(message, "role", None) != "assistant":
+                continue
+            reasoning, seconds = _reasoning_entry(message)
+            if not reasoning and seconds is None:
+                continue
+            had_parts = any(part.kind in {"text", "tool_call"} for part in getattr(message, "parts", []) or [])
+            self._turn_reasonings.append((reasoning, seconds, had_parts))
+
+    @property
+    def last_turn_reasonings(self) -> list[tuple[str, float | None, bool]]:
+        """本回合按序的 reasoning 条目副本,供 TUI 只读消费。"""
+        return list(self._turn_reasonings)
 
     def run_user_turn(
         self,
@@ -418,6 +440,7 @@ class AgentChatRunner:
         finally:
             self._finish_cancellable_turn(cancellation_token)
         if result.response is None:
+            self._accumulate_turn_reasonings(before_count)
             return ChatResponse(provider=self.provider.name, model=self.provider.model, content="")
         return self._finish_agent_result(before_count, loop, result)
 
@@ -529,6 +552,16 @@ def _display_lines_from_messages(messages: list[AgentMessage]) -> list[str]:
         elif message.role == "tool":
             lines.extend(_tool_lines(message.parts))
     return lines
+
+
+def _reasoning_entry(message) -> tuple[str, float | None]:
+    """从 assistant 消息元数据读出 reasoning 文本与耗时;缺省时返回空。"""
+
+    metadata = getattr(message, "metadata", None) or {}
+    diagnostics = metadata.get("diagnostics") or {}
+    if not isinstance(diagnostics, dict):
+        return "", None
+    return str(diagnostics.get("reasoning") or ""), diagnostics.get("reasoning_seconds") or None
 
 
 def _run_coroutine_in_thread(coro):

@@ -9,6 +9,8 @@ from lanscoder.agent.loop import ToolExecutionEvent
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.session import AgentSession
 from lanscoder.agent.user_input import AgentTurnStatus
+from lanscoder.context.identity import new_message_id, new_part_id
+from lanscoder.context.models import MessagePart
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.permissions.types import PermissionMode
 from lanscoder.providers.base import ChatProvider
@@ -749,3 +751,91 @@ def ToolCallEchoDefinition():
             "required": ["path"],
         },
     )
+
+
+def _reasoning_session_with_messages(store, session_id="s1", seconds=(9.0,)):
+    """构造会话:每条 user 消息后跟一条带 reasoning 的 assistant 消息。"""
+    session = AgentSession.create(store=store, session_id=session_id, agents_md="")
+    for sec in seconds:
+        session.append_user_message("hi")
+        message_id = new_message_id()
+        parts = [
+            MessagePart(
+                id=new_part_id(),
+                message_id=message_id,
+                kind="text",
+                content="answer",
+                metadata={},
+            )
+        ]
+        session.writer.append_assistant_parts(
+            parts,
+            message_id=message_id,
+            metadata={
+                "provider": "p",
+                "model": "m",
+                "diagnostics": {"reasoning": "r", "reasoning_seconds": sec},
+            },
+        )
+    return session
+
+
+def test_runner_last_turn_reasonings_reset_and_accumulate(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = _reasoning_session_with_messages(store)
+    runner = AgentChatRunner(
+        current_session=CurrentSessionState(session),
+        provider=FakeProvider([]),
+        tools=[],
+    )
+
+    # 新回合: 边界(before_count)之后的带 reasoning 消息入列。
+    # 会话现为 [user, assistant(reasoning)]; 本回合边界定在 user 之后,窗口 [1:] 恰好覆盖 reasoning 消息。
+    before_count = 1
+    runner._start_turn(streaming=False)
+    runner._accumulate_turn_reasonings(before_count)
+    assert len(runner.last_turn_reasonings) == 1
+    assert runner.last_turn_reasonings[0] == ("r", 9.0, True)  # 含 text part
+
+    # 新回合重置: 上一回合的 reasoning 不进新窗口。
+    session.append_user_message("again")
+    before_count = len(session.rebuild_view().messages)
+    runner._start_turn(streaming=False)
+    runner._accumulate_turn_reasonings(before_count)
+    assert runner.last_turn_reasonings == []
+
+
+def test_runner_last_turn_reasonings_accumulates_across_resume_without_reset(tmp_path) -> None:
+    """权限暂停的恢复回合不重置窗口: 同一回合的跨段 reasoning 继续累计。"""
+    store = JsonlSessionStore(tmp_path)
+    session = _reasoning_session_with_messages(store)
+    runner = AgentChatRunner(
+        current_session=CurrentSessionState(session),
+        provider=FakeProvider([]),
+        tools=[],
+    )
+    runner._start_turn(streaming=False)
+    runner._accumulate_turn_reasonings(1)
+    assert len(runner.last_turn_reasonings) == 1
+
+    # 恢复段: 新边界之后追加第二条带 reasoning 的 assistant 消息。
+    session.append_user_message("resume?")
+    before_count = len(session.rebuild_view().messages)  # 3: 第二条 assistant 加入之前的边界
+    message_id = new_message_id()
+    parts = [
+        MessagePart(
+            id=new_part_id(),
+            message_id=message_id,
+            kind="text",
+            content="answer2",
+            metadata={},
+        )
+    ]
+    session.writer.append_assistant_parts(
+        parts,
+        message_id=message_id,
+        metadata={"provider": "p", "model": "m", "diagnostics": {"reasoning": "r2", "reasoning_seconds": 3.0}},
+    )
+    runner._resume_turn(streaming=False)
+    runner._accumulate_turn_reasonings(before_count)
+    assert runner.last_turn_reasonings == [("r", 9.0, True), ("r2", 3.0, True)]
