@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from lanscoder.providers.types import ToolDefinition
-from lanscoder.runtime.cancellation import (
+from lanscoder.utils.cancellation import (
     AgentCancelledError,
     CancellationToken,
     cancellation_context,

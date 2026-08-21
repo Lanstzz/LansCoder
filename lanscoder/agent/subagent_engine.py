@@ -24,7 +24,7 @@ from lanscoder.context.identity import new_session_id
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import MainRequestOptions
-from lanscoder.runtime.cancellation import (
+from lanscoder.utils.cancellation import (
     AgentCancelledError,
     current_cancellation_token,
 )

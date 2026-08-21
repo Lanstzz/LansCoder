@@ -9,8 +9,8 @@ from typing import Any, Literal
 
 import anyio
 
-from lanscoder.runtime.cancellation import AgentCancelledError, CancellationToken
-from lanscoder.runtime.user_input import UserInputRequest
+from lanscoder.utils.cancellation import AgentCancelledError, CancellationToken
+from lanscoder.permissions.user_input import UserInputRequest
 from lanscoder.agent.ports import ContextManagerLike
 from lanscoder.agent.loop_limits import AgentLoopLimits, AgentLoopStopReason, _AgentLoopLimitReached
 from lanscoder.agent.guardrails import TurnGuardrails

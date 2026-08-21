@@ -16,7 +16,7 @@ from lanscoder.agent.session import AgentSession
 from lanscoder.context.manager import ContextCompactResult, ContextWindowTrigger
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.input.attachments import attach_path
-from lanscoder.runtime.cancellation import CancellationToken
+from lanscoder.utils.cancellation import CancellationToken
 from lanscoder.permissions.types import PermissionMode
 from lanscoder.mcp.adapter import adapt_mcp_tool
 from lanscoder.mcp.models import McpToolDescription

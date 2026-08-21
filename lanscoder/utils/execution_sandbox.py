@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from lanscoder.runtime.cancellation import current_cancellation_token
+from lanscoder.utils.cancellation import current_cancellation_token
 from lanscoder.utils.sandbox_access import SandboxAccess
 from lanscoder.utils.sandbox import PathSandbox
 from lanscoder.utils.subprocess import CommandResult, run_command

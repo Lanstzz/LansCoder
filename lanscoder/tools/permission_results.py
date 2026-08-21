@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from lanscoder.runtime.user_input import UserInputRequest
+from lanscoder.permissions.user_input import UserInputRequest
 from lanscoder.permissions.types import PermissionDecision, PermissionRequest
 from lanscoder.providers.types import ToolCall
 from lanscoder.tools.types import ToolResult, make_error_result, make_text_result

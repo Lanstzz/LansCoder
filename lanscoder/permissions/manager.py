@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
-from lanscoder.runtime.user_input import UserInputOption, UserInputRequest
+from lanscoder.permissions.user_input import UserInputOption, UserInputRequest
 from lanscoder.permissions.grants import PermissionGrantStore
 from lanscoder.permissions.policy import DefaultPermissionPolicy
 from lanscoder.permissions.types import (

@@ -18,7 +18,7 @@ from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.loop import ToolExecutionEvent
 from lanscoder.app.commands import CommandResult
 from lanscoder.app.commands import ContextCommandHandler
-from lanscoder.runtime.user_input import UserInputOption, UserInputRequest
+from lanscoder.permissions.user_input import UserInputOption, UserInputRequest
 from lanscoder.app.router import CompositeCommandHandler
 from lanscoder.app.runtime import CurrentSessionState
 from lanscoder.app.session_commands import SessionCommandHandler
