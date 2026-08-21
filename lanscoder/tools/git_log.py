@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lanscoder.permissions.types import PermissionAction
-from lanscoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result, make_text_result
+from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils import git as git_utils
 from lanscoder.utils.introspection import tool_from_function
 from lanscoder.utils.sandbox import PathSandbox
@@ -46,10 +45,4 @@ def create_git_log_tool(root: str | Path, *, access: SandboxAccess | None = None
             max_entries=max_entries,
         )
 
-    tool = tool_from_function(git_log)
-    tool.permission = ToolPermissionSpec(
-        action=PermissionAction.GIT_OPERATION,
-        target_value="log",
-        reason="查看 git log 属于 git 操作。",
-    )
-    return tool
+    return tool_from_function(git_log)

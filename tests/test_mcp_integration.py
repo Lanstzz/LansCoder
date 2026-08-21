@@ -5,15 +5,19 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from lanscoder.agent.session import AgentSession
+from lanscoder.context.store import JsonlSessionStore
 from lanscoder.mcp.adapter import adapt_mcp_tool
 from lanscoder.mcp.manager import McpManager
 from lanscoder.mcp.models import McpLocalServerConfig, McpRemoteServerConfig, McpToolDescription
 from lanscoder.permissions.manager import PermissionManager
 from lanscoder.permissions.policy import DefaultPermissionPolicy
-from lanscoder.permissions.types import PermissionConfirmationChoice
-from lanscoder.permissions.types import PermissionDecisionKind
-from lanscoder.tools.permission_registry import PermissionAwareToolRegistry
-from lanscoder.tools.registry import ToolRegistry
+from lanscoder.permissions.types import (
+    PermissionAction,
+    PermissionConfirmationChoice,
+    PermissionDecisionKind,
+)
+from lanscoder.providers.types import ToolCall
 
 
 def test_stdio_echo_tool_requires_confirmation_then_executes_after_explicit_allow(tmp_path) -> None:
@@ -33,23 +37,31 @@ def test_stdio_echo_tool_requires_confirmation_then_executes_after_explicit_allo
         discovered = dict(manager.tools())["echo"]
         assert discovered.name == "echo"
 
-        tool = adapt_mcp_tool(manager, "echo", discovered)
-        permissions = PermissionManager(policy=DefaultPermissionPolicy(tmp_path))
-        registry = PermissionAwareToolRegistry(ToolRegistry([tool]), permissions)
+        store = JsonlSessionStore(tmp_path / ".lanscoder")
+        session = AgentSession.create(
+            store=store,
+            session_id="sess_mcp_echo",
+            agents_md="",
+            tools=[adapt_mcp_tool(manager, "echo", discovered)],
+            permission_manager=PermissionManager(policy=DefaultPermissionPolicy(tmp_path)),
+        )
+        tool_call = ToolCall(id="call_mcp_echo", name="mcp__echo__echo", arguments={"message": "hello MCP"})
 
-        paused = registry.execute("mcp__echo__echo", {"message": "hello MCP"})
+        prepared = session.permission_coordinator.prepare(tool_call, [])
 
-        assert paused.data["requires_user_input"] is True
-        assert paused.data["permission_request"]["action"] == "mcp_tool"
-        assert paused.data["permission_request"]["target"] == "echo/echo"
+        assert prepared.pending_input is not None
+        assert prepared.pending_input.kind == "permission_confirmation"
+        assert prepared.permission_request is not None
+        assert prepared.permission_request.action == PermissionAction.MCP_TOOL
+        assert prepared.permission_request.target == "echo/echo"
 
-        pending = registry.preflight("mcp__echo__echo", {"message": "hello MCP"})
-        assert pending is not None
-        _, arguments, request, _ = pending
-        allowed = permissions.resolve_confirmation(request, PermissionConfirmationChoice.ALLOW_ONCE.value)
+        allowed = session.permission_coordinator.permission_manager.resolve_confirmation(
+            prepared.permission_request,
+            PermissionConfirmationChoice.ALLOW_ONCE.value,
+        )
         assert allowed.kind == PermissionDecisionKind.ALLOW
 
-        result = registry.execute_without_permission_check("mcp__echo__echo", arguments)
+        result = session.execute_tool_call_after_permission_confirmation(tool_call)
 
         assert result.ok is True
         assert result.content == "hello MCP"

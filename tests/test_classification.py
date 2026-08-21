@@ -1,7 +1,7 @@
-"""外置权限分类表:classify/build_request 的逐字转写锁。
+"""外置权限分类表:classify/build_request 的行为锁。
 
-断言值来自工具文件现存的 ToolPermissionSpec/permission_registry.py
-算法(Task 8 才删除),与 classification.py 表条目互为防漂移锁。
+工具侧的权限声明对象已删除(Task 8);本文件断言与 classification.py
+表条目互为防漂移锁。
 """
 
 from __future__ import annotations
@@ -13,12 +13,6 @@ import pytest
 
 from lanscoder.permissions.classification import build_request, classify
 from lanscoder.permissions.types import PermissionAction, PermissionRequest
-from lanscoder.providers.types import ToolDefinition
-from lanscoder.tools.apply_patch import _permission_target_for_patch
-from lanscoder.tools.path_permissions import read_multi_target, read_path_target
-from lanscoder.tools.permission_registry import permission_request_for_tool
-from lanscoder.tools.python_exec import _permission_target_for_python_exec
-from lanscoder.tools.types import Tool, ToolPermissionSpec, make_text_result
 from lanscoder.tools.web_search import EXA_MCP_URL, PARALLEL_MCP_URL
 
 GATED = [
@@ -182,46 +176,23 @@ def test_web_search_target_is_literal_url_pair() -> None:
     assert build_request("web_search", {}).target == expected
 
 
-def test_read_path_target_matches_tool_file_builder() -> None:
-    assert build_request("view", {"path": "src"}).target == read_path_target({"path": "src"})
-    assert build_request("view", {}).target == read_path_target({})
-    assert build_request("grep", {"path": "pkg"}).target == read_path_target({"path": "pkg"})
-    assert build_request("read_multi", {"paths": ["a", "b"]}).target == read_multi_target({"paths": ["a", "b"]})
-    assert build_request("read_multi", {"paths": "a"}).target == read_multi_target({"paths": "a"})
+def test_read_path_read_multi_target_literals() -> None:
+    assert build_request("view", {"path": "src"}).target == "src"
+    assert build_request("view", {}).target == "."
+    assert build_request("grep", {"path": "pkg"}).target == "pkg"
+    assert build_request("read_multi", {"paths": ["a", "b"]}).target == "a\nb"
+    assert build_request("read_multi", {"paths": "a"}).target == ""
 
 
-def test_patch_python_exec_git_diff_targets_match_tool_file_builders() -> None:
-    assert build_request("apply_patch", {"patch": PATCH_SAMPLE}).target == _permission_target_for_patch(
-        {"patch": PATCH_SAMPLE}
-    )
-    assert build_request("apply_patch", {"patch": PATCH_MOVE}).target == _permission_target_for_patch(
-        {"patch": PATCH_MOVE}
-    )
-    assert build_request("python_exec", {"code": "print(1)"}).target == _permission_target_for_python_exec(
-        {"code": "print(1)"}
-    )
+def test_patch_python_exec_git_diff_targets_literals() -> None:
+    assert build_request("apply_patch", {"patch": PATCH_SAMPLE}).target == "a.txt"
+    assert build_request("apply_patch", {"patch": PATCH_MOVE}).target == "b.txt, c.txt"
+    assert build_request("python_exec", {"code": "print(1)"}).target == "python -c print(1)"
     long_code = "x = 1\n" * 100
-    assert build_request("python_exec", {"code": long_code}).target == _permission_target_for_python_exec(
-        {"code": long_code}
-    )
+    preview = long_code if len(long_code) <= 200 else long_code[:200] + "..."
+    assert build_request("python_exec", {"code": long_code}).target == f"python -c {preview}"
     assert build_request("git_diff", {"staged": True}).target == "diff --cached"
     assert build_request("git_diff", {}).target == "diff"
-
-
-def _tool_with_spec(name: str, spec) -> Tool:
-    return Tool(
-        definition=ToolDefinition(name=name, description="", parameters={}),
-        executor=lambda **_kwargs: make_text_result(name, "ok"),
-        permission=ToolPermissionSpec(
-            action=spec.action,
-            target_arg=spec.target_arg,
-            target_value=spec.target_value,
-            cwd_arg=spec.cwd_arg,
-            reason=spec.reason,
-            allow_always=spec.allow_always,
-            allow_auto=spec.allow_auto,
-        ),
-    )
 
 
 @pytest.mark.parametrize(
@@ -234,12 +205,14 @@ def _tool_with_spec(name: str, spec) -> Tool:
         ("fetch", {"url": "https://example.com"}),
     ],
 )
-def test_build_request_matches_current_permission_request_for_tool(name: str, arguments: dict) -> None:
+def test_build_request_carries_classification_spec_fields(name: str, arguments: dict) -> None:
     spec = classify(name, arguments)
     assert spec is not None
-    expected = permission_request_for_tool(_tool_with_spec(name, spec), dict(arguments))
     actual = build_request(name, dict(arguments))
-    assert actual == expected
+
+    assert actual.action == spec.action
+    assert actual.metadata["allow_always"] is spec.allow_always
+    assert actual.metadata["allow_auto"] is spec.allow_auto
 
 
 def test_request_id_is_stable_for_argument_order() -> None:

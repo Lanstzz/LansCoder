@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lanscoder.permissions.types import PermissionAction
-from lanscoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result, make_text_result
+from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils.introspection import tool_from_function
 from lanscoder.utils.patch import PatchOperation, PatchPlan, parse_patch
 from lanscoder.utils.sandbox import PathSandbox
@@ -34,26 +33,7 @@ def create_apply_patch_tool(root: str | Path, *, access: SandboxAccess | None = 
             moved_files=outcome["moved_files"],
         )
 
-    tool = tool_from_function(apply_patch)
-    tool.permission = ToolPermissionSpec(
-        action=PermissionAction.WRITE_PATH,
-        target_builder=_permission_target_for_patch,
-        reason="应用补丁会修改项目文件，需要用户确认。",
-        allow_always=False,
-        allow_auto=False,
-    )
-    return tool
-
-
-def _permission_target_for_patch(arguments: dict[str, object]) -> str:
-    patch = str(arguments.get("patch") or "")
-    plan = parse_patch(patch)
-    files: list[str] = []
-    for operation in plan.operations:
-        files.append(operation.path)
-        if operation.move_to:
-            files.append(operation.move_to)
-    return ", ".join(dict.fromkeys(files))
+    return tool_from_function(apply_patch)
 
 
 def _apply_plan(sandbox: PathSandbox, plan: PatchPlan, *, dry_run: bool) -> dict[str, list[str]]:

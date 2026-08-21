@@ -3,8 +3,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from lanscoder.permissions.types import PermissionAction
-from lanscoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result, make_text_result
+from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils.introspection import tool_from_function
 from lanscoder.utils.sandbox import PathSandbox
 from lanscoder.utils.sandbox_access import SandboxAccess
@@ -34,13 +33,7 @@ def create_delete_tool(root: str | Path, *, access: SandboxAccess | None = None)
         target.unlink()
         return make_text_result("delete", f"已删除文件：{relative}", path=relative, type="file")
 
-    tool = tool_from_function(delete)
-    tool.permission = ToolPermissionSpec(
-        action=PermissionAction.DELETE_PATH,
-        target_arg="path",
-        reason="删除路径需要用户确认。",
-    )
-    return tool
+    return tool_from_function(delete)
 
 
 def _resolve_delete_target(sandbox: PathSandbox, path: str | Path | None) -> Path:

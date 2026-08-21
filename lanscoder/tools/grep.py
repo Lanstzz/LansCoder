@@ -5,7 +5,6 @@ import re
 import shutil
 from pathlib import Path
 
-from lanscoder.tools.path_permissions import with_read_permission
 from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils.introspection import tool_from_function
 from lanscoder.utils.execution_sandbox import ExecutionSandbox
@@ -61,7 +60,7 @@ def create_grep_tool(root: str | Path, *, access: SandboxAccess | None = None) -
             max_results=max_results,
         )
 
-    return with_read_permission(tool_from_function(grep), reason="搜索文件内容需要权限检查。")
+    return tool_from_function(grep)
 
 
 def _grep_with_rg(

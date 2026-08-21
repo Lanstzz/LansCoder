@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
 from lanscoder.providers.types import ToolDefinition
-
-if TYPE_CHECKING:
-    from lanscoder.permissions.types import PermissionAction
 
 
 @dataclass(slots=True)
@@ -26,24 +22,10 @@ class ToolExecutor(Protocol):
 
 
 @dataclass(slots=True)
-class ToolPermissionSpec:
-
-    action: PermissionAction
-    target_arg: str | None = None
-    target_value: str | None = None
-    target_builder: Callable[[dict[str, Any]], str] | None = None
-    cwd_arg: str | None = None
-    reason: str = ""
-    allow_always: bool = True
-    allow_auto: bool = True
-
-
-@dataclass(slots=True)
 class Tool:
 
     definition: ToolDefinition
     executor: ToolExecutor
-    permission: ToolPermissionSpec | None = None
 
     @property
     def name(self) -> str:

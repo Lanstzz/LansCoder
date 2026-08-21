@@ -53,7 +53,7 @@ def test_mcp_tool_search_returns_activated_names_without_executing_mcp() -> None
     assert result.ok is True
     assert result.data["mcp_tool_search"]["activated_tools"] == ["mcp__github__get_issue"]
     assert "mcp__github__get_issue" in result.content
-    assert tool.permission is None
+    assert not hasattr(tool, "permission")
     assert tool.definition.parameters["required"] == ["query"]
     assert tool.definition.parameters["additionalProperties"] is False
 

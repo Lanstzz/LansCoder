@@ -2,6 +2,7 @@ import pytest
 
 from lanscoder.agent.session import AgentSession
 from lanscoder.context.store import JsonlSessionStore
+from lanscoder.permissions.classification import build_request
 from lanscoder.permissions.grants import PermissionGrantStore
 from lanscoder.permissions.manager import PermissionManager
 from lanscoder.permissions.policy import DefaultPermissionPolicy
@@ -14,9 +15,8 @@ from lanscoder.permissions.types import (
     PermissionScopeType,
 )
 from lanscoder.providers.types import ToolCall, ToolDefinition
-from lanscoder.tools.permission_registry import PermissionAwareToolRegistry, permission_request_for_tool
 from lanscoder.tools.registry import ToolRegistry
-from lanscoder.tools.types import Tool, ToolPermissionSpec, make_text_result
+from lanscoder.tools.types import Tool, make_text_result
 
 
 def _write_tool(calls: list[dict[str, object]] | None = None) -> Tool:
@@ -36,11 +36,6 @@ def _write_tool(calls: list[dict[str, object]] | None = None) -> Tool:
             },
         ),
         executor=executor,
-        permission=ToolPermissionSpec(
-            action=PermissionAction.WRITE_PATH,
-            target_arg="path",
-            reason="写入文件需要确认。",
-        ),
     )
 
 
@@ -75,7 +70,7 @@ class _CountingPermissionManager(PermissionManager):
         return super().preflight(request)
 
 
-def _coordinator_session(tmp_path, manager) -> AgentSession:
+def _coordinator_session(tmp_path, manager, tools=None) -> AgentSession:
     """装配 coordinator 路径的会话,并把注册表换成纯 ToolRegistry(验证闸门不依赖 registry 类型)。"""
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.create(
@@ -84,66 +79,57 @@ def _coordinator_session(tmp_path, manager) -> AgentSession:
         agents_md="",
         permission_manager=manager,
     )
-    session.tool_registry = ToolRegistry([])
+    session.tool_registry = ToolRegistry(list(tools or []))
     return session
 
 
-def test_permission_aware_registry_keeps_plain_tools_unchanged(tmp_path) -> None:
+def test_plain_tool_prepare_is_ungated_and_executes(tmp_path) -> None:
     calls: list[str] = []
-    registry = PermissionAwareToolRegistry(
-        ToolRegistry([_plain_tool(calls)]),
-        PermissionManager(policy=DefaultPermissionPolicy(tmp_path)),
-    )
+    session = _coordinator_session(tmp_path, PermissionManager(policy=DefaultPermissionPolicy(tmp_path)), [_plain_tool(calls)])
+    tool_call = ToolCall(id="call_echo", name="echo", arguments={"text": "hi"})
 
-    result = registry.execute("echo", {"text": "hi"})
+    prepared = session.permission_coordinator.prepare(tool_call, [])
 
+    assert prepared.pending_input is None
+    assert prepared.permission_request is None
+    result = session.execute_tool_call(tool_call)
     assert result.ok is True
     assert result.content == "hi"
     assert calls == ["hi"]
 
 
-def test_permission_aware_registry_returns_confirmation_without_executing(tmp_path) -> None:
+def test_write_returns_confirmation_without_executing(tmp_path) -> None:
     calls: list[dict[str, object]] = []
-    registry = PermissionAwareToolRegistry(
-        ToolRegistry([_write_tool(calls)]),
-        PermissionManager(policy=DefaultPermissionPolicy(tmp_path)),
-    )
+    session = _coordinator_session(tmp_path, PermissionManager(policy=DefaultPermissionPolicy(tmp_path)), [_write_tool(calls)])
+    tool_call = ToolCall(id="call_write", name="write", arguments={"path": "README.md", "content": "hello"})
 
-    result = registry.execute("write", {"path": "README.md", "content": "hello"})
+    prepared = session.permission_coordinator.prepare(tool_call, [])
 
-    assert result.ok is True
-    assert result.data["requires_user_input"] is True
-    assert result.data["request_type"] == "permission_confirmation"
-    assert result.data["permission_request"]["action"] == "write_path"
-    assert result.data["permission_request"]["target"] == "README.md"
-    assert result.data["permission_request"]["cwd"] == str(tmp_path.resolve())
+    assert prepared.pending_input is not None
+    assert prepared.pending_input.kind == "permission_confirmation"
+    assert prepared.permission_request is not None
+    assert prepared.permission_request.action == PermissionAction.WRITE_PATH
+    assert prepared.permission_request.target == "README.md"
+    assert prepared.permission_request.cwd == tmp_path.resolve()
     assert calls == []
 
 
-def test_permission_aware_registry_returns_denied_result(tmp_path) -> None:
-    calls: list[str] = []
-    registry = PermissionAwareToolRegistry(
-        ToolRegistry(
-            [
-                Tool(
-                    definition=ToolDefinition(name="env", description="读 env。", parameters={}),
-                    executor=lambda key: calls.append(key) or make_text_result("env", key),
-                    permission=ToolPermissionSpec(action=PermissionAction.READ_ENV, target_arg="key"),
-                )
-            ]
-        ),
-        PermissionManager(policy=DefaultPermissionPolicy(tmp_path)),
+def test_delete_outside_root_returns_denied_result(tmp_path) -> None:
+    session = _coordinator_session(tmp_path, PermissionManager(policy=DefaultPermissionPolicy(tmp_path)))
+
+    prepared = session.permission_coordinator.prepare(
+        ToolCall(id="call_del", name="delete", arguments={"path": "../outside.txt"}),
+        [],
     )
 
-    result = registry.execute("env", {"key": "OPENAI_API_KEY"})
+    assert prepared.pending_input is None
+    assert prepared.result is not None
+    assert prepared.result.data["request_type"] == "permission_denied"
+    assert prepared.permission_request is not None
+    assert prepared.permission_request.action == PermissionAction.DELETE_PATH
 
-    assert result.ok is False
-    assert result.data["request_type"] == "permission_denied"
-    assert result.data["permission_request"]["action"] == "read_env"
-    assert calls == []
 
-
-def test_permission_aware_registry_executes_after_matching_grant(tmp_path) -> None:
+def test_write_executes_after_matching_grant(tmp_path) -> None:
     calls: list[dict[str, object]] = []
     grant = PermissionGrant(
         id="grant_write_readme",
@@ -153,83 +139,63 @@ def test_permission_aware_registry_executes_after_matching_grant(tmp_path) -> No
         scope_value=str((tmp_path / "README.md").resolve()),
         created_at="2026-06-04T00:00:00+08:00",
     )
-    registry = PermissionAwareToolRegistry(
-        ToolRegistry([_write_tool(calls)]),
-        PermissionManager(policy=DefaultPermissionPolicy(tmp_path), grants=PermissionGrantStore([grant])),
-    )
+    manager = PermissionManager(policy=DefaultPermissionPolicy(tmp_path), grants=PermissionGrantStore([grant]))
+    session = _coordinator_session(tmp_path, manager, [_write_tool(calls)])
+    session.require_prewrite_review = False
+    tool_call = ToolCall(id="call_write", name="write", arguments={"path": "README.md", "content": "hello"})
 
-    result = registry.execute("write", {"path": "README.md", "content": "hello"})
+    preflight = session.permission_coordinator.preflight(tool_call)
+    assert preflight is not None
+    assert preflight.decision.kind == PermissionDecisionKind.ALLOW
+
+    result = session.execute_tool_call_after_permission_confirmation(tool_call)
 
     assert result.ok is True
-    assert result.content == "wrote README.md"
     assert calls == [{"path": "README.md", "content": "hello"}]
 
 
-def test_permission_request_for_tool_reports_missing_target_argument() -> None:
-    tool = _write_tool()
-
+def test_build_request_reports_missing_target_argument() -> None:
     try:
-        permission_request_for_tool(tool, {"content": "hello"})
+        build_request("write", {"content": "hello"})
     except ValueError as exc:
         assert "path" in str(exc)
     else:
         raise AssertionError("expected missing target argument error")
 
 
-def test_permission_aware_registry_missing_target_argument_does_not_execute(tmp_path) -> None:
+def test_prepare_missing_target_argument_does_not_execute(tmp_path) -> None:
     calls: list[dict[str, object]] = []
-    registry = PermissionAwareToolRegistry(
-        ToolRegistry([_write_tool(calls)]),
-        PermissionManager(policy=DefaultPermissionPolicy(tmp_path)),
+    session = _coordinator_session(tmp_path, PermissionManager(policy=DefaultPermissionPolicy(tmp_path)), [_write_tool(calls)])
+
+    prepared = session.permission_coordinator.prepare(
+        ToolCall(id="call_write", name="write", arguments={"content": "hello"}),
+        [],
     )
 
-    result = registry.execute("write", {"content": "hello"})
-
-    assert result.ok is False
-    assert "path" in (result.error or "")
+    assert prepared.result is not None
+    assert "path" in (prepared.result.error or "")
     assert calls == []
 
 
-def test_permission_request_id_is_stable_for_argument_order() -> None:
-    tool = _write_tool()
-
-    first = permission_request_for_tool(tool, {"path": "README.md", "content": "hello"})
-    second = permission_request_for_tool(tool, {"content": "hello", "path": "README.md"})
+def test_build_request_id_is_stable_for_argument_order() -> None:
+    first = build_request("write", {"path": "README.md", "content": "hello"})
+    second = build_request("write", {"content": "hello", "path": "README.md"})
 
     assert first.id == second.id
 
 
-def test_permission_aware_registry_normalizes_relative_cwd_arg(tmp_path) -> None:
+def test_coordinator_normalizes_relative_cwd_arg(tmp_path) -> None:
     (tmp_path / "pkg").mkdir()
-    calls: list[dict[str, object]] = []
-    tool = Tool(
-        definition=ToolDefinition(
-            name="shell",
-            description="运行命令。",
-            parameters={
-                "type": "object",
-                "properties": {"command": {"type": "string"}, "cwd": {"type": "string"}},
-                "required": ["command"],
-            },
-        ),
-        executor=lambda command, cwd=".": calls.append({"command": command, "cwd": cwd}) or make_text_result("shell", "ok"),
-        permission=ToolPermissionSpec(
-            action=PermissionAction.EXECUTE_SHELL,
-            target_arg="command",
-            cwd_arg="cwd",
-        ),
-    )
-    registry = PermissionAwareToolRegistry(
-        ToolRegistry([tool]),
-        PermissionManager(policy=DefaultPermissionPolicy(tmp_path)),
+    session = _coordinator_session(tmp_path, PermissionManager(policy=DefaultPermissionPolicy(tmp_path)))
+
+    prepared = session.permission_coordinator.prepare(
+        ToolCall(id="call_shell", name="shell", arguments={"command": "pytest", "cwd": "pkg"}),
+        [],
     )
 
-    result = registry.execute("shell", {"command": "pytest", "cwd": "pkg"})
-
-    assert result.ok is True
-    assert result.data["requires_user_input"] is True
-    assert result.data["permission_request"]["cwd"] == str((tmp_path / "pkg").resolve())
-    assert calls == []
+    assert prepared.pending_input is not None
+    assert prepared.permission_request is not None
+    assert prepared.permission_request.cwd == (tmp_path / "pkg").resolve()
 
 
 @pytest.mark.parametrize(

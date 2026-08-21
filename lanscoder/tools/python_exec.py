@@ -3,8 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from lanscoder.permissions.types import PermissionAction
-from lanscoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result, make_text_result
+from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils.introspection import tool_from_function
 from lanscoder.utils.execution_sandbox import ExecutionSandbox
 from lanscoder.utils.sandbox_access import SandboxAccess
@@ -51,19 +50,4 @@ def create_python_exec_tool(root: str | Path, *, access: SandboxAccess | None = 
         content = result.stdout.strip() or result.stderr.strip() or f"Python 退出码：{result.exit_code}"
         return make_text_result("python_exec", content, **data)
 
-    tool = tool_from_function(python_exec)
-    tool.permission = ToolPermissionSpec(
-        action=PermissionAction.EXECUTE_SHELL,
-        target_builder=_permission_target_for_python_exec,
-        cwd_arg="cwd",
-        reason="执行 Python 代码需要用户确认。",
-        allow_always=False,
-        allow_auto=False,
-    )
-    return tool
-
-
-def _permission_target_for_python_exec(arguments: dict[str, object]) -> str:
-    code = str(arguments.get("code") or "")
-    preview = code if len(code) <= 200 else code[:200] + "..."
-    return f"python -c {preview}"
+    return tool_from_function(python_exec)

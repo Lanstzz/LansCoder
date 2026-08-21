@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lanscoder.permissions.types import PermissionAction
-from lanscoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result, make_text_result
+from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils.introspection import tool_from_function
 from lanscoder.utils.sandbox import PathSandbox
 from lanscoder.utils.sandbox_access import SandboxAccess
@@ -38,10 +37,4 @@ def create_write_tool(root: str | Path, *, access: SandboxAccess | None = None) 
             created=created,
         )
 
-    tool = tool_from_function(write)
-    tool.permission = ToolPermissionSpec(
-        action=PermissionAction.WRITE_PATH,
-        target_arg="path",
-        reason="写入文件需要用户确认。",
-    )
-    return tool
+    return tool_from_function(write)

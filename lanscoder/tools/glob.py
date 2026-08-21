@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lanscoder.tools.path_permissions import with_read_permission
 from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils.introspection import tool_from_function
 from lanscoder.utils.sandbox import PathSandbox
@@ -28,4 +27,4 @@ def create_glob_tool(root: str | Path, *, access: SandboxAccess | None = None) -
         content = "\n".join(matches) if matches else "没有找到匹配路径。"
         return make_text_result("glob", content, matches=matches, truncated=len(all_matches) > max_results)
 
-    return with_read_permission(tool_from_function(glob), reason="匹配路径需要权限检查。")
+    return tool_from_function(glob)

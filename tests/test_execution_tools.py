@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
-from lanscoder.agent.session import create_project_permission_manager
-from lanscoder.permissions.types import PermissionMode
+from lanscoder.agent.session import AgentSession, create_project_permission_manager
+from lanscoder.context.store import JsonlSessionStore
+from lanscoder.permissions.types import PermissionAction, PermissionMode
+from lanscoder.providers.types import ToolCall
 from lanscoder.tools import create_builtin_registry
-from lanscoder.tools.permission_registry import PermissionAwareToolRegistry
 from lanscoder.utils.subprocess import CommandResult
+
+
+def _coordinator_session(tmp_path, *, mode: PermissionMode) -> AgentSession:
+    store = JsonlSessionStore(tmp_path / ".lanscoder")
+    return AgentSession.create(
+        store=store,
+        session_id="sess_exec_gate",
+        agents_md="",
+        permission_manager=create_project_permission_manager(tmp_path, mode=mode),
+    )
 
 
 def test_shell_executes_command_inside_root(tmp_path):
@@ -151,32 +162,28 @@ def test_diagnostics_runs_pytest(monkeypatch, tmp_path):
 
 
 def test_diagnostics_requires_permission_confirmation(tmp_path):
-    calls = []
-    registry = create_builtin_registry(tmp_path)
-    permissioned = PermissionAwareToolRegistry(
-        registry,
-        create_project_permission_manager(tmp_path, mode=PermissionMode.STANDARD),
+    session = _coordinator_session(tmp_path, mode=PermissionMode.STANDARD)
+
+    prepared = session.permission_coordinator.prepare(
+        ToolCall(id="call_diag", name="diagnostics", arguments={"command": "touch should_not_run"}),
+        [],
     )
 
-    result = permissioned.execute("diagnostics", {"command": "touch should_not_run"})
-
-    assert result.ok is True
-    assert result.data["requires_user_input"] is True
-    assert result.data["permission_request"]["action"] == "execute_shell"
-    assert calls == []
+    assert prepared.pending_input is not None
+    assert prepared.pending_input.kind == "permission_confirmation"
+    assert prepared.permission_request is not None
+    assert prepared.permission_request.action == PermissionAction.EXECUTE_SHELL
 
 
 def test_python_exec_requires_permission_even_in_aggressive_mode(tmp_path):
-    calls = []
-    registry = create_builtin_registry(tmp_path, include_execution_tools=True)
-    permissioned = PermissionAwareToolRegistry(
-        registry,
-        create_project_permission_manager(tmp_path, mode=PermissionMode.AGGRESSIVE),
+    session = _coordinator_session(tmp_path, mode=PermissionMode.AGGRESSIVE)
+
+    prepared = session.permission_coordinator.prepare(
+        ToolCall(id="call_pyexec", name="python_exec", arguments={"code": "__import__('os').system('id')"}),
+        [],
     )
 
-    result = permissioned.execute("python_exec", {"code": "__import__('os').system('id')"})
-
-    assert result.ok is True
-    assert result.data["requires_user_input"] is True
-    assert result.data["permission_request"]["action"] == "execute_shell"
-    assert calls == []
+    assert prepared.pending_input is not None
+    assert prepared.pending_input.kind == "permission_confirmation"
+    assert prepared.permission_request is not None
+    assert prepared.permission_request.action == PermissionAction.EXECUTE_SHELL
