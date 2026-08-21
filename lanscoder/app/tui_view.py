@@ -593,10 +593,26 @@ class LansCoderViewMixin:
         text = entry_markdown_text_block(block)
         output = self.query_one("#output")
         if hasattr(output, "mount"):
-            markdown = LansCoderMarkdown(classes=classes)
+            block_index = len(self.transcript.blocks) - 1
             was_pinned = self._is_output_pinned_to_bottom(output)
-            output.mount(markdown)
-            _observe_markdown_update(markdown.update(text))
+            block_markdown = self._stream_text_widget
+            if block_markdown is None:
+                self._ensure_stream_block_rows(block_index, block)
+                block_markdown = self._stream_text_widget
+            if block_markdown is not None:
+                # 挂载环境：正文复用 block 的 markdown widget(children 已在其后按
+                # 模型顺序挂载),去掉 streaming 占位外观并改为可选文本。
+                # Textual 延迟挂载,_on_mount 会用 _initial_markdown 或空串重绘;先
+                # 写入 _initial_markdown 可防止未挂载前的内容被空串覆盖。
+                block_markdown._initial_markdown = text
+                block_markdown.remove_class("streaming")
+                _observe_markdown_update(block_markdown.update(text))
+                block_markdown.set_selectable(True)
+            else:
+                # 非挂载环境(单元测试直接驱动):退化为独立挂载。
+                markdown = LansCoderMarkdown(text, classes=classes)
+                output.mount(markdown)
+                _observe_markdown_update(markdown.update(text))
             if was_pinned:
                 self._scroll_output_end(output)
             return
