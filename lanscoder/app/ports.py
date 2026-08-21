@@ -30,6 +30,8 @@ class ChatRunnerLike(Protocol):
 class CurrentSessionLike(Protocol):
     session_id: str
 
+    def rebuild_view(self) -> object: ...
+
 
 class ContextManagerLike(Protocol):
     def compact_if_needed(self, request: ContextCompactRequest) -> ContextCompactResult: ...
