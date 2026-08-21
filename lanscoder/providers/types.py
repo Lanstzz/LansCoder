@@ -54,8 +54,9 @@ class TokenUsage:
 class ProviderDiagnostics:
 
     reasoning: str | None = None
+    # 无 reasoning 时该字段恒为 None。两条分支都仅在有 reasoning 时写入：
     # 流式：首个 reasoning_delta 到首个 text_delta/tool_call_started/message_completed 的墙钟间隔；
-    # 非流式：整轮 complete 调用耗时（近似），仅在有 reasoning 时写入。
+    # 非流式：整轮 complete 调用耗时（近似）。
     reasoning_seconds: float | None = None
     raw_finish_reason: str | None = None
     warnings: list[str] = field(default_factory=list)
