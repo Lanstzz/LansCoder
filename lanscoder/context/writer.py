@@ -300,6 +300,8 @@ class SessionEventWriter:
         status: str,
         task_id: str | None = None,
         observed_revision: int | None = None,
+        label: str | None = None,
+        error: str | None = None,
     ) -> str:
 
         message_id = new_message_id()
@@ -312,6 +314,10 @@ class SessionEventWriter:
             metadata["background_task_id"] = task_id
         if observed_revision is not None:
             metadata["background_observed_revision"] = observed_revision
+        if label is not None:
+            metadata["background_label"] = label
+        if error is not None:
+            metadata["background_error"] = error
         part = MessagePart(
             id=new_part_id(),
             message_id=message_id,

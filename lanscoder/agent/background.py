@@ -116,6 +116,7 @@ class BackgroundNotification:
     task_id: str | None = None
     observed_revision: int | None = None
     task_plan_completion: str | None = None
+    error: str | None = None
     elapsed_seconds: float | None = None
     provider_calls: int | None = None
     total_tokens: int | None = None
@@ -291,6 +292,7 @@ class BackgroundJobManager:
             task_id=job.task_id,
             observed_revision=job.observed_revision,
             task_plan_completion=job.task_plan_completion,
+            error=job.error,
             elapsed_seconds=(self._clock() - job.created_at) if has_usage else None,
             provider_calls=provider_calls if has_usage else None,
             total_tokens=total_tokens if has_usage else None,

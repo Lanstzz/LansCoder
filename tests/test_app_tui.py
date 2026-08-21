@@ -1477,6 +1477,8 @@ class RecordingSession:
         status,
         task_id=None,
         observed_revision=None,
+        label=None,
+        error=None,
     ):
         self.writes.append((content, job_id, tool_name, status))
         return "msg_x"
