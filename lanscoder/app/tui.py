@@ -58,7 +58,7 @@ from lanscoder.app.transcript_view import (
 )
 from lanscoder.app import model_topbar_themes
 from lanscoder.app.projector import TranscriptProjector, replay_messages
-from lanscoder.app.tui_state import BlockKind, TuiTaskPlanPanelState, TranscriptModel
+from lanscoder.app.tui_state import BlockKind, ChildItem, ChildKind, TuiTaskPlanPanelState, TranscriptModel
 from lanscoder.app.topbar_view import _provider_name_markup, _provider_model_markup
 from lanscoder.app.tui_view import LansCoderViewMixin, _entry_renderable_block
 from lanscoder.app.tui_widgets import (
@@ -664,9 +664,11 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return self._active_chat_turn is not None
 
     def _finish_chat_turn(self, token: int) -> None:
-        """回合收尾:刷新任务计划面板、解除忙状态,必要时续发排队/引导回合。"""
+        """回合收尾:回填 thinking 时长、刷新任务计划面板、解除忙状态,必要时续发排队/引导回合。"""
         if not self._is_current_chat_turn(token):
             return
+        # reconcile 必须在 pending/nudge 推进 token 之前,否则旧回合的时长回填被整体跳过
+        self._apply_turn_reasoning_durations()
         self._refresh_task_plan_panel_from_current_session()
         self._chat_busy = False
         self._chat_worker = None
@@ -684,6 +686,43 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if self._has_pending_background_completions():
             self._submit_nudge_turn()
             return
+
+    def _apply_turn_reasoning_durations(self) -> None:
+        """把本回合 store 里记录的 reasoning 秒数回填到 live thinking 子行。
+
+        语义与 replay_messages 的 merge 规则对位:带 text/tool part 的消息
+        结算其 thinking 子行并开启新行;纯 reasoning 消息(live/replay 都)合并进
+        上一行,保留该行首条 reasoning 的秒数。物化仅发生在非流式回合(无 live 子行)。
+        """
+        entries = getattr(self.chat_runner, "last_turn_reasonings", None) or []
+        if not entries:
+            return
+        current_child: ChildItem | None = None
+        prev_had_parts = False
+        counter = 0
+        for reasoning, seconds, had_parts in entries:
+            if current_child is None or prev_had_parts:
+                block = self.transcript.last_block()
+                block_children = [c for c in (block.children if block else []) if c.kind == ChildKind.THINKING]
+                if counter < len(block_children):
+                    current_child = block_children[counter]
+                else:
+                    if block is None or block.kind != BlockKind.ASSISTANT:
+                        self.projector.start_assistant()
+                        block = self.transcript.last_block()
+                    self.projector.append_thinking(reasoning, track_duration=False, duration_seconds=seconds)
+                    current_child = block.children[-1]
+                    block_index = len(self.transcript.blocks) - 1
+                    output = self.query_one("#output")
+                    self._mount_child_row(output, block_index, current_child)
+                counter += 1
+                current_child.duration_seconds = seconds
+                current_child.finished = True
+                block_index = len(self.transcript.blocks) - 1
+                self._refresh_child_row(block_index, current_child)
+            # 合并条目(上一消息纯 reasoning、无 text/tool part)不进入分支:
+            # live/replay 均已把文本并进同一行,时长保留该行首条 reasoning 的值。
+            prev_had_parts = had_parts
 
     def _handle_escape_interrupt(self) -> bool:
         """Esc 双重打断窗口:第一次提示,窗口内再按则中断当前回合。"""
