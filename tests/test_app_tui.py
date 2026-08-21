@@ -4851,3 +4851,4 @@ def test_background_notification_ui_text_full_matrix() -> None:
     assert background_notification_ui_text(label="r", tool_name="delegate", status="failed", error="boom") == "❌ 子agent [r] 失败: boom"
     assert background_notification_ui_text(label="r", tool_name="delegate", status="failed", error=None) == "❌ 子agent [r] 失败: 未知错误"
     assert background_notification_ui_text(label="r", tool_name="delegate", status="cancelled", error=None) == "⚠️ 子agent [r] cancelled"
+    assert background_notification_ui_text(label="r", tool_name="delegate", status="", error=None) == "⚠️ 子agent [r]"

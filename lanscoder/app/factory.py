@@ -281,8 +281,10 @@ def create_lanscoder_app(
     command_handler.handlers.insert(0, help_handler)
 
     def _close_session_and_mcp() -> None:
-        chat_runner.flush_background_notifications()
-        mcp_manager.close()
+        try:
+            chat_runner.flush_background_notifications()
+        finally:
+            mcp_manager.close()
 
     app = LansCoderApp(
         command_handler=command_handler,
