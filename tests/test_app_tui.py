@@ -3602,8 +3602,9 @@ def test_lanscoder_app_starts_new_stream_block_after_tool_event(monkeypatch) -> 
     app._restore_stream_event_handler(previous_stream_handler)
 
     mounted_types = [type(widget).__name__ for widget in output.mounted]
-    assert mounted_types == ["LansCoderMarkdown", "LansCoderMarkdown"]
-    first_markdown, second_markdown = output.mounted
+    assert mounted_types == ["LansCoderMarkdown", "LansCoderMarkdown", "ChildRow"]
+    first_markdown, second_markdown, tool_row = output.mounted
+    assert "tool echo" in str(tool_row.content)
     assert first_markdown.allow_select is True
     assert second_markdown.allow_select is False
     assert first_markdown.updates[-1] == "LansCoder:\n\n我先看看。"
@@ -4225,6 +4226,8 @@ async def test_child_row_click_toggles_collapsed_tool_child() -> None:
         child = app.transcript.blocks[0].children[0]
         assert child.expanded is False
         assert "[>] tool read auth.py" in str(row.content)
+        assert not row.has_class("expanded")
+        assert row.size.height == 1
 
         await pilot.click(row)
         await pilot.pause()
@@ -4232,12 +4235,122 @@ async def test_child_row_click_toggles_collapsed_tool_child() -> None:
         assert child.expanded is True
         assert "tool: tool read auth.py" in str(row.content)
         assert "ok 200" in str(row.content)
+        assert row.has_class("expanded")
+        assert row.size.height > 1
 
         await pilot.click(row)
         await pilot.pause()
 
         assert child.expanded is False
         assert "✓" in str(row.content)
+        assert not row.has_class("expanded")
+        assert row.size.height == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_live_turn_mounts_thinking_row_below_markdown() -> None:
+    """Reasoning streamed before any text renders as [markdown, thinking row].
+
+    The thinking row is deferred to the first stream-text mount so it never
+    appears above the block's text widget, matching render_block_into order.
+    """
+    runner = FakeStreamingAsyncChatRunner()
+    app = LansCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        app._dismiss_welcome()
+        previous_stream_handler = app._install_stream_event_handler()
+
+        runner.stream_event_handler(ChatStreamEvent(kind="reasoning_delta", text="think step one"))
+        await pilot.pause()
+
+        output = app.query_one("#output")
+        assert list(output.children) == []
+        thinking_child = next(
+            (c for b in app.transcript.blocks for c in b.children if c.kind == ChildKind.THINKING),
+            None,
+        )
+        assert thinking_child is not None
+        assert thinking_child.body == "think step one"
+
+        runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="hello"))
+        await pilot.pause()
+
+        mounted_types = [type(widget).__name__ for widget in output.children]
+        assert mounted_types == ["LansCoderMarkdown", "ChildRow"]
+        thinking_row = app.query_one("#child-0-t0", ChildRow)
+        assert "Thinking" in str(thinking_row.content)
+        assert thinking_row.size.height >= 1
+        app._restore_stream_event_handler(previous_stream_handler)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_live_turn_tool_row_before_text_lands_below_markdown() -> None:
+    """A tool 'started' arriving before any stream text still renders below the text widget."""
+    runner = FakeToolEventAsyncChatRunner()
+    app = LansCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        app._dismiss_welcome()
+        previous_tool_handler = app._install_tool_event_handler()
+
+        runner.tool_event_handler(
+            ToolExecutionEvent(
+                kind="started",
+                tool_call=ToolCall(id="call_echo", name="echo", arguments={}),
+            )
+        )
+        await pilot.pause()
+
+        output = app.query_one("#output")
+        mounted_types = [type(widget).__name__ for widget in output.children]
+        assert mounted_types == ["LansCoderMarkdown", "ChildRow"]
+        tool_row = app.query_one("#child-0-call_echo", ChildRow)
+        assert "[>] tool echo" in str(tool_row.content)
+        assert tool_row.size.height >= 1
+
+        runner.tool_event_handler(
+            ToolExecutionEvent(
+                kind="finished",
+                tool_call=ToolCall(id="call_echo", name="echo", arguments={}),
+                result=ToolResult(name="echo", ok=True, content="hello"),
+            )
+        )
+        await pilot.pause()
+        tool_child = app.transcript.blocks[0].children[0]
+        assert tool_child.status == "success"
+        assert tool_child.body == "hello"
+        assert "✓" in str(tool_row.content)
+
+        await pilot.click(tool_row)
+        await pilot.pause()
+        assert "hello" in str(tool_row.content)
+        await pilot.click(tool_row)
+        await pilot.pause()
+
+        app._append_stream_text("done")
+        await pilot.pause()
+
+        markdown = output.children[0]
+        assert app._stream_text_widget is markdown
+        assert app._stream_text_buffer == "done"
+        mounted_types = [type(widget).__name__ for widget in output.children]
+        assert mounted_types == ["LansCoderMarkdown", "ChildRow"]
+        app._restore_tool_event_handler(previous_tool_handler)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_toggle_child_expanded_out_of_range_block_returns_early() -> None:
+    """Clicking a stale child row (block flushed from the transcript) must not raise."""
+    app = LansCoderApp()
+
+    async with app.run_test() as pilot:
+        app._toggle_child_expanded(99, "missing")
+        app._toggle_child_expanded(0, "missing")
+        await pilot.pause()
 
 
 @pytest.mark.anyio

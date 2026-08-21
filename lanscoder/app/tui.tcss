@@ -213,6 +213,11 @@ ScrollBarCorner {
     color: #808185;
 }
 
+.child-row.expanded {
+    height: auto;
+    max-height: 40;
+}
+
 .child-thinking {
     color: #2b5fd9;
 }
