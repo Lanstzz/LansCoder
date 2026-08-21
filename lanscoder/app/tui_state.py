@@ -5,6 +5,59 @@ from enum import StrEnum
 from typing import Any
 
 
+class BlockKind(StrEnum):
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+    COMMAND = "command"
+    ERROR = "error"
+
+
+class ChildKind(StrEnum):
+    THINKING = "thinking"
+    TOOL = "tool"
+
+
+@dataclass(slots=True)
+class ChildItem:
+    kind: ChildKind
+    key: str
+    label: str
+    status: str | None = None
+    body: str = ""
+    expanded: bool = False
+
+
+@dataclass(slots=True)
+class TranscriptBlock:
+    kind: BlockKind
+    text: str = ""
+    children: list[ChildItem] = field(default_factory=list)
+    streaming: bool = False
+
+
+class TranscriptModel:
+    def __init__(self) -> None:
+        self.blocks: list[TranscriptBlock] = []
+
+    def clear(self) -> None:
+        self.blocks = []
+
+    def last_block(self) -> TranscriptBlock | None:
+        return self.blocks[-1] if self.blocks else None
+
+    def add_block(self, kind: BlockKind, text: str = "") -> TranscriptBlock:
+        block = TranscriptBlock(kind=kind, text=text)
+        self.blocks.append(block)
+        return block
+
+    def find_last_command_block(self) -> TranscriptBlock | None:
+        for block in reversed(self.blocks):
+            if block.kind == BlockKind.COMMAND:
+                return block
+        return None
+
+
 class TuiEntryKind(StrEnum):
     SYSTEM = "system"
     COMMAND = "command"
