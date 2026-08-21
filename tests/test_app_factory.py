@@ -4,14 +4,15 @@ import threading
 
 import pytest
 
-from lanscoder.app.runtime import create_agent_loop
+from lanscoder.agent.background import BackgroundJob, BackgroundJobManager
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.session import AgentSession
 from lanscoder.app.factory import create_lanscoder_app
 from lanscoder.app.model_state import ModelStateStore
 from lanscoder.app.router import CompositeCommandHandler
-from lanscoder.app.runtime import AgentChatRunner
+from lanscoder.app.runtime import AgentChatRunner, CurrentSessionState, create_agent_loop
 from lanscoder.config.settings import AppConfig
+from lanscoder.utils.cancellation import CancellationToken
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.llm_compact import LlmCompactService
 from lanscoder.providers.base import ChatProvider
@@ -573,3 +574,90 @@ def test_create_lanscoder_app_persists_permission_grants(tmp_path: Path) -> None
     assert result.ok is True
     assert second_session.pending_permission_execution is None
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "again"
+
+
+def test_loop_flush_background_notifications_persists_pending(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="f1")
+    manager = BackgroundJobManager()
+    job = BackgroundJob(id="bg_f", tool_name="delegate", session_id="f1", status="completed", label="researcher", error=None)
+    manager._completed.append(job)
+    try:
+        loop = create_agent_loop(session=session, provider=FakeProvider([]), background_manager=manager)
+        loop.flush_background_notifications()
+        view = session.rebuild_view()
+        notifications = [m for m in view.messages if m.role == "notification"]
+        assert len(notifications) == 1
+        meta = notifications[0].parts[0].metadata
+        assert meta["background_job_id"] == "bg_f"
+        assert "<label>researcher</label>" in notifications[0].parts[0].content
+    finally:
+        manager.shutdown()
+
+
+def test_loop_flush_background_notifications_without_manager_is_noop(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="f2")
+    loop = create_agent_loop(session=session, provider=FakeProvider([]))
+    loop.flush_background_notifications()
+    assert not [m for m in session.rebuild_view().messages if m.role == "notification"]
+
+
+def test_runner_flush_background_notifications_targets_current_session_only(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_runner")
+    other_session = AgentSession.create(store=store, session_id="sess_other")
+    manager = BackgroundJobManager()
+    try:
+        runner = AgentChatRunner(
+            current_session=CurrentSessionState(session),
+            provider=FakeProvider([]),
+            background_manager=manager,
+        )
+        loop = runner._create_loop(CancellationToken())
+        assert loop in runner.loops
+        other_loop = create_agent_loop(session=other_session, provider=FakeProvider([]), background_manager=manager)
+        runner.loops.append(other_loop)
+
+        current_job = BackgroundJob(id="bg_cur", tool_name="delegate", session_id="sess_runner", status="completed", error=None)
+        foreign_job = BackgroundJob(id="bg_other", tool_name="delegate", session_id="sess_other", status="completed", error=None)
+        manager._completed.append(current_job)
+        manager._completed.append(foreign_job)
+
+        runner.flush_background_notifications()
+
+        current_view = session.rebuild_view()
+        current_notifications = [m for m in current_view.messages if m.role == "notification"]
+        assert len(current_notifications) == 1
+        assert current_notifications[0].parts[0].metadata["background_job_id"] == "bg_cur"
+        other_view = other_session.rebuild_view()
+        assert not [m for m in other_view.messages if m.role == "notification"]
+        assert [job.id for job in manager.pending_completions()] == ["bg_other"]
+    finally:
+        manager.shutdown()
+
+
+def test_app_on_unmount_flushes_pending_background_notifications_before_close(tmp_path) -> None:
+    manager = FakeMcpManager()
+    app = create_lanscoder_app(
+        project_root=tmp_path,
+        provider=FakeProvider([]),
+        session_id="sess_flush",
+        tools=[],
+        mcp_manager_factory=lambda configs: manager,
+    )
+    session = app.current_session.session
+    runner = app.chat_runner
+    assert runner.background_manager is not None
+    runner._create_loop(CancellationToken())
+    job = BackgroundJob(id="bg_shutdown", tool_name="delegate", session_id="sess_flush", status="completed", label="shutdown", error=None)
+    runner.background_manager._completed.append(job)
+    try:
+        app.on_unmount()
+
+        assert manager.close_calls == 1
+        notifications = [m for m in session.rebuild_view().messages if m.role == "notification"]
+        assert len(notifications) == 1
+        assert "<label>shutdown</label>" in notifications[0].parts[0].content
+    finally:
+        runner.background_manager.shutdown()

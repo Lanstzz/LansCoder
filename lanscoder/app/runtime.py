@@ -533,6 +533,13 @@ class AgentChatRunner:
                 return info
         return None
 
+    def flush_background_notifications(self) -> None:
+        """把当前会话所有已完成的后台通知落盘(供退出前调用)。"""
+        session = self.current_session.session
+        for loop in self.loops:
+            if getattr(loop, "session", None) is session:
+                loop.flush_background_notifications()
+
     def _waiting_for_input_response(self, pending: UserInputRequest | None) -> ChatResponse:
         """构造等待用户输入时的占位响应。"""
         response = ChatResponse(

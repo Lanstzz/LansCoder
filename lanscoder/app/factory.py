@@ -279,6 +279,11 @@ def create_lanscoder_app(
     )
     help_handler = HelpCommandHandler(command_handler=command_handler)
     command_handler.handlers.insert(0, help_handler)
+
+    def _close_session_and_mcp() -> None:
+        chat_runner.flush_background_notifications()
+        mcp_manager.close()
+
     app = LansCoderApp(
         command_handler=command_handler,
         chat_runner=chat_runner,
@@ -289,7 +294,7 @@ def create_lanscoder_app(
             provider_model=resolved_provider.model,
             project_name=project_path.resolve().name,
         ),
-        on_shutdown=mcp_manager.close,
+        on_shutdown=_close_session_and_mcp,
     )
     recall_handler.busy_check = lambda: app.is_turn_active()
     session_handler.busy_check = lambda: app.is_turn_active()
