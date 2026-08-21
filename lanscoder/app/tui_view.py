@@ -667,6 +667,34 @@ class LansCoderViewMixin:
         self._activity_animation_kind = ""
         self._activity_animation_detail = ""
 
+    def _schedule_activity_idle_revert(self) -> None:
+        """回合结束后保留一次时长指标显示,DELAY 秒后回 idle · ready。
+
+        新回合开始会取消该计时器(_start_turn_metrics),避免旧回合的
+        恢复动作在流式中途把活动区打回 idle。
+        """
+        timer = self._activity_idle_revert_timer
+        if timer is not None:
+            timer.stop()
+        self._activity_idle_revert_timer = None
+        if not getattr(self, "is_running", False):
+            return
+        self._activity_idle_revert_timer = self.set_timer(
+            self.ACTIVITY_IDLE_REVERT_SECONDS,
+            self._revert_activity_to_idle,
+            name="activity-idle-revert",
+        )
+
+    def _cancel_activity_idle_revert(self) -> None:
+        timer = self._activity_idle_revert_timer
+        self._activity_idle_revert_timer = None
+        if timer is not None:
+            timer.stop()
+
+    def _revert_activity_to_idle(self) -> None:
+        self._activity_idle_revert_timer = None
+        self._set_activity("idle · ready")
+
     def _advance_activity_animation(self) -> None:
         if not self._activity_animation_kind:
             return

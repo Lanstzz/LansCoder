@@ -128,6 +128,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
     WORKING_FRAMES = ("[.  ]", "[.. ]", "[...]", "[ ..]", "[  .]")
     ESC_INTERRUPT_WINDOW_SECONDS = 1.0
     ACTIVITY_ANIMATION_INTERVAL_SECONDS = 0.24
+    ACTIVITY_IDLE_REVERT_SECONDS = 2.0
     WELCOME_PARTICLE_INTERVAL_SECONDS = 0.85
     PROVIDER_GLOW_INTERVAL_SECONDS = model_topbar_themes.GLOW_INTERVAL_SECONDS
     COMPACT_WELCOME_MAX_WIDTH = 80
@@ -187,6 +188,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._activity_frame_index = 0
         self._activity_started_at = 0.0
         self._activity_timer: Timer | None = None
+        self._activity_idle_revert_timer: Timer | None = None
         self._turn_started_at = 0.0
         self._turn_tool_count = 0
         self._running_tool_call_ids: set[str] = set()
@@ -1260,6 +1262,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if getattr(self.chat_runner, "last_pending_input", None) is None:
             self._stop_activity_animation()
             self._set_activity("done")
+            self._schedule_activity_idle_revert()
         self._refresh_session_subtitle()
 
     def _show_activity_animation(self, kind: str, detail: str) -> None:
@@ -1275,6 +1278,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._turn_started_at = time.monotonic()
         self._turn_tool_count = 0
         self._running_tool_call_ids = set()
+        self._cancel_activity_idle_revert()
 
     def _turn_elapsed_seconds(self) -> float:
         if not self._turn_started_at:
