@@ -127,3 +127,83 @@ def test_projector_denied_maps_to_denied_status():
     p.tool_event("c1", "write", "started")
     p.tool_event("c1", "write", "denied")
     assert model.blocks[1].children[0].status == "denied"
+
+
+def test_projector_first_text_finalizes_thinking_with_duration():
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    p.start_user("hi")
+    p.append_thinking("reasoning...")
+    child = model.blocks[1].children[0]
+    assert child.finished is False
+    assert child.started_at is not None
+    assert p.append_assistant_text("answer") is True
+    assert child.finished is True
+    assert child.duration_seconds is not None
+    assert p.append_assistant_text(" more") is False
+
+
+def test_projector_tool_event_finalizes_thinking_before_started():
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    p.start_user("hi")
+    p.append_thinking("deciding...")
+    assert p.tool_event("c1", "read", "started", arguments={"path": "a.py"}) is True
+    thinking = model.blocks[1].children[0]
+    tool = model.blocks[1].children[1]
+    assert thinking.finished is True
+    assert thinking.duration_seconds is not None
+    assert tool.key == "c1"
+    assert tool.name == "read"
+    assert tool.arguments == "{'path': 'a.py'}"
+    assert tool.label == "tool read {'path': 'a.py'}"
+
+
+def test_projector_end_turn_finalizes_leftover_thinking():
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    p.start_user("hi")
+    p.append_thinking("never answered")
+    p.end_turn()
+    child = model.blocks[1].children[0]
+    assert child.finished is True
+    assert child.duration_seconds is not None
+
+
+def test_projector_append_thinking_track_duration_false_leaves_no_duration():
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    p.start_user("hi")
+    p.append_thinking("replayed reasoning", track_duration=False)
+    p.append_assistant_text("answer")
+    child = model.blocks[1].children[0]
+    assert child.finished is True
+    assert child.started_at is None
+    assert child.duration_seconds is None
+
+
+def test_projector_replay_thinking_finished_without_duration():
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    replay_messages(p, build_messages())
+    thinking = [c for c in model.blocks[1].children if c.kind == ChildKind.THINKING]
+    assert thinking and thinking[0].finished is True
+    assert thinking[0].duration_seconds is None
+
+
+def test_projector_replay_tool_keeps_full_arguments_and_result():
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    replay_messages(p, build_messages())
+    tool = next(c for c in model.blocks[1].children if c.kind == ChildKind.TOOL)
+    assert tool.name == "read"
+    assert tool.arguments == "{'path': 'auth.py'}"
+    assert tool.body == "ok 200"
+
+
+def test_projector_replay_thinking_sits_before_tool_children():
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    replay_messages(p, build_messages())
+    kinds = [c.kind for c in model.blocks[1].children]
+    assert kinds == [ChildKind.THINKING, ChildKind.TOOL]

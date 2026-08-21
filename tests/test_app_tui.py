@@ -2749,7 +2749,9 @@ def test_lanscoder_app_records_streaming_assistant_text_in_transcript(
     assert assistant_blocks[0].text == "你好"
 
 
-def test_lanscoder_app_shows_reasoning_delta_in_activity_line(monkeypatch) -> None:
+def test_lanscoder_app_activity_line_shows_status_only_not_reasoning_content(
+    monkeypatch,
+) -> None:
     runner = FakeStreamingAsyncChatRunner()
     output = FakeOutput()
     activity = FakeActivity()
@@ -2769,9 +2771,12 @@ def test_lanscoder_app_shows_reasoning_delta_in_activity_line(monkeypatch) -> No
     assert len(thinking_children) == 1
     assert thinking_children[0].body == "planning tools"
     assert output.mounted == []
-    assert activity.updates[0].startswith("thinking [.  ] planning ")
+    # 推理正文只在折叠子行里;活动区只显示 thinking 状态,不展示内容
+    assert activity.updates[0].startswith("thinking [.  ]")
+    assert "planning" not in activity.updates[0]
     assert activity.updates[0].rstrip().endswith("0.0s · 0 tools")
-    assert activity.updates[1].startswith("thinking [.  ] planning tools")
+    assert activity.updates[1].startswith("thinking [.  ]")
+    assert "planning" not in activity.updates[1]
     assert activity.updates[1].rstrip().endswith("0.0s · 0 tools")
 
 
@@ -2858,8 +2863,9 @@ def test_lanscoder_app_topbar_omits_reasoning_status(
 
     app._append_reasoning_text("好的，我来分析。\n先看下目录结构")
 
-    # 下栏 #activity 显示全文（含换行折叠后的 reasoning 文本）
-    assert "好的，我来分析。" in activity.updates[-1]
+    # 下栏 #activity 只显示 thinking 状态,不展示推理正文(正文在折叠子行里)
+    assert "好的，我来分析。" not in activity.updates[-1]
+    assert activity.updates[-1].startswith("thinking ")
     # 顶栏不再承载任何 reasoning/thinking 状态,只显示 brand + metadata
     topbar_plain = Text.from_markup(app._topbar_text(width=120)).plain
     assert "thinking" not in topbar_plain
@@ -3325,7 +3331,9 @@ def test_lanscoder_app_does_not_restart_streaming_status_for_every_token(
     assert app._activity_timer is timer
 
 
-def test_lanscoder_app_hides_task_plan_panel_when_session_has_no_plan(
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_lanscoder_app_hides_task_plan_panel_when_session_has_no_plan(
     monkeypatch,
 ) -> None:
     output = FakeOutput()
@@ -3341,13 +3349,15 @@ def test_lanscoder_app_hides_task_plan_panel_when_session_has_no_plan(
         return output
 
     monkeypatch.setattr(app, "query_one", query_one)
-    app._replay_current_session()
+    await app._replay_current_session()
 
     assert panel.updates == [""]
     assert "hidden" in panel.classes
 
 
-def test_lanscoder_app_replays_linear_task_plan_from_current_session_view(
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_lanscoder_app_replays_linear_task_plan_from_current_session_view(
     monkeypatch,
 ) -> None:
     output = FakeOutput()
@@ -3373,12 +3383,14 @@ def test_lanscoder_app_replays_linear_task_plan_from_current_session_view(
         return output
 
     monkeypatch.setattr(app, "query_one", query_one)
-    app._replay_current_session()
+    await app._replay_current_session()
 
     assert panel.updates[-1] == "Task Plan · linear\n[✓] 恢复代码\n[~] 恢复测试"
 
 
-def test_lanscoder_app_replays_dag_task_plan_from_current_session_view(
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_lanscoder_app_replays_dag_task_plan_from_current_session_view(
     monkeypatch,
 ) -> None:
     output = FakeOutput()
@@ -3405,12 +3417,14 @@ def test_lanscoder_app_replays_dag_task_plan_from_current_session_view(
         return output
 
     monkeypatch.setattr(app, "query_one", query_one)
-    app._replay_current_session()
+    await app._replay_current_session()
 
     assert panel.updates[-1] == ("Task Plan · dag\nLevel 0 · parallel\n  [✓] 调研 A (a)\n  [~] 调研 B (b)\nLevel 1\n  [!] 汇总 (c) · depends on: a, b")
 
 
-def test_lanscoder_app_refreshes_task_plan_immediately_after_successful_plan_tool(
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_lanscoder_app_refreshes_task_plan_immediately_after_successful_plan_tool(
     monkeypatch,
 ) -> None:
     runner = FakeToolEventAsyncChatRunner()
@@ -3493,7 +3507,9 @@ def test_lanscoder_app_skips_same_task_plan_revision_and_updates_existing_panel(
     assert app.task_plan_panel_state.last_rendered_revision == 2
 
 
-def test_lanscoder_app_clear_output_clears_and_hides_rendered_task_plan_panel(
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_lanscoder_app_clear_output_clears_and_hides_rendered_task_plan_panel(
     monkeypatch,
 ) -> None:
     output = FakeOutput()
@@ -3515,7 +3531,7 @@ def test_lanscoder_app_clear_output_clears_and_hides_rendered_task_plan_panel(
         )
     )
 
-    app._clear_output()
+    await app._clear_output()
 
     assert panel.updates[-1] == ""
     assert "hidden" in panel.classes
@@ -3575,17 +3591,17 @@ def test_lanscoder_app_live_tool_events_filter_final_tool_summary(monkeypatch) -
     assert tool_children[0].status == "running"
     assert "Tool call:" not in rendered
     assert "Tool result:" not in rendered
-    # 完成回合与 render_block_into 一致:[正文 markdown, 工具子行] 按模型顺序;
+    # 完成回合与 render_block_into 一致:[工具子行, 正文 markdown] 按模型顺序;
     # 正文复用占位 widget,因此不残留空占位,也不产生重复 markdown。
     assert [type(widget).__name__ for widget in output.mounted] == [
-        "LansCoderMarkdown",
         "ChildRow",
+        "LansCoderMarkdown",
     ]
-    answer_markdown = output.mounted[0]
+    tool_row, answer_markdown = output.mounted
+    assert "tool echo" in str(tool_row.content)
     assert answer_markdown.allow_select is True
     assert answer_markdown.updates[-1] == "LansCoder:\n\ndone"
     assert not answer_markdown.has_class("streaming")
-    assert "[>] tool echo" in str(output.mounted[1].content)
 
 
 def test_lanscoder_app_starts_new_stream_block_after_tool_event(monkeypatch) -> None:
@@ -3609,8 +3625,8 @@ def test_lanscoder_app_starts_new_stream_block_after_tool_event(monkeypatch) -> 
     app._restore_stream_event_handler(previous_stream_handler)
 
     mounted_types = [type(widget).__name__ for widget in output.mounted]
-    assert mounted_types == ["LansCoderMarkdown", "LansCoderMarkdown", "ChildRow"]
-    first_markdown, second_markdown, tool_row = output.mounted
+    assert mounted_types == ["LansCoderMarkdown", "ChildRow", "LansCoderMarkdown"]
+    first_markdown, tool_row, second_markdown = output.mounted
     assert "tool echo" in str(tool_row.content)
     assert first_markdown.allow_select is True
     assert second_markdown.allow_select is False
@@ -4256,11 +4272,11 @@ async def test_child_row_click_toggles_collapsed_tool_child() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_live_turn_mounts_thinking_row_below_markdown() -> None:
-    """Reasoning streamed before any text renders as [markdown, thinking row].
+async def test_live_turn_mounts_thinking_row_above_markdown() -> None:
+    """Reasoning finalized by the first stream text renders [thinking row, markdown].
 
-    The thinking row is deferred to the first stream-text mount so it never
-    appears above the block's text widget, matching render_block_into order.
+    The thinking row mounts on the first stream-text mount and lands above the
+    block's text widget; finalize switches its fold line to "Thought for".
     """
     runner = FakeStreamingAsyncChatRunner()
     app = LansCoderApp(chat_runner=runner)
@@ -4280,22 +4296,28 @@ async def test_live_turn_mounts_thinking_row_below_markdown() -> None:
         )
         assert thinking_child is not None
         assert thinking_child.body == "think step one"
+        assert thinking_child.finished is False
 
         runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="hello"))
         await pilot.pause()
 
         mounted_types = [type(widget).__name__ for widget in output.children]
-        assert mounted_types == ["LansCoderMarkdown", "ChildRow"]
+        assert mounted_types == ["ChildRow", "LansCoderMarkdown"]
         thinking_row = app.query_one("#child-0-t0", ChildRow)
-        assert "Thinking" in str(thinking_row.content)
+        assert thinking_child.finished is True
+        assert thinking_child.duration_seconds is not None
+        assert "Thought for" in str(thinking_row.content)
         assert thinking_row.size.height >= 1
         app._restore_stream_event_handler(previous_stream_handler)
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_live_turn_tool_row_before_text_lands_below_markdown() -> None:
-    """A tool 'started' arriving before any stream text still renders below the text widget."""
+async def test_live_turn_tool_row_before_text_lands_above_markdown() -> None:
+    """A tool 'started' arriving before any stream text renders above the text widget.
+
+    Expanded row shows the full tool call and result.
+    """
     runner = FakeToolEventAsyncChatRunner()
     app = LansCoderApp(chat_runner=runner)
 
@@ -4313,7 +4335,7 @@ async def test_live_turn_tool_row_before_text_lands_below_markdown() -> None:
 
         output = app.query_one("#output")
         mounted_types = [type(widget).__name__ for widget in output.children]
-        assert mounted_types == ["LansCoderMarkdown", "ChildRow"]
+        assert mounted_types == ["ChildRow", "LansCoderMarkdown"]
         tool_row = app.query_one("#child-0-call_echo", ChildRow)
         assert "[>] tool echo" in str(tool_row.content)
         assert tool_row.size.height >= 1
@@ -4333,29 +4355,207 @@ async def test_live_turn_tool_row_before_text_lands_below_markdown() -> None:
 
         await pilot.click(tool_row)
         await pilot.pause()
-        assert "hello" in str(tool_row.content)
+        assert "Tool call: echo" in str(tool_row.content)
+        assert "Tool result: hello" in str(tool_row.content)
         await pilot.click(tool_row)
         await pilot.pause()
 
         app._append_stream_text("done")
         await pilot.pause()
 
-        markdown = output.children[0]
+        markdown = output.children[1]
         assert app._stream_text_widget is markdown
         assert app._stream_text_buffer == "done"
         mounted_types = [type(widget).__name__ for widget in output.children]
-        assert mounted_types == ["LansCoderMarkdown", "ChildRow"]
+        assert mounted_types == ["ChildRow", "LansCoderMarkdown"]
         app._restore_tool_event_handler(previous_tool_handler)
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_non_streaming_turn_completion_mounts_markdown_then_child_rows() -> None:
-    """A completed non-streaming turn with tools renders [markdown, child rows] in model order.
+async def test_live_turn_interleaves_tool_below_preceding_text() -> None:
+    """thinking → text → tool → 续文 在输出区保持事件时间序。
+
+    工具子行挂在它触发前的正文段下方,不被统一提到所有正文之上:回归
+    "好的,我开一个子agent" 之后触发的 tool 应显示在这段文字下面。
+    """
+    runner = FakeStreamingAsyncChatRunner()
+    runner.tool_event_handler = lambda event: None
+    app = LansCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        app._dismiss_welcome()
+        previous_stream_handler = app._install_stream_event_handler()
+        previous_tool_handler = app._install_tool_event_handler()
+
+        runner.stream_event_handler(ChatStreamEvent(kind="reasoning_delta", text="decide"))
+        runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="好的，我开一个子agent"))
+        await pilot.pause()
+        runner.tool_event_handler(
+            ToolExecutionEvent(
+                kind="started",
+                tool_call=ToolCall(id="call_spawn", name="read", arguments={}),
+            )
+        )
+        runner.tool_event_handler(
+            ToolExecutionEvent(
+                kind="finished",
+                tool_call=ToolCall(id="call_spawn", name="read", arguments={}),
+                result=ToolResult(name="read", ok=True, content="spawned ok"),
+            )
+        )
+        await pilot.pause()
+        runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="最后进行回复"))
+        await pilot.pause()
+
+        output = app.query_one("#output")
+        mounted_types = [type(widget).__name__ for widget in output.children]
+        assert mounted_types == ["ChildRow", "LansCoderMarkdown", "ChildRow", "LansCoderMarkdown"]
+        thinking_row, first_text, tool_row, second_text = output.children
+        assert app.transcript.blocks[0].children[0].kind == ChildKind.THINKING
+        assert "Thought for" in str(thinking_row.content)
+        assert isinstance(tool_row, ChildRow)
+        assert "[>] tool read" in str(tool_row.content)
+        assert app._stream_text_widget is second_text
+        app._restore_stream_event_handler(previous_stream_handler)
+        app._restore_tool_event_handler(previous_tool_handler)
+
+
+def _recount_messages(*, turn: int) -> list:
+    from types import SimpleNamespace
+
+    from tests.test_context_compaction_pipeline import _message, _tool_call, _tool_result
+
+    return [
+        _message("u1", role="user", kind="text", content="你好", created_turn=turn),
+        SimpleNamespace(
+            role="assistant",
+            id="a1",
+            parts=[SimpleNamespace(kind="text", content="我来看看", metadata={})],
+            metadata={"diagnostics": {"reasoning": "分析中"}},
+        ),
+        _tool_call("c1", "read", {"path": "a.py"}),
+        _tool_result("c1", "read", content="ok 200"),
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_replay_multi_turn_session_mounts_unique_child_ids() -> None:
+    """/recall 重放一个含 thinking + tool 的会话,子行 id 必须唯一。
+
+    回归:重放后迟到的挂载(旧回合回调、重复 render)不得撞出 DuplicateIds。
+    """
+    view = SessionView(session_id="sess_recall", messages=_recount_messages(turn=1))
+    session = FakeSession()
+    session.rebuild_view = lambda: view
+    app = LansCoderApp(current_session=session)
+
+    async with app.run_test() as pilot:
+        await app._replay_current_session()
+        await pilot.pause()
+        ids = [child.id for child in app.query_one("#output").children if child.id]
+        assert len(ids) == len(set(ids)), ids
+        assert any(child.id == "child-1-t0" for child in app.query_one("#output").children)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_double_render_block_into_does_not_duplicate_child_rows() -> None:
+    """同一块重复渲染(如双触发重放)对子行是幂等刷新,不重复插入。"""
+    view = SessionView(session_id="sess_recall", messages=_recount_messages(turn=1))
+    session = FakeSession()
+    session.rebuild_view = lambda: view
+    app = LansCoderApp(current_session=session)
+
+    async with app.run_test() as pilot:
+        await app._replay_current_session()
+        await pilot.pause()
+        output = app.query_one("#output")
+        block = app.transcript.blocks[1]
+        app.render_block_into(block, 1)
+        await pilot.pause()
+        ids = [child.id for child in output.children if child.id]
+        assert len(ids) == len(set(ids)), ids
+        assert ids.count("child-1-t0") == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_picker_replace_command_block_preserves_child_rows() -> None:
+    """picker 上下移动只就地更新命令块,不重建 transcript 子行。
+
+    回归:整树 remove+remount 撞上 Textual 异步 prune 会让 thinking/tool
+    子行在 picker 打开与按键时消失;就地更新命令块则 transcript 原样。
+    """
+    view = SessionView(session_id="sess_recall", messages=_recount_messages(turn=1))
+    session = FakeSession()
+    session.rebuild_view = lambda: view
+    app = LansCoderApp(current_session=session)
+
+    async with app.run_test() as pilot:
+        app._dismiss_welcome()
+        await app._replay_current_session()
+        await pilot.pause()
+        output = app.query_one("#output")
+        assert "child-1-t0" in [w.id for w in output.children if w.id]
+        assert "child-1-c1" in [w.id for w in output.children if w.id]
+
+        # /recall bare:先落一条 COMMAND 行,再被 picker 输出就地替换多次(模拟上下选择)
+        app._ui_line(BlockKind.COMMAND, "/recall")
+        await pilot.pause()
+        app._replace_last_command_output("picker: 1. turn one")
+        await pilot.pause()
+        app._replace_last_command_output("picker: 2. turn two")
+        await pilot.pause()
+
+        ids = [w.id for w in app.query_one("#output").children if w.id]
+        assert ids.count("child-1-t0") == 1, ids
+        assert "child-1-c1" in ids
+        assert app.transcript.find_last_command_block().text == "picker: 2. turn two"
+        assert ids.count(ids[ids.index("child-1-t0")]) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_stale_tool_event_after_recall_epoch_is_dropped() -> None:
+    """清理/重放后到达的旧回合工具事件按 epoch 丢弃,不污染新 transcript。"""
+    view = SessionView(session_id="sess_recall", messages=_recount_messages(turn=1))
+    session = FakeSession()
+    session.rebuild_view = lambda: view
+    runner = FakeToolEventAsyncChatRunner()
+    app = LansCoderApp(chat_runner=runner, current_session=session)
+
+    async with app.run_test() as pilot:
+        app._dismiss_welcome()
+        previous_tool_handler = app._install_tool_event_handler()
+        runner.tool_event_handler(
+            ToolExecutionEvent(kind="started", tool_call=ToolCall(id="call_x", name="echo", arguments={}))
+        )
+        await pilot.pause()
+        assert any(c.key == "call_x" for b in app.transcript.blocks for c in b.children)
+
+        await app._replay_current_session()
+        await pilot.pause()
+        tools_after_replay = [c.key for b in app.transcript.blocks for c in b.children if c.kind == ChildKind.TOOL]
+
+        runner.tool_event_handler(
+            ToolExecutionEvent(kind="started", tool_call=ToolCall(id="call_stale", name="echo", arguments={}))
+        )
+        await pilot.pause()
+        tools_final = [c.key for b in app.transcript.blocks for c in b.children if c.kind == ChildKind.TOOL]
+        assert "call_stale" not in tools_final
+        assert tools_final == tools_after_replay
+        app._restore_tool_event_handler(previous_tool_handler)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_non_streaming_turn_completion_mounts_child_rows_then_markdown() -> None:
+    """A tool arriving before any text renders [child rows, markdown] in arrival order.
 
     The completion markdown must reuse the block's markdown widget (the empty
-    placeholder mounted for live tool rows), so the answer lands above the tool
-    children like render_block_into replay and no empty placeholder survives.
+    placeholder mounted for live tool rows), so no empty placeholder survives.
     """
     runner = FakeToolEventAsyncChatRunner()
     app = LansCoderApp(chat_runner=runner)
@@ -4370,11 +4570,11 @@ async def test_non_streaming_turn_completion_mounts_markdown_then_child_rows() -
         children = list(output.children)
         assert [type(widget).__name__ for widget in children] == [
             "Static",
-            "LansCoderMarkdown",
             "ChildRow",
+            "LansCoderMarkdown",
         ]
 
-        markdown, tool_row = children[1:]
+        tool_row, markdown = children[1:]
         assert isinstance(markdown, LansCoderMarkdown)
         # block's markdown carries the answer; no leftover empty placeholder
         assert markdown.source == "LansCoder:\n\ndone"
@@ -4386,7 +4586,7 @@ async def test_non_streaming_turn_completion_mounts_markdown_then_child_rows() -
         assert tool_row.block_index == block_index
         assert tool_row.child_key == tool_child.key
         assert tool_row is app.query_one(f"#child-{block_index}-{tool_child.key}", ChildRow)
-        # child row is drawn below the markdown, in model order
+        # child row is drawn above the markdown, in model order
         assert "[>] tool echo" in str(tool_row.content)
         assert "✓" in str(tool_row.content)
         assert tool_row.size.height >= 1
@@ -4452,7 +4652,7 @@ async def test_resume_after_permission_pending_rearms_permission_zone() -> None:
     app = LansCoderApp(chat_runner=runner, current_session=FakeSession())
 
     async with app.run_test() as pilot:
-        app._replay_current_session()
+        await app._replay_current_session()
         await pilot.pause()
 
         zone = app.query_one("#permission-zone")

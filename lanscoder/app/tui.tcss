@@ -164,8 +164,8 @@ ScrollBarCorner {
 }
 
 .user-message {
-    color: #cfd1d6;
-    background: #0f1014;
+    color: #1c1d21;
+    background: #d8dae0;
     border-left: solid #ffffff;
 }
 
@@ -218,12 +218,12 @@ ScrollBarCorner {
     max-height: 40;
 }
 
-.child-thinking {
-    color: #2b5fd9;
+.child-row:hover {
+    color: #ffffff;
 }
 
+/* thinking 与 tool 默认同为深灰(.child-row),hover 亮白;tool 保留左侧主题框 */
 .child-tool {
-    color: #b9c2cc;
     border-left: solid #4f8cff;
 }
 

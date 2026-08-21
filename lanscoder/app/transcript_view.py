@@ -35,15 +35,34 @@ def block_classes(block: TranscriptBlock) -> str:
     return _BLOCK_CLASSES.get(block.kind, "message system-message")
 
 
+def format_duration(seconds: float | int | None) -> str:
+    """thinking 用时的紧凑展示:1s / 1min 30s / 1h30min。"""
+    if seconds is None:
+        return ""
+    total = max(0, int(float(seconds)))
+    if total < 60:
+        return f"{total}s"
+    if total < 3600:
+        minutes, remainder = divmod(total, 60)
+        return f"{minutes}min" if not remainder else f"{minutes}min {remainder}s"
+    hours, remainder = divmod(total, 3600)
+    minutes = remainder // 60
+    return f"{hours}h" if not minutes else f"{hours}h{minutes}min"
+
+
 _TOOL_STATUS_SUFFIX = {"success": " ✓", "error": " ✗", "denied": " ✕", "running": " · running"}
 
 
 def child_collapsed_text(child: ChildItem) -> str:
     if child.kind == ChildKind.THINKING:
-        base = "◎ Thinking…"
-        if child.body:
-            return f"{base} {single_line_activity(child.body)}"
-        return base
+        if not child.finished:
+            base = "◎ Thinking…"
+            if child.body:
+                return f"{base} {single_line_activity(child.body)}"
+            return base
+        duration = format_duration(child.duration_seconds)
+        label = f"Thought for {duration}" if duration else "Thought"
+        return label
     suffix = _TOOL_STATUS_SUFFIX.get(child.status or "", "")
     return f"[>] {child.label}{suffix}"
 
@@ -51,9 +70,14 @@ def child_collapsed_text(child: ChildItem) -> str:
 def child_expanded_text(child: ChildItem) -> str:
     if child.kind == ChildKind.THINKING:
         return child.body or ""
-    head = f"tool: {child.label}"
+    if child.name:
+        head = f"Tool call: {child.name}"
+        if child.arguments:
+            head += f" {child.arguments}"
+    else:
+        head = f"tool: {child.label}"
     body = child.body
-    return f"{head}\n{body}" if body else head
+    return f"{head}\nTool result: {body}" if body else head
 
 
 def child_row_classes(child: ChildItem) -> str:

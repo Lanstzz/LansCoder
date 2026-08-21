@@ -8,8 +8,6 @@ from textual.css.query import NoMatches
 
 from lanscoder.app import model_topbar_themes, theme
 from lanscoder.app.activity_view import (
-    compact_tool_arguments,
-    compact_tool_content,
     post_tool_reasoning_text,
     task_plan_panel_text,
     tool_activity_line_text,
@@ -139,7 +137,6 @@ class LansCoderViewMixin:
             self._stream_event_dispatch_scheduled = False
             self._pending_stream_text.clear()
             self._pending_reasoning_text.clear()
-        self._reasoning_buffer = ""
         self._reasoning_is_fallback = False
         self._working_text = ""
         self._working_frame_index = 0
@@ -174,6 +171,7 @@ class LansCoderViewMixin:
             return None
         previous_handler = getattr(self.chat_runner, "tool_event_handler", None)
         self._live_tool_events_seen = False
+        epoch = self._ui_epoch
 
         def handle_event(event) -> None:
             if previous_handler is not None:
@@ -194,7 +192,7 @@ class LansCoderViewMixin:
                 return
             self._live_tool_events_seen = True
             self._call_ui_thread(self._close_stream_segment_for_tool)
-            self._call_ui_thread(self._record_tool_activity, event)
+            self._call_ui_thread(self._record_tool_activity, event, epoch)
             if tool_name in {"task_create", "task_update", "task_revise"} and event_kind == "finished":
                 self._call_ui_thread(self._refresh_task_plan_panel_from_current_session)
 
@@ -288,8 +286,12 @@ class LansCoderViewMixin:
         output = self.query_one("#output")
         classes = block_classes(block)
         rendered_text = _entry_renderable_block(block, rendered)
+        kwargs = {}
+        if block.kind == BlockKind.COMMAND:
+            # 稳定 id:picker 就地更新命令块时按块定位,不整树重建
+            kwargs["id"] = f"command-block-{id(block)}"
         was_pinned = self._is_output_pinned_to_bottom(output)
-        output.mount(_plain_static(rendered_text, classes=classes))
+        output.mount(_plain_static(rendered_text, classes=classes, **kwargs))
         if was_pinned:
             self._scroll_output_end(output)
 
@@ -305,28 +307,48 @@ class LansCoderViewMixin:
         output = self.query_one("#output")
         was_pinned = self._is_output_pinned_to_bottom(output)
         if block.kind == BlockKind.ASSISTANT:
+            # 块级顺序:[thinking 子行, 正文 markdown, tool 子行]
+            # 模型无法表达 text-tool-text 交错,重建时按此稳定约定;live 流走到达顺序。
+            thinking = [c for c in block.children if c.kind == ChildKind.THINKING]
+            tools = [c for c in block.children if c.kind == ChildKind.TOOL]
+            for child in thinking:
+                self._mount_child_row(output, block_index, child)
             markdown = LansCoderMarkdown(entry_markdown_text_block(block), classes="message assistant-message")
             output.mount(markdown)
-            for child in block.children:
+            for child in tools:
                 self._mount_child_row(output, block_index, child)
             if was_pinned:
                 self._scroll_output_end(output)
             return
-        output.mount(_plain_static(block.text, classes=block_classes(block)))
+        kwargs = {}
+        if block.kind == BlockKind.COMMAND:
+            kwargs["id"] = f"command-block-{id(block)}"
+        output.mount(_plain_static(block.text, classes=block_classes(block), **kwargs))
         if was_pinned:
             self._scroll_output_end(output)
+
+    def _mounted_child_row(self, output, block_index: int, key: str) -> ChildRow | None:
+        """当前容器内的子行(直接扫 children,不走 Textual 查询缓存)。
+
+        remove-then-remount 同一帧内,query_one 的 id 缓存会返回已移除的僵尸行,
+        用它做去重会让新行永远挂不上去;扫容器 children 反映实时的树。
+        """
+        row_id = f"child-{block_index}-{key}"
+        target = next((w for w in getattr(output, "children", ()) if getattr(w, "id", None) == row_id), None)
+        return target if isinstance(target, ChildRow) else None
 
     def _mount_block_children(self, output, block_index: int, block: TranscriptBlock) -> None:
         """Mount every not-yet-mounted child row of a block, in model order."""
         for child in block.children:
-            if not isinstance(self._query_mounted(f"#child-{block_index}-{child.key}"), ChildRow):
+            if self._mounted_child_row(output, block_index, child.key) is None:
                 self._mount_child_row(output, block_index, child)
 
     def _ensure_stream_block_rows(self, block_index: int, block: TranscriptBlock) -> None:
-        """Mount the live assistant block's markdown and child rows in replay order.
+        """挂载 live assistant 块:子行与文本框都按到达顺序追加。
 
-        Creates the streaming markdown widget first so a child row arriving before
-        any stream text still lands below the text widget, matching render_block_into.
+        首个事件先挂全部子行再挂流式 markdown(子行在文本上方);文本框已存在
+        时新子行直接追加在它之后——thinking 先于正文、工具后于其前的正文,
+        保持事件时间序。
         """
         if block.kind != BlockKind.ASSISTANT:
             return
@@ -334,14 +356,21 @@ class LansCoderViewMixin:
         if output is None or not hasattr(output, "mount"):
             return
         if self._stream_text_widget is None:
+            self._mount_block_children(output, block_index, block)
             self._stream_text_widget = LansCoderMarkdown(
                 classes="message assistant-message streaming",
                 selectable=False,
             )
             output.mount(self._stream_text_widget)
-        self._mount_block_children(output, block_index, block)
+        else:
+            self._mount_block_children(output, block_index, block)
 
     def _mount_child_row(self, output, block_index: int, child: ChildItem) -> None:
+        existing = self._mounted_child_row(output, block_index, child.key)
+        if existing is not None:
+            # 防御性去重:迟到/重复的挂载请求刷新既有的行而不是再插一次
+            self.refresh_block_row(existing)
+            return
         if child.expanded:
             content = child_expanded_text(child)
         else:
@@ -366,18 +395,28 @@ class LansCoderViewMixin:
         output = self._query_mounted("#output")
         if output is None:
             return
-        row = self._query_mounted(f"#child-{block_index}-{child.key}")
-        if isinstance(row, ChildRow):
+        row = self._mounted_child_row(output, block_index, child.key)
+        if row is not None:
             self.refresh_block_row(row)
             return
         block = self.transcript.blocks[block_index] if 0 <= block_index < len(self.transcript.blocks) else None
         if block is not None and block.kind == BlockKind.ASSISTANT:
             self._ensure_stream_block_rows(block_index, block)
-            row = self._query_mounted(f"#child-{block_index}-{child.key}")
-            if isinstance(row, ChildRow):
+            row = self._mounted_child_row(output, block_index, child.key)
+            if row is not None:
                 self.refresh_block_row(row)
                 return
         self._mount_child_row(output, block_index, child)
+
+    def _refresh_thinking_row(self, block_index: int) -> None:
+        """结算后刷新当前块最近的 THINKING 子行,使折叠文本切到 Thought for。"""
+        block = self.transcript.blocks[block_index] if 0 <= block_index < len(self.transcript.blocks) else None
+        if block is None:
+            return
+        for child in reversed(block.children):
+            if child.kind == ChildKind.THINKING:
+                self._refresh_child_row(block_index, child)
+                return
 
     def _toggle_child_expanded(self, block_index: int, key: str) -> None:
         try:
@@ -388,8 +427,11 @@ class LansCoderViewMixin:
         if child is None:
             return
         child.expanded = not child.expanded
-        row = self._query_mounted(f"#child-{block_index}-{key}")
-        if isinstance(row, ChildRow):
+        output = self._query_mounted("#output")
+        if output is None:
+            return
+        row = self._mounted_child_row(output, block_index, key)
+        if row is not None:
             self.refresh_block_row(row)
 
     def refresh_block_row(self, row: ChildRow) -> None:
@@ -512,7 +554,10 @@ class LansCoderViewMixin:
         self._provider_glow_frame = (self._provider_glow_frame + 1) % len(palette)
         self._refresh_topbar()
 
-    def _record_tool_activity(self, event) -> None:
+    def _record_tool_activity(self, event, epoch: int | None = None) -> None:
+        if epoch is not None and epoch != self._ui_epoch:
+            # 清理/重放后到账的旧回合工具事件:丢弃,避免污染新 transcript
+            return
         tool_call = getattr(event, "tool_call", None)
         name = str(getattr(tool_call, "name", "") or "tool")
         status = tool_event_status(event) or "unknown"
@@ -530,14 +575,16 @@ class LansCoderViewMixin:
         else:
             status_kind = "denied"
         result = getattr(event, "result", None)
-        self.projector.tool_event(
+        finalized_thinking = self.projector.tool_event(
             tool_call_id,
             name,
             status_kind,
-            arguments=compact_tool_arguments(getattr(tool_call, "arguments", None)),
+            arguments=getattr(tool_call, "arguments", None),
             ok=bool(getattr(result, "ok", False)) if status_kind == "finished" else None,
-            result_body=compact_tool_content(str(getattr(result, "content", "") or "")) if status_kind == "finished" else "",
+            result_body=str(getattr(result, "content", "") or "") if status_kind == "finished" else "",
         )
+        if finalized_thinking:
+            self._refresh_thinking_row(len(self.transcript.blocks) - 1)
         block_index = len(self.transcript.blocks) - 1
         block = self.transcript.last_block()
         if block is not None and block.kind == BlockKind.ASSISTANT:
@@ -641,7 +688,6 @@ class LansCoderViewMixin:
 
     def _show_working_indicator(self, text: str) -> None:
         self._stop_activity_animation()
-        self._reasoning_buffer = text
         self._reasoning_is_fallback = True
         self._working_text = text
         self._working_frame_index = 0
@@ -656,10 +702,8 @@ class LansCoderViewMixin:
 
     def _append_reasoning_text(self, text: str) -> None:
         if self._reasoning_is_fallback:
-            self._reasoning_buffer = ""
             self._reasoning_is_fallback = False
             self._working_text = ""
-        self._reasoning_buffer += text
         self.projector.append_thinking(text)
         if self._stream_text_widget is not None:
             block_index = len(self.transcript.blocks) - 1
@@ -667,7 +711,8 @@ class LansCoderViewMixin:
             if block is not None and block.kind == BlockKind.ASSISTANT and block.children:
                 self._ensure_stream_block_rows(block_index, block)
                 self._refresh_child_row(block_index, block.children[-1])
-        self._set_activity(self._working_indicator_body(self._reasoning_buffer))
+        # 活动区只显示 thinking 状态,不展示推理正文(正文在折叠子行里看)
+        self._set_activity(self._working_indicator_body())
         self._start_working_animation()
 
     def _working_head(self) -> str:
@@ -690,8 +735,7 @@ class LansCoderViewMixin:
 
     def _advance_working_animation(self) -> None:
         self._working_frame_index += 1
-        text = self._working_text or self._reasoning_buffer
-        self._set_activity(self._working_indicator_body(text))
+        self._set_activity(self._working_indicator_body())
 
     def _show_static_activity(self, text: str) -> None:
         self._show_activity_animation("static", text)
@@ -802,7 +846,9 @@ class LansCoderViewMixin:
         if self._stream_segment_closed_for_tool:
             self._start_new_stream_segment()
         self.projector.start_assistant()
-        self.projector.append_assistant_text(text)
+        finalized_thinking = self.projector.append_assistant_text(text)
+        if finalized_thinking:
+            self._refresh_thinking_row(len(self.transcript.blocks) - 1)
         self._stream_text_buffer += text
         output = self.query_one("#output")
         if hasattr(output, "mount"):
