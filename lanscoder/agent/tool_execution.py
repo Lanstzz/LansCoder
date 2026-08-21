@@ -28,7 +28,7 @@ from lanscoder.planning.reducer import TaskPlanCommandError, TaskPlanRevisionCon
 from lanscoder.planning.projection import ready_task_ids
 from lanscoder.planning.service import TaskPlanService
 from lanscoder.agent.permission_results import UserInputRequest, user_input_request_from_tool_result
-from lanscoder.permissions.types import PermissionDecisionKind, PermissionMode, PermissionRequest
+from lanscoder.permissions.types import PermissionMode, PermissionRequest
 from lanscoder.providers.types import ToolCall
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from lanscoder.tools.types import ToolResult, make_error_result
@@ -113,6 +113,7 @@ class ToolExecutor:
         self._background_manager = background_manager
         self._background_tool_names = background_tool_names
         self._background_request: dict[str, tuple[str | None, str | None]] = {}
+        self._prepare_cache: dict[str, PreparedPermission] = {}
 
     def _check_cancelled(self) -> None:
         if self.cancellation_token is not None:
@@ -150,6 +151,7 @@ class ToolExecutor:
         """主入口:遍历工具调用,走校验/权限/后台/并行分支,遇等待输入时提前返回。"""
 
         state = ToolExecutionState()
+        self._prepare_cache.clear()  # 一次准备周期结束即失效,决策不跨回合复用
         tool_calls, self._background_request = self._normalize_background_controls(tool_calls)
         index = 0
         while index < len(tool_calls):
@@ -170,7 +172,7 @@ class ToolExecutor:
                 self._record_result(tool_call, result)
                 index += 1
                 continue
-            permission = self._prepare_permission(tool_call, tool_calls[index + 1 :])
+            permission = self._prepare_for_tool_call(tool_call, tool_calls[index + 1 :])
             if permission.result is not None:
                 self._emit_event(
                     "denied",
@@ -413,6 +415,20 @@ class ToolExecutor:
 
         return self._permission_coordinator.prepare(tool_call, deferred_tool_calls)
 
+    def _prepare_for_tool_call(
+        self,
+        tool_call: ToolCall,
+        deferred_tool_calls: list[ToolCall],
+    ) -> PreparedPermission:
+        """按 tool_call.id 返回已缓存的准备决策;缺失则求值一次并缓存。"""
+
+        cached = self._prepare_cache.get(tool_call.id)
+        if cached is not None:
+            return cached
+        prepared = self._prepare_permission(tool_call, deferred_tool_calls)
+        self._prepare_cache[tool_call.id] = prepared
+        return prepared
+
     def _record_result(
         self,
         tool_call: ToolCall,
@@ -440,22 +456,39 @@ class ToolExecutor:
         return None
 
     def parallel_readonly_batch_end(self, tool_calls: list[ToolCall], start: int) -> int:
-        """找出从 start 起连续可并行执行的工具调用边界。"""
+        """找出从 start 起连续可并行执行的工具调用边界;扫描成员缺失决策时先求值一次并缓存。"""
         end = start
-        while end < len(tool_calls) and self.can_execute_in_parallel(tool_calls[end]):
+        while end < len(tool_calls):
+            if self._parallel_gate_fails(tool_calls[end]):
+                break
+            prepared = self._prepare_for_tool_call(tool_calls[end], tool_calls[end + 1 :])
+            if not self._parallel_decision(prepared):
+                break
             end += 1
         return end
 
     def can_execute_in_parallel(self, tool_call: ToolCall) -> bool:
-        """判断单个工具调用能否并行执行。"""
+        """判断单个工具调用能否并行执行;决策读自已缓存的一次准备结果,不再二次求值。"""
+        if self._parallel_gate_fails(tool_call):
+            return False
+        return self._parallel_decision(self._prepare_cache.get(tool_call.id))
+
+    def _parallel_gate_fails(self, tool_call: ToolCall) -> bool:
+        """非决策闸门:bypass 预写审查、后台请求、工具名集合。"""
         if self._permission_coordinator.requires_bypass_review(tool_call):
-            return False
+            return True
         if tool_call.id in self._background_request:
-            return False
+            return True
         if tool_call.name not in self.parallel_tool_names_for_current_mode():
-            return False
-        preflight = self._permission_coordinator.preflight(tool_call)
-        return preflight is None or preflight.decision.kind == PermissionDecisionKind.ALLOW
+            return True
+        return False
+
+    @staticmethod
+    def _parallel_decision(prepared: PreparedPermission | None) -> bool:
+        """无门控(未求值/无确认对象)或 ALLOW 决策才并入并行批。"""
+        if prepared is None:
+            return True
+        return prepared.result is None and prepared.pending_input is None
 
     def parallel_tool_names_for_current_mode(self) -> frozenset[str]:
         """按当前权限模式返回可并行执行的工具集合。"""
