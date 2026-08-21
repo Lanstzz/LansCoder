@@ -1,8 +1,11 @@
-from lanscoder.agent.permission_results import user_input_request_from_tool_result
+from lanscoder.agent.permission_results import (
+    make_permission_confirmation_result,
+    make_permission_denied_result,
+    user_input_request_from_tool_result,
+)
 from lanscoder.permissions.user_input import UserInputOption, UserInputRequest
 from lanscoder.permissions.types import PermissionAction, PermissionDecision, PermissionDecisionKind, PermissionRequest
 from lanscoder.providers.types import ToolCall
-from lanscoder.tools.permission_results import make_permission_confirmation_result, make_permission_denied_result
 
 
 def test_permission_confirmation_result_round_trips_to_user_input_request() -> None:
