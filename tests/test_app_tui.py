@@ -4014,7 +4014,7 @@ async def test_slash_suggest_appears_above_input_without_moving_it() -> None:
                 ("/new", "新建会话"),
                 ("/compact", "压缩上下文"),
                 ("/sessions", "会话列表"),
-                ("/clear", "清空输出"),
+                ("/fork", "派生会话"),
             ]
 
     app = LansCoderApp(command_handler=_ManyCommands(), config=LansCoderTuiConfig(title="TestCoder"))
@@ -4144,3 +4144,45 @@ async def test_subagent_panel_rows_rebuild_in_order_above_footer_and_hint() -> N
             "subagent-footer",
             "subagent-hint",
         ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_stream_finalization_releases_widget_reference_after_completion() -> None:
+    app = LansCoderApp()
+
+    async with app.run_test():
+        app._append_stream_text("final answer")
+        markdown = app.query_one("LansCoderMarkdown.streaming", LansCoderMarkdown)
+        assert markdown not in app._stream_finalizations
+        app._close_stream_segment_for_tool()
+        await app.wait_for_stream_finalization(markdown)
+        # finalize 完成后映射不再持有该 widget,widget 可随 DOM 移除被回收
+        assert markdown not in app._stream_finalizations
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_stream_finalization_repeated_close_does_not_render_twice_under_loop(
+    monkeypatch,
+) -> None:
+    app = LansCoderApp()
+
+    async with app.run_test():
+        app._append_stream_text("final answer")
+        markdown = app.query_one("LansCoderMarkdown.streaming", LansCoderMarkdown)
+        calls = []
+        original_update = markdown.update
+
+        def count_update(source: object) -> object:
+            calls.append(source)
+            return original_update(source)
+
+        monkeypatch.setattr(markdown, "update", count_update)
+        app._close_stream_segment_for_tool()
+        await app.wait_for_stream_finalization(markdown)
+        app._close_stream_segment_for_tool()
+        await app.wait_for_stream_finalization(markdown)
+
+        # 挂载初始渲染可能产生空 update,但不能出现第二次 finalize 渲染
+        assert calls.count("LansCoder:\n\nfinal answer") == 1

@@ -707,8 +707,10 @@ class LansCoderViewMixin:
         widget = self._stream_text_widget
         if widget is None:
             return
-        if widget in self._stream_finalizations or widget in self._finalized_stream_widgets:
+        # 防重入标记挂在 widget 实例上,集合不再长期持有已 finalize 的 widget
+        if getattr(widget, "_stream_finalized", False):
             return
+        widget._stream_finalized = True
         timer = self._stream_flush_timer
         if timer is not None:
             timer.stop()
@@ -725,7 +727,6 @@ class LansCoderViewMixin:
             update_result = widget.update(final_markdown)
             _observe_markdown_update(update_result)
             widget.set_selectable(True)
-            self._finalized_stream_widgets.add(widget)
             if was_pinned:
                 self._scroll_output_end(output)
             return
@@ -748,6 +749,10 @@ class LansCoderViewMixin:
             else:
                 if not completion.done():
                     completion.set_result(None)
+            # 完成后释放映射中的 widget/future 引用;wait_for_stream_finalization
+            # 此时可能已持有 completion 对象,仍可正常 await
+            if self._stream_finalizations.get(widget) is completion:
+                del self._stream_finalizations[widget]
 
         self.run_worker(
             finalize(),
