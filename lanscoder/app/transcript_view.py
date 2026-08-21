@@ -22,7 +22,8 @@ def background_notification_ui_text(*, label: str | None, tool_name: str, status
         return f"✅ 子agent [{name}] 已完成"
     if status == "failed":
         return f"❌ 子agent [{name}] 失败: {error or '未知错误'}"
-    return f"⚠️ 子agent [{name}] {status}"
+    suffix = f" {status}" if status else ""
+    return f"⚠️ 子agent [{name}]{suffix}"
 
 
 def entry_markdown_text_block(block: TranscriptBlock) -> str:

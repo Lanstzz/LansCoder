@@ -661,3 +661,23 @@ def test_app_on_unmount_flushes_pending_background_notifications_before_close(tm
         assert "<label>shutdown</label>" in notifications[0].parts[0].content
     finally:
         runner.background_manager.shutdown()
+
+
+def test_app_on_unmount_flush_failure_still_closes_mcp(tmp_path, monkeypatch) -> None:
+    manager = FakeMcpManager()
+    app = create_lanscoder_app(
+        project_root=tmp_path,
+        provider=FakeProvider([]),
+        session_id="sess_flush_fail",
+        tools=[],
+        mcp_manager_factory=lambda configs: manager,
+    )
+
+    def boom_flush(self) -> None:
+        raise RuntimeError("store write failed")
+
+    monkeypatch.setattr(AgentChatRunner, "flush_background_notifications", boom_flush)
+
+    with pytest.raises(RuntimeError, match="store write failed"):
+        app.on_unmount()
+    assert manager.close_calls == 1

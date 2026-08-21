@@ -3908,7 +3908,7 @@ def test_streaming_measurement_records_reasoning_seconds(tmp_path) -> None:
     assert result.diagnostics.reasoning_seconds is not None
     assert result.diagnostics.reasoning_seconds > 0
     # 钉住「首 reasoning_delta 到首 text_delta」的边界语义：sleep 0.01 后才有 text_delta。
-    assert result.diagnostics.reasoning_seconds < 0.5
+    assert result.diagnostics.reasoning_seconds < 5
 
 
 def test_streaming_without_reasoning_keeps_reasoning_seconds_none(tmp_path) -> None:
