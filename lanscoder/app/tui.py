@@ -175,7 +175,6 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._stream_flush_timer: Timer | None = None
         self._stream_markdown_update = None
         self._stream_finalizations: dict[LansCoderMarkdown, object] = {}
-        self._finalized_stream_widgets: set[LansCoderMarkdown] = set()
         self._stream_event_lock = threading.Lock()
         self._stream_event_generation = 0
         self._stream_event_dispatch_scheduled = False
