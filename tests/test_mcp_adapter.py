@@ -6,8 +6,8 @@ import pytest
 
 from lanscoder.mcp.adapter import adapt_mcp_tool
 from lanscoder.mcp.models import McpToolDescription
+from lanscoder.permissions.classification import build_request, classify
 from lanscoder.permissions.types import PermissionAction
-from lanscoder.tools.permission_registry import permission_request_for_tool
 
 
 @dataclass
@@ -131,15 +131,19 @@ def test_adapt_mcp_tool_converts_call_failure_to_safe_error() -> None:
     assert "secret-value" not in result.content
 
 
-def test_adapt_mcp_tool_declares_precise_mcp_permission() -> None:
+def test_adapt_mcp_tool_classifies_as_precise_mcp_tool() -> None:
     tool = adapt_mcp_tool(FakeManager(), "lark", McpToolDescription("calendar_list", None))
 
-    assert tool.permission is not None
-    assert tool.permission.action == PermissionAction.MCP_TOOL
-    assert tool.permission.target_value == "lark/calendar_list"
-    assert tool.permission.allow_auto is False
+    assert tool.name == "mcp__lark__calendar_list"
+    assert not hasattr(tool, "permission")
 
-    request = permission_request_for_tool(tool, {"limit": 2})
+    spec = classify("mcp__lark__calendar_list", {"limit": 2})
+    assert spec is not None
+    assert spec.action == PermissionAction.MCP_TOOL
+    assert spec.target_value == "lark/calendar_list"
+    assert spec.allow_auto is False
+
+    request = build_request("mcp__lark__calendar_list", {"limit": 2})
 
     assert request.action == PermissionAction.MCP_TOOL
     assert request.target == "lark/calendar_list"

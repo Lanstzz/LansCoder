@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lanscoder.permissions.types import PermissionAction
-from lanscoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result, make_text_result
+from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils.introspection import tool_from_function
 from lanscoder.utils.execution_sandbox import ExecutionSandbox
 from lanscoder.utils.sandbox_access import SandboxAccess
@@ -68,11 +67,4 @@ def create_shell_tool(root: str | Path, *, access: SandboxAccess | None = None) 
         content = result.stdout.strip() or result.stderr.strip() or f"命令退出码：{result.exit_code}"
         return make_text_result("shell", content, **data)
 
-    tool = tool_from_function(shell)
-    tool.permission = ToolPermissionSpec(
-        action=PermissionAction.EXECUTE_SHELL,
-        target_arg="command",
-        cwd_arg="cwd",
-        reason="执行 shell 命令需要用户确认。",
-    )
-    return tool
+    return tool_from_function(shell)

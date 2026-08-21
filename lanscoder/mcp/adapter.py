@@ -6,9 +6,8 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 from lanscoder.mcp.models import McpToolDescription
-from lanscoder.permissions.types import PermissionAction
 from lanscoder.providers.types import ToolDefinition
-from lanscoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result
+from lanscoder.tools.types import Tool, ToolResult, make_error_result
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -56,12 +55,6 @@ def adapt_mcp_tool(
             parameters=parameters,
         ),
         executor=execute,
-        permission=ToolPermissionSpec(
-            action=PermissionAction.MCP_TOOL,
-            target_value=f"{server}/{tool_name}",
-            allow_auto=False,
-            reason=f"调用 MCP 工具 {server}/{tool_name}。",
-        ),
     )
 
 

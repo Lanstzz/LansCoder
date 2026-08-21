@@ -3,8 +3,7 @@ from __future__ import annotations
 import os
 from urllib import error, parse, request
 
-from lanscoder.permissions.types import PermissionAction
-from lanscoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result, make_text_result
+from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils.introspection import tool_from_function
 from lanscoder.utils.json_utils import dumps_json, loads_json
 
@@ -67,11 +66,6 @@ def create_web_search_tool() -> Tool:
     tool = tool_from_function(web_search)
     tool.definition.parameters["properties"]["search_type"]["enum"] = ["auto", "fast", "deep"]
     tool.definition.parameters["properties"]["livecrawl"]["enum"] = ["fallback", "preferred"]
-    tool.permission = ToolPermissionSpec(
-        action=PermissionAction.NETWORK_REQUEST,
-        target_value=f"{EXA_MCP_URL},{PARALLEL_MCP_URL}",
-        reason="网页搜索需要网络请求权限。",
-    )
     return tool
 
 

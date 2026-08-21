@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lanscoder.tools.path_permissions import read_multi_target, with_read_permission
 from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils.introspection import tool_from_function
 from lanscoder.utils.sandbox import PathSandbox
@@ -86,8 +85,4 @@ def create_read_multi_tool(root: str | Path, *, access: SandboxAccess | None = N
             truncated=truncated,
         )
 
-    return with_read_permission(
-        tool_from_function(read_multi),
-        reason="批量读取文件需要权限检查。",
-        target_builder=read_multi_target,
-    )
+    return tool_from_function(read_multi)

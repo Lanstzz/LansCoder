@@ -3,8 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from lanscoder.permissions.types import PermissionAction
-from lanscoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result, make_text_result
+from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils.introspection import tool_from_function
 from lanscoder.utils.execution_sandbox import ExecutionSandbox
 from lanscoder.utils.sandbox_access import SandboxAccess
@@ -47,10 +46,4 @@ def create_diagnostics_tool(root: str | Path, *, access: SandboxAccess | None = 
         content = (result.stdout or result.stderr).strip() or "诊断通过。"
         return make_text_result("diagnostics", content, **data)
 
-    tool = tool_from_function(diagnostics)
-    tool.permission = ToolPermissionSpec(
-        action=PermissionAction.EXECUTE_SHELL,
-        target_arg="command",
-        reason="运行诊断命令需要用户确认。",
-    )
-    return tool
+    return tool_from_function(diagnostics)

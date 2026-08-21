@@ -1,8 +1,8 @@
 """外置权限分类表:按工具名分类权限声明并构建 PermissionRequest。
 
-分类表与 target/cwd/request_id 算法为 tools/permission_registry.py +
-各工具文件 ToolPermissionSpec 的逐字转写(Task 8/9 删除源对象);本模块
-禁止 import lanscoder.tools / lanscoder.agent / lanscoder.app。
+分类表与 target/cwd/request_id 算法由工具声明逐字转写而来(Task 8/9
+已删除全部工具侧声明);本模块禁止 import lanscoder.tools /
+lanscoder.agent / lanscoder.app。
 """
 
 from __future__ import annotations

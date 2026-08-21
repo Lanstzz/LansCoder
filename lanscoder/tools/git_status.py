@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lanscoder.permissions.types import PermissionAction
-from lanscoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result, make_text_result
+from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils import git as git_utils
 from lanscoder.utils.introspection import tool_from_function
 from lanscoder.utils.sandbox import PathSandbox
@@ -32,10 +31,4 @@ def create_git_status_tool(root: str | Path, *, access: SandboxAccess | None = N
             clean=status_result.stdout.strip() == "",
         )
 
-    tool = tool_from_function(git_status)
-    tool.permission = ToolPermissionSpec(
-        action=PermissionAction.GIT_OPERATION,
-        target_value="status --short",
-        reason="查看 git 状态属于 git 操作。",
-    )
-    return tool
+    return tool_from_function(git_status)

@@ -3,8 +3,7 @@ from __future__ import annotations
 import ipaddress
 from urllib import error, parse, request
 
-from lanscoder.permissions.types import PermissionAction
-from lanscoder.tools.types import Tool, ToolPermissionSpec, ToolResult, make_error_result, make_text_result
+from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 from lanscoder.utils.introspection import tool_from_function
 from lanscoder.utils.text import truncate
 
@@ -48,13 +47,7 @@ def create_fetch_tool() -> Tool:
             truncated=truncated,
         )
 
-    tool = tool_from_function(fetch)
-    tool.permission = ToolPermissionSpec(
-        action=PermissionAction.NETWORK_REQUEST,
-        target_arg="url",
-        reason="网络请求需要用户确认。",
-    )
-    return tool
+    return tool_from_function(fetch)
 
 
 def _is_private_or_local_url(parsed: parse.ParseResult) -> bool:
