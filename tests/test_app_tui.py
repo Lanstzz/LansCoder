@@ -4798,3 +4798,19 @@ async def test_finish_chat_turn_merges_consecutive_reasoning_only_entries() -> N
     thinking = [c for c in block.children if c.kind == ChildKind.THINKING]
     assert len(thinking) == 1
     assert thinking[0].duration_seconds == 3.0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_finish_chat_turn_tool_call_breaks_merge_chain() -> None:
+    runner = ReasoningRecordingRunner([("think tool", 3.0, True), ("after tool", 4.0, False)])
+    app = LansCoderApp(chat_runner=runner, current_session=FakeSession())
+    async with app.run_test() as pilot:
+        app.projector.start_user("hi")
+        app._chat_busy = True
+        app._finish_chat_turn(app._chat_turn_token)
+        await pilot.pause()
+    block = app.transcript.blocks[-1]
+    thinking = [c for c in block.children if c.kind == ChildKind.THINKING]
+    assert len(thinking) == 2
+    assert [c.duration_seconds for c in thinking] == [3.0, 4.0]

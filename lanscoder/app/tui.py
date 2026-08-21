@@ -690,18 +690,20 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
     def _apply_turn_reasoning_durations(self) -> None:
         """把本回合 store 里记录的 reasoning 秒数回填到 live thinking 子行。
 
-        语义与 replay_messages 的 merge 规则对位:带 text/tool part 的消息
-        结算其 thinking 子行并开启新行;纯 reasoning 消息(live/replay 都)合并进
-        上一行,保留该行首条 reasoning 的秒数。物化仅发生在非流式回合(无 live 子行)。
+        语义与 replay_messages 的 merge 规则对位:以 tool_call 收尾的消息
+        追加 TOOL child 顶掉末位、切断合并链;未以 tool_call 收尾的消息
+        (即使带 text part)其 THINKING child 结算后仍在块末尾,下一条 reasoning
+        继续合并进上一行,保留该行首条 reasoning 的秒数。物化仅发生在非流式
+        回合(无 live 子行)。
         """
         entries = getattr(self.chat_runner, "last_turn_reasonings", None) or []
         if not entries:
             return
         current_child: ChildItem | None = None
-        prev_had_parts = False
+        prev_ended_with_tool = False
         counter = 0
-        for reasoning, seconds, had_parts in entries:
-            if current_child is None or prev_had_parts:
+        for reasoning, seconds, ended_with_tool in entries:
+            if current_child is None or prev_ended_with_tool:
                 block = self.transcript.last_block()
                 block_children = [c for c in (block.children if block else []) if c.kind == ChildKind.THINKING]
                 if counter < len(block_children):
@@ -710,8 +712,17 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                     if block is None or block.kind != BlockKind.ASSISTANT:
                         self.projector.start_assistant()
                         block = self.transcript.last_block()
-                    self.projector.append_thinking(reasoning, track_duration=False, duration_seconds=seconds)
-                    current_child = block.children[-1]
+                    # 直接构造新 THINKING 子项而非 append_thinking:后者会把
+                    # 文本合并进末位 THINKING 子项(replay/live 里合并链靠
+                    # tool_call 追加的 TOOL child 顶掉末位来断开;物化场景没有
+                    # TOOL child 时 append_thinking 会把下一行误并入上一行)。
+                    current_child = ChildItem(
+                        ChildKind.THINKING,
+                        f"t{len(block.children)}",
+                        "Thinking…",
+                        body=reasoning,
+                    )
+                    block.children.append(current_child)
                     block_index = len(self.transcript.blocks) - 1
                     output = self.query_one("#output")
                     self._mount_child_row(output, block_index, current_child)
@@ -720,9 +731,9 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                 current_child.finished = True
                 block_index = len(self.transcript.blocks) - 1
                 self._refresh_child_row(block_index, current_child)
-            # 合并条目(上一消息纯 reasoning、无 text/tool part)不进入分支:
+            # 合并条目(上一消息未以 tool_call 收尾)不进入分支:
             # live/replay 均已把文本并进同一行,时长保留该行首条 reasoning 的值。
-            prev_had_parts = had_parts
+            prev_ended_with_tool = ended_with_tool
 
     def _handle_escape_interrupt(self) -> bool:
         """Esc 双重打断窗口:第一次提示,窗口内再按则中断当前回合。"""
