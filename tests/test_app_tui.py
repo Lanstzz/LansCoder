@@ -4272,3 +4272,84 @@ async def test_interrupt_chat_turn_settles_running_tool_child_to_error() -> None
         assert child.status == "error"
         assert app.transcript.blocks[-1].kind == BlockKind.SYSTEM
         assert app.transcript.blocks[-1].text == "Interrupted current turn."
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_resume_after_permission_pending_rearms_permission_zone() -> None:
+    """重放当前会话后,挂起的权限请求重新武装按钮区,点击仍能提交。
+
+    `_replay_current_session` 的收尾路径是 `_write_pending_input()` →
+    `_show_permission_zone()`;此处验证挂起的 permission_confirmation 跨
+    重放后按钮区出现且按钮点击走正常 resume 协议。
+    """
+    runner = FakePermissionResumeRunner()
+    runner.sync_pending_input_from_current_session = lambda: runner.last_pending_input
+    app = LansCoderApp(chat_runner=runner, current_session=FakeSession())
+
+    async with app.run_test() as pilot:
+        app._replay_current_session()
+        await pilot.pause()
+
+        zone = app.query_one("#permission-zone")
+        assert not zone.has_class("hidden")
+        buttons = {button.id: button for button in zone.query("Button")}
+        assert set(buttons) == {"permission-deny", "permission-allow_once"}
+        assert app._activity_text == "waiting · permission"
+
+        await pilot.click(buttons["permission-allow_once"])
+        await pilot.pause()
+
+    assert runner.inputs == []
+    assert runner.resumes == [("perm_write", "allow_once")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_activity_metrics_show_after_turn_then_revert_to_idle() -> None:
+    """回合结束后保留一次 elapsed · N tools 显示,2 秒后回 idle · ready。
+
+    新回合开始(_start_turn_metrics)会取消挂起的恢复计时器,避免旧回合的
+    恢复动作在流式中途打回 idle。
+    """
+    runner = FakeStreamingAsyncChatRunner()
+    app = LansCoderApp(chat_runner=runner)
+    app.ACTIVITY_IDLE_REVERT_SECONDS = 0.1
+
+    async with app.run_test() as pilot:
+        app._start_turn_metrics()
+        app._turn_tool_count = 2
+        await pilot.pause()
+        app._write_chat_response(ChatResponse(provider="fake", model="fake", content="done"))
+        await pilot.pause()
+
+        line = str(app.query_one("#activity").render())
+        assert "done" in line
+        assert "2 tools" in line
+        assert app._activity_text != "idle · ready"
+
+        await pilot.pause(0.3)
+
+        assert app._activity_text == "idle · ready"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_new_turn_cancels_pending_activity_idle_revert() -> None:
+    """新回合开始取消旧回合的 idle 恢复计时器,活动区保持新回合状态。"""
+    runner = FakeStreamingAsyncChatRunner()
+    app = LansCoderApp(chat_runner=runner)
+    app.ACTIVITY_IDLE_REVERT_SECONDS = 0.1
+
+    async with app.run_test() as pilot:
+        app._start_turn_metrics()
+        await pilot.pause()
+        app._write_chat_response(ChatResponse(provider="fake", model="fake", content="done"))
+        await pilot.pause()
+        assert app._activity_text == "done"
+
+        app._start_turn_metrics()
+        app._set_activity("running · next turn")
+        await pilot.pause(0.3)
+
+        assert app._activity_text == "running · next turn"
