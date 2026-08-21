@@ -21,7 +21,7 @@ from lanscoder.permissions.types import (
     PermissionScopeType,
 )
 from lanscoder.providers.types import ToolCall
-from lanscoder.runtime.user_input import UserInputRequest
+from lanscoder.permissions.user_input import UserInputRequest
 from lanscoder.tools.permission_registry import PermissionAwareToolRegistry
 from lanscoder.tools.permission_results import (
     make_permission_denied_result,

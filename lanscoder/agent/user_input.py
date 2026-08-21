@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from lanscoder.providers.types import ChatResponse
-from lanscoder.runtime.user_input import UserInputRequest
+from lanscoder.permissions.user_input import UserInputRequest
 
 __all__ = [
     "AgentTurnResult",

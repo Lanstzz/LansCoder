@@ -1,13 +1,10 @@
-from lanscoder.runtime.cancellation import (
+from lanscoder.agent.permission_results import user_input_request_from_tool_result
+from lanscoder.permissions.user_input import UserInputOption, UserInputRequest
+from lanscoder.utils.cancellation import (
     AgentCancelledError,
     CancellationToken,
     cancellation_context,
     current_cancellation_token,
-)
-from lanscoder.runtime.user_input import (
-    UserInputOption,
-    UserInputRequest,
-    user_input_request_from_tool_result,
 )
 
 __all__ = [

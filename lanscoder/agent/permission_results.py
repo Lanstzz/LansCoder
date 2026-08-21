@@ -1,28 +1,5 @@
-from __future__ import annotations
-
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
-
-if TYPE_CHECKING:
-    from lanscoder.tools.types import ToolResult
-
-
-@dataclass(slots=True)
-class UserInputOption:
-
-    id: str
-    label: str
-    description: str = ""
-
-
-@dataclass(slots=True)
-class UserInputRequest:
-
-    id: str
-    kind: Literal["ask_user", "permission_confirmation"]
-    question: str
-    options: list[UserInputOption] = field(default_factory=list)
-    payload: dict[str, Any] = field(default_factory=dict)
+from lanscoder.permissions.user_input import UserInputOption, UserInputRequest
+from lanscoder.tools.types import ToolResult
 
 
 def user_input_request_from_tool_result(
@@ -45,7 +22,7 @@ def user_input_request_from_tool_result(
     if not question:
         question = "需要用户输入。"
 
-    options = _options_from_data(data.get("options"))
+    options = options_from_data(data.get("options"))
     request_id = str(data.get("request_id") or data.get("permission_request_id") or tool_call_id)
     payload = {
         "tool_call_id": tool_call_id,
@@ -65,7 +42,7 @@ def user_input_request_from_tool_result(
     )
 
 
-def _options_from_data(raw_options: object) -> list[UserInputOption]:
+def options_from_data(raw_options: object) -> list[UserInputOption]:
     if not isinstance(raw_options, list):
         return []
 

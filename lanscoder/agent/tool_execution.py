@@ -13,7 +13,7 @@ import anyio
 if TYPE_CHECKING:
     from lanscoder.agent.observer import ToolEventSink
 
-from lanscoder.runtime.cancellation import CancellationToken, cancellation_context
+from lanscoder.utils.cancellation import CancellationToken, cancellation_context
 from lanscoder.agent.permission import PermissionCoordinator, PreparedPermission
 from lanscoder.agent.session import AgentSession, PendingPermissionExecution
 from lanscoder.agent.background import (
@@ -27,7 +27,7 @@ from lanscoder.agent.background import (
 from lanscoder.planning.reducer import TaskPlanCommandError, TaskPlanRevisionConflict
 from lanscoder.planning.projection import ready_task_ids
 from lanscoder.planning.service import TaskPlanService
-from lanscoder.runtime.user_input import UserInputRequest, user_input_request_from_tool_result
+from lanscoder.agent.permission_results import UserInputRequest, user_input_request_from_tool_result
 from lanscoder.permissions.types import PermissionDecisionKind, PermissionMode, PermissionRequest
 from lanscoder.providers.types import ToolCall
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES

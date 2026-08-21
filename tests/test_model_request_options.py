@@ -16,7 +16,7 @@ from lanscoder.providers.types import (
     ChatStreamEvent,
     MainRequestOptions,
 )
-from lanscoder.runtime.cancellation import CancellationToken
+from lanscoder.utils.cancellation import CancellationToken
 
 
 @dataclass

@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from lanscoder.runtime.cancellation import CancellationToken
+from lanscoder.utils.cancellation import CancellationToken
 from lanscoder.utils.subprocess import CommandResult, run_command
 
 

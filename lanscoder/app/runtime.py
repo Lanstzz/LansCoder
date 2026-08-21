@@ -15,7 +15,7 @@ from typing import Any
 
 import anyio
 
-from lanscoder.runtime.cancellation import CancellationToken
+from lanscoder.utils.cancellation import CancellationToken
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from lanscoder.agent.background import DEFAULT_BACKGROUND_TOOL_NAMES, BackgroundJobManager
 from lanscoder.agent.guardrails import TurnGuardrails
@@ -29,7 +29,7 @@ from lanscoder.agent.session import AgentSession
 from lanscoder.agent.subagent_engine import DEFAULT_CHILD_LIMITS, SubagentEngine
 from lanscoder.agent.tool_execution import ToolExecutor
 from lanscoder.agent.user_input import AgentTurnStatus
-from lanscoder.runtime.user_input import UserInputRequest
+from lanscoder.permissions.user_input import UserInputRequest
 from lanscoder.context.context_builder import ContextBuilder
 from lanscoder.context.models import AgentMessage, MessagePart, SessionView
 from lanscoder.context.runtime_state import SessionRuntimeState

@@ -13,7 +13,7 @@ from lanscoder.agent.user_input import AgentTurnResult, AgentTurnStatus
 from lanscoder.permissions.types import PermissionDecision, PermissionDecisionKind, PermissionRequest
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import ChatResponse, ToolCall
-from lanscoder.runtime.user_input import UserInputRequest
+from lanscoder.permissions.user_input import UserInputRequest
 from lanscoder.tools.permission_results import (
     make_permission_denied_result,
     make_prewrite_review_failed_result,

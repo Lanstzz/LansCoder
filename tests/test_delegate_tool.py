@@ -380,7 +380,7 @@ def test_foreground_delegate_cancel_aborts_child(tmp_path) -> None:
     """Foreground subagent must abort with AgentCancelledError when the parent turn
     is cancelled — it must not run to completion and be mislabelled as failed."""
 
-    from lanscoder.runtime.cancellation import (
+    from lanscoder.utils.cancellation import (
         AgentCancelledError,
         CancellationToken,
         cancellation_context,
@@ -438,7 +438,7 @@ def test_background_delegate_cancel_aborts_child(tmp_path) -> None:
     """A cancelled background job must abort its inline subagent with
     AgentCancelledError and finish cancelled, not run to completion."""
 
-    from lanscoder.runtime.cancellation import AgentCancelledError
+    from lanscoder.utils.cancellation import AgentCancelledError
 
     store = JsonlSessionStore(tmp_path)
     manager = BackgroundJobManager()
@@ -939,7 +939,7 @@ def test_isolated_coder_cancel_aborts_child(tmp_path) -> None:
     from lanscoder.permissions.manager import PermissionManager
     from lanscoder.permissions.policy import DefaultPermissionPolicy
     from lanscoder.permissions.types import PermissionMode
-    from lanscoder.runtime.cancellation import AgentCancelledError
+    from lanscoder.utils.cancellation import AgentCancelledError
 
     repo = tmp_path / "repo"
     repo.mkdir()

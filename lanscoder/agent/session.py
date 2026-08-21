@@ -25,7 +25,7 @@ from lanscoder.permissions.manager import PermissionManager
 from lanscoder.permissions.policy import DefaultPermissionPolicy
 from lanscoder.permissions.types import PermissionDecisionKind, PermissionMode
 from lanscoder.providers.types import ChatResponse, ProviderCapabilities, ToolCall
-from lanscoder.runtime.user_input import UserInputRequest, _options_from_data
+from lanscoder.agent.permission_results import UserInputRequest, options_from_data
 from lanscoder.permissions.types import PermissionDecision, PermissionRequest
 from lanscoder.tools.permission_registry import PermissionAwareToolRegistry
 from lanscoder.tools.registry import ToolRegistry
@@ -596,7 +596,7 @@ def _ask_user_request_from_tool_call(tool_call: ToolCall) -> UserInputRequest | 
     question = str(arguments.get("question") or "").strip()
     if not question:
         return None
-    options = _options_from_data(arguments.get("options"))
+    options = options_from_data(arguments.get("options"))
     return UserInputRequest(
         id=tool_call.id,
         kind="ask_user",

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
-from lanscoder.runtime.cancellation import CancellationToken
+from lanscoder.utils.cancellation import CancellationToken
 
 if TYPE_CHECKING:
     from lanscoder.agent.tool_execution import ToolExecutionEvent
