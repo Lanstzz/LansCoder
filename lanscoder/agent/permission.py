@@ -9,11 +9,13 @@ from lanscoder.agent.session import (
     PendingPermissionExecution,
     ToolPermissionPreflight,
 )
+from lanscoder.permissions.classification import ClassificationSpec, build_request, classify
 from lanscoder.permissions.grants import PermissionGrantStore
 from lanscoder.permissions.manager import PermissionManager
 from lanscoder.permissions.policy import DefaultPermissionPolicy
 from lanscoder.permissions.types import (
     PermissionAction,
+    PermissionDecision,
     PermissionDecisionKind,
     PermissionGrant,
     PermissionMode,
@@ -22,7 +24,6 @@ from lanscoder.permissions.types import (
 )
 from lanscoder.providers.types import ToolCall
 from lanscoder.permissions.user_input import UserInputRequest
-from lanscoder.tools.permission_registry import PermissionAwareToolRegistry
 from lanscoder.tools.permission_results import (
     make_permission_denied_result,
     make_prewrite_review_failed_result,
@@ -39,6 +40,24 @@ class PreparedPermission:
     pending_input: UserInputRequest | None = None
     permission_request: PermissionRequest | None = None
     prewrite_review: dict[str, object] | None = None
+
+
+def _deny_invalid(
+    tool_name: str,
+    arguments: dict,
+    spec: ClassificationSpec,
+    exc: ValueError,
+) -> ToolPermissionPreflight:
+    """参数缺失短路:固定 id=f"perm_{name}_invalid",reason 为原 ValueError 文案,不调 manager.preflight。"""
+    request = PermissionRequest(
+        id=f"perm_{tool_name}_invalid",
+        action=spec.action,
+        target="",
+        reason=str(exc),
+        metadata={"tool_name": tool_name, "arguments": dict(arguments)},
+    )
+    decision = PermissionDecision(kind=PermissionDecisionKind.DENY, reason=str(exc))
+    return ToolPermissionPreflight(request=request, decision=decision)
 
 
 class PermissionCoordinator:
@@ -104,13 +123,23 @@ class PermissionCoordinator:
 
     def preflight(self, tool_call: ToolCall) -> ToolPermissionPreflight | None:
 
-        registry = self._session.tool_registry
-        if not isinstance(registry, PermissionAwareToolRegistry):
+        manager = self._permission_manager
+        if manager is None:
             return None
-        preflight = registry.preflight(tool_call.name, tool_call.arguments)
-        if preflight is None:
+        arguments = tool_call.arguments
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
             return None
-        _, _, request, decision = preflight
+        spec = classify(tool_call.name, arguments)
+        if spec is None:
+            return None
+        try:
+            request = build_request(tool_call.name, arguments)
+        except ValueError as exc:
+            return _deny_invalid(tool_call.name, arguments, spec, exc)
+        request = manager.normalize_request(request)
+        decision = manager.preflight(request)
         return ToolPermissionPreflight(request=request, decision=decision)
 
     def requires_review(self, tool_call: ToolCall) -> bool:

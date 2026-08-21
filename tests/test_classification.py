@@ -127,6 +127,20 @@ def test_mcp_prefixed_tool_classifies_as_mcp_tool(
     assert request.reason == expected_reason
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "mcp__foo",
+        "mcp__",
+        "mcp__srv_",
+    ],
+)
+def test_single_segment_mcp_prefix_classifies_none(name: str) -> None:
+    """I-1 裁决:前缀后缺 __ 段(如 mcp__foo)解析失败 → None,与规则 3 未知名不门控一致。"""
+
+    assert classify(name, {}) is None
+
+
 def test_unknown_tool_name_classifies_none_and_build_raises() -> None:
     assert classify("no_such_tool", {}) is None
     with pytest.raises(ValueError, match="工具没有权限声明：no_such_tool"):

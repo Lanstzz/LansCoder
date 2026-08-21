@@ -404,8 +404,10 @@ def _slow_named_tool(
     *,
     delay: float,
     execution_intervals: dict[str, tuple[float, float]] | None = None,
+    argument_name: str = "text",
 ) -> Tool:
-    def execute(text: str) -> ToolResult:
+    def execute(**_kwargs: object) -> ToolResult:
+        text = _kwargs[argument_name]
         started_at = time.perf_counter()
         time.sleep(delay)
         finished_at = time.perf_counter()
@@ -419,8 +421,8 @@ def _slow_named_tool(
             description=f"slow {name}",
             parameters={
                 "type": "object",
-                "properties": {"text": {"type": "string"}},
-                "required": ["text"],
+                "properties": {argument_name: {"type": "string"}},
+                "required": [argument_name],
             },
         ),
         executor=execute,
@@ -694,8 +696,8 @@ def test_agent_loop_runs_bypass_allowed_tool_calls_in_parallel(tmp_path, make_lo
         session_id="sess_parallel_bypass",
         project_root=tmp_path,
         tools=[
-            _slow_named_tool("shell", delay=0.2, execution_intervals=execution_intervals),
-            _slow_named_tool("python_exec", delay=0.2, execution_intervals=execution_intervals),
+            _slow_named_tool("shell", delay=0.2, execution_intervals=execution_intervals, argument_name="command"),
+            _slow_named_tool("python_exec", delay=0.2, execution_intervals=execution_intervals, argument_name="code"),
         ],
     )
     session.permission_coordinator.set_mode(PermissionMode.BYPASS)
@@ -706,8 +708,8 @@ def test_agent_loop_runs_bypass_allowed_tool_calls_in_parallel(tmp_path, make_lo
                 model="fake-model",
                 content="",
                 tool_calls=[
-                    ToolCall(id="call_shell", name="shell", arguments={"text": "first"}),
-                    ToolCall(id="call_python", name="python_exec", arguments={"text": "second"}),
+                    ToolCall(id="call_shell", name="shell", arguments={"command": "first"}),
+                    ToolCall(id="call_python", name="python_exec", arguments={"code": "second"}),
                 ],
                 finish_reason="tool_calls",
             ),
