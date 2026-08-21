@@ -18,7 +18,7 @@ from lanscoder.permissions.types import PermissionAction, PermissionRequest
 from lanscoder.utils.patch import parse_patch
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class ClassificationSpec:
 
     action: PermissionAction
@@ -170,7 +170,10 @@ def _lookup(tool_name: str) -> ClassificationSpec | None:
     if spec is not None:
         return spec
     if tool_name.startswith("mcp__"):
-        server, tool = tool_name.removeprefix("mcp__").rsplit("__", 1)
+        parts = tool_name.removeprefix("mcp__").rsplit("__", 1)
+        if len(parts) != 2:
+            return None
+        server, tool = parts
         return ClassificationSpec(
             action=PermissionAction.MCP_TOOL,
             target_value=f"{server}/{tool}",
