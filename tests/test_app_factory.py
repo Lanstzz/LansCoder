@@ -567,7 +567,9 @@ def test_create_lanscoder_app_persists_permission_grants(tmp_path: Path) -> None
         session_id="sess_second",
         tools=[create_write_tool(tmp_path)],
     )
-    result = second.chat_runner.current_session.session.execute_tool_call(ToolCall(id="call_write_again", name="write", arguments={"path": "README.md", "content": "again"}))
+    second_session = second.chat_runner.current_session.session
+    result = second_session.execute_tool_call(ToolCall(id="call_write_again", name="write", arguments={"path": "README.md", "content": "again"}))
 
     assert result.ok is True
-    assert result.data.get("request_type") != "permission_confirmation"
+    assert second_session.pending_permission_execution is None
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "again"

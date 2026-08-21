@@ -27,7 +27,6 @@ from lanscoder.permissions.types import PermissionDecisionKind, PermissionMode
 from lanscoder.providers.types import ChatResponse, ProviderCapabilities, ToolCall
 from lanscoder.agent.permission_results import UserInputRequest, options_from_data
 from lanscoder.permissions.types import PermissionDecision, PermissionRequest
-from lanscoder.tools.permission_registry import PermissionAwareToolRegistry
 from lanscoder.tools.registry import ToolRegistry
 from lanscoder.tools.review import PrewriteReview, build_prewrite_review, supports_prewrite_review
 from lanscoder.tools.session_registry import ToolRegistryLike, create_session_tool_registry
@@ -136,7 +135,6 @@ class AgentSession:
             runtime_state=runtime_state,
             tools=tools,
             known_message_ids=known_message_ids,
-            permission_manager=permission_manager,
             archive_root=store.root,
             current_turn=lambda: writer.current_turn,
             store=store,
@@ -225,7 +223,6 @@ class AgentSession:
             runtime_state=runtime_state,
             tools=tools,
             known_message_ids=known_message_ids,
-            permission_manager=permission_manager,
             archive_root=store.root,
             current_turn=lambda: writer.current_turn,
             store=store,
@@ -445,13 +442,8 @@ class AgentSession:
         return self.tool_registry.execute(tool_call.name, tool_call.arguments)
 
     def execute_tool_call_after_permission_confirmation(self, tool_call: ToolCall) -> ToolResult:
-        """权限确认后执行工具调用(跳过二次权限检查)。"""
+        """权限确认后执行工具调用(不再二次检查,闸门由 coordinator 负责)。"""
 
-        if isinstance(self.tool_registry, PermissionAwareToolRegistry):
-            return self.tool_registry.execute_without_permission_check(
-                tool_call.name,
-                tool_call.arguments,
-            )
         return self.tool_registry.execute(tool_call.name, tool_call.arguments)
 
     def append_tool_result(self, *, tool_call: ToolCall, result: ToolResult) -> str:

@@ -10,10 +10,12 @@ from lanscoder.agent.tool_flow import (
     tool_result_to_part,
     validate_tool_call_sequence,
 )
+from lanscoder.agent.permission import PreparedPermission
 from lanscoder.context.context_builder import ContextBuilder
 from lanscoder.context.models import AgentMessage, MessagePart, SessionView
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.writer import SessionEventWriter, tool_call_to_part as writer_tool_call_to_part
+from lanscoder.permissions.types import PermissionDecision, PermissionDecisionKind
 from lanscoder.providers.types import ChatResponse, ToolCall
 from lanscoder.tools.apply_patch import create_apply_patch_tool
 from lanscoder.tools.python_exec import create_python_exec_tool
@@ -118,6 +120,11 @@ def test_late_tool_result_after_interruption_is_settled_once(tmp_path) -> None:
     assert tool_messages[0].parts[0].metadata["data"]["interrupted"] is True
 
 
+def _resolve_confirmation(session: AgentSession, prepared: PreparedPermission, choice: str) -> PermissionDecision:
+    assert prepared.permission_request is not None
+    return session.permission_coordinator.permission_manager.resolve_confirmation(prepared.permission_request, choice)
+
+
 def test_project_session_permissioned_write_pauses_without_writing(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     session = AgentSession.from_project(
@@ -132,14 +139,28 @@ def test_project_session_permissioned_write_pauses_without_writing(tmp_path) -> 
         arguments={"path": "README.md", "content": "hello"},
     )
 
-    result = session.execute_tool_call(tool_call)
-
-    assert result.ok is True
-    assert result.data["requires_user_input"] is True
-    assert result.data["request_type"] == "permission_confirmation"
-    assert result.data["permission_request"]["action"] == "write_path"
-    assert result.data["permission_request"]["cwd"] == str(tmp_path.resolve())
+    prepared = session.permission_coordinator.prepare(tool_call, [])
+    assert prepared.pending_input is not None
+    assert prepared.pending_input.kind == "permission_confirmation"
+    assert prepared.pending_input.payload["request_type"] == "permission_confirmation"
+    assert prepared.permission_request is not None
+    assert prepared.permission_request.action.value == "write_path"
+    assert str(prepared.permission_request.cwd) == str(tmp_path.resolve())
+    assert session.pending_permission_execution is not None
     assert not (tmp_path / "README.md").exists()
+
+    # 恢复分支:DENY → 文件仍未写入
+    decision = _resolve_confirmation(session, prepared, "deny")
+    assert decision.kind is PermissionDecisionKind.DENY
+    assert not (tmp_path / "README.md").exists()
+
+    # 恢复分支:ALLOW → execute_tool_call_after_permission_confirmation 实际写入
+    session.permission_coordinator.prepare(tool_call, [])
+    decision = _resolve_confirmation(session, prepared, "allow_once")
+    assert decision.kind is PermissionDecisionKind.ALLOW
+    result = session.execute_tool_call_after_permission_confirmation(tool_call)
+    assert result.ok is True
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "hello"
 
 
 def test_project_session_permissioned_apply_patch_pauses_without_writing(tmp_path) -> None:
@@ -158,27 +179,40 @@ def test_project_session_permissioned_apply_patch_pauses_without_writing(tmp_pat
             "*** End Patch",
         ]
     )
-
-    result = session.execute_tool_call(
-        ToolCall(
-            id="call_patch",
-            name="apply_patch",
-            arguments={"patch": patch},
-        )
+    tool_call = ToolCall(
+        id="call_patch",
+        name="apply_patch",
+        arguments={"patch": patch},
     )
 
-    assert result.ok is True
-    assert result.data["request_type"] == "permission_confirmation"
-    assert result.data["permission_request"]["action"] == "write_path"
-    assert result.data["permission_request"]["target"] == "created.txt"
-    assert [option["id"] for option in result.data["options"]] == ["deny", "allow_once"]
+    prepared = session.permission_coordinator.prepare(tool_call, [])
+    assert prepared.pending_input is not None
+    assert prepared.pending_input.kind == "permission_confirmation"
+    assert prepared.pending_input.payload["request_type"] == "permission_confirmation"
+    assert prepared.permission_request is not None
+    assert prepared.permission_request.action.value == "write_path"
+    assert prepared.permission_request.target == "created.txt"
+    assert [option.id for option in prepared.pending_input.options] == ["deny", "allow_once"]
     assert not (tmp_path / "created.txt").exists()
+
+    # 恢复分支:DENY → 文件仍未创建
+    decision = _resolve_confirmation(session, prepared, "deny")
+    assert decision.kind is PermissionDecisionKind.DENY
+    assert not (tmp_path / "created.txt").exists()
+
+    # 恢复分支:ALLOW → execute_tool_call_after_permission_confirmation 实际创建
+    session.permission_coordinator.prepare(tool_call, [])
+    decision = _resolve_confirmation(session, prepared, "allow_once")
+    assert decision.kind is PermissionDecisionKind.ALLOW
+    result = session.execute_tool_call_after_permission_confirmation(tool_call)
+    assert result.ok is True
+    assert (tmp_path / "created.txt").read_text(encoding="utf-8") == "hello\n"
 
 
 def test_project_session_permissioned_python_exec_pauses_without_executing(tmp_path, monkeypatch) -> None:
     called = False
 
-    def fake_run(command, **kwargs):
+    def fake_run(sandbox, command, **kwargs):
         nonlocal called
         called = True
         return CommandResult(
@@ -198,20 +232,33 @@ def test_project_session_permissioned_python_exec_pauses_without_executing(tmp_p
         project_root=tmp_path,
         tools=[create_python_exec_tool(tmp_path)],
     )
-
-    result = session.execute_tool_call(
-        ToolCall(
-            id="call_python",
-            name="python_exec",
-            arguments={"code": "print(42)"},
-        )
+    tool_call = ToolCall(
+        id="call_python",
+        name="python_exec",
+        arguments={"code": "print(42)"},
     )
 
-    assert result.ok is True
-    assert result.data["request_type"] == "permission_confirmation"
-    assert result.data["permission_request"]["action"] == "execute_shell"
-    assert [option["id"] for option in result.data["options"]] == ["deny", "allow_once"]
+    prepared = session.permission_coordinator.prepare(tool_call, [])
+    assert prepared.pending_input is not None
+    assert prepared.pending_input.kind == "permission_confirmation"
+    assert prepared.pending_input.payload["request_type"] == "permission_confirmation"
+    assert prepared.permission_request is not None
+    assert prepared.permission_request.action.value == "execute_shell"
+    assert [option.id for option in prepared.pending_input.options] == ["deny", "allow_once"]
     assert called is False
+
+    # 恢复分支:DENY → 仍未执行
+    decision = _resolve_confirmation(session, prepared, "deny")
+    assert decision.kind is PermissionDecisionKind.DENY
+    assert called is False
+
+    # 恢复分支:ALLOW → execute_tool_call_after_permission_confirmation 实际执行
+    session.permission_coordinator.prepare(tool_call, [])
+    decision = _resolve_confirmation(session, prepared, "allow_once")
+    assert decision.kind is PermissionDecisionKind.ALLOW
+    result = session.execute_tool_call_after_permission_confirmation(tool_call)
+    assert result.ok is True
+    assert called is True
 
 
 def test_context_builder_rejects_orphan_tool_result() -> None:

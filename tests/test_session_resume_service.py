@@ -17,7 +17,7 @@ from lanscoder.session.errors import (
 )
 from lanscoder.session.resume import ResumeService, validate_session_schema
 from lanscoder.tools.write import create_write_tool
-from lanscoder.permissions.types import PermissionMode
+from lanscoder.permissions.types import PermissionDecisionKind, PermissionMode
 
 
 class FakeProvider(ChatProvider):
@@ -201,7 +201,7 @@ def test_resume_service_rediscovers_current_project_skill_catalog(tmp_path: Path
     assert [skill.path for skill in result.session.skill_catalog.skills] == [".lanscoder/skills/brief/SKILL.md"]
 
 
-def test_resume_service_keeps_permission_wrapper_for_project_tools(tmp_path: Path) -> None:
+def test_resume_service_keeps_coordinator_gate_for_project_tools(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     original = AgentSession.from_project(
         store=store,
@@ -216,18 +216,31 @@ def test_resume_service_keeps_permission_wrapper_for_project_tools(tmp_path: Pat
         project_root=tmp_path,
         tools=[create_write_tool(tmp_path)],
     ).resume("sess_permissions")
-    tool_result = result.session.execute_tool_call(
-        ToolCall(
-            id="call_write",
-            name="write",
-            arguments={"path": "README.md", "content": "hello"},
-        )
+    tool_call = ToolCall(
+        id="call_write",
+        name="write",
+        arguments={"path": "README.md", "content": "hello"},
     )
 
-    assert tool_result.ok is True
-    assert tool_result.data["request_type"] == "permission_confirmation"
-    assert tool_result.data["permission_request"]["action"] == "write_path"
+    prepared = result.session.permission_coordinator.prepare(tool_call, [])
+    assert prepared.pending_input is not None
+    assert prepared.pending_input.kind == "permission_confirmation"
+    assert prepared.permission_request is not None
+    assert prepared.permission_request.action.value == "write_path"
     assert not (tmp_path / "README.md").exists()
+
+    # 恢复分支:DENY → 文件仍未写入
+    denied = result.session.permission_coordinator.permission_manager.resolve_confirmation(prepared.permission_request, "deny")
+    assert denied.kind is PermissionDecisionKind.DENY
+    assert not (tmp_path / "README.md").exists()
+
+    # 恢复分支:ALLOW → execute_tool_call_after_permission_confirmation 实际写入
+    result.session.permission_coordinator.prepare(tool_call, [])
+    allowed = result.session.permission_coordinator.permission_manager.resolve_confirmation(prepared.permission_request, "allow_once")
+    assert allowed.kind is PermissionDecisionKind.ALLOW
+    tool_result = result.session.execute_tool_call_after_permission_confirmation(tool_call)
+    assert tool_result.ok is True
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "hello"
 
 
 def test_resume_service_restores_pending_permission_confirmation(tmp_path: Path, make_loop) -> None:
