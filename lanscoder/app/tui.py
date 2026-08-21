@@ -60,7 +60,7 @@ from lanscoder.app import model_topbar_themes
 from lanscoder.app.projector import TranscriptProjector, replay_messages
 from lanscoder.app.tui_state import BlockKind, TuiTaskPlanPanelState, TranscriptModel
 from lanscoder.app.topbar_view import _provider_name_markup, _provider_model_markup
-from lanscoder.app.tui_view import LansCoderViewMixin
+from lanscoder.app.tui_view import LansCoderViewMixin, _entry_renderable_block
 from lanscoder.app.tui_widgets import (
     ComposerTextArea,
     LansCoderMarkdown,
@@ -178,7 +178,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._stream_event_dispatch_scheduled = False
         self._pending_stream_text: list[str] = []
         self._pending_reasoning_text: list[str] = []
-        self._reasoning_buffer = ""
+        self._ui_epoch = 0
         self._reasoning_is_fallback = False
         self._working_text = ""
         self._working_frame_index = 0
@@ -444,7 +444,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._record_input_history(text)
 
         if self._picker is not None and text.isdigit():
-            if self._picker_select_number(int(text)):
+            if await self._picker_select_number(int(text)):
                 return
 
         attachment_chips = "\n".join(format_attachment_chip(item) for item in attachments)
@@ -465,7 +465,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             result = self.command_handler.handle(text)
             if result.handled:
                 self._ui_line(BlockKind.COMMAND, result.output)
-                self._handle_command_action(result.action, output=result.output)
+                await self._handle_command_action(result.action, output=result.output)
                 self._refresh_session_subtitle()
                 return
             self._ui_line(BlockKind.ERROR, f"Unknown command: {text}")
@@ -501,7 +501,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
 
         if result.handled:
             self._ui_line(BlockKind.COMMAND, result.output)
-            self._handle_command_action(result.action, output=result.output)
+            await self._handle_command_action(result.action, output=result.output)
             self._refresh_session_subtitle()
         else:
             self._ui_line(BlockKind.ERROR, f"Unknown command: {text}")
@@ -511,7 +511,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         """输入区提交事件:有选择器时先选中,否则走提交流程。"""
         event.stop()
         if self._picker is not None:
-            self._picker_select_index(self._picker.selected_index)
+            await self._picker_select_index(self._picker.selected_index)
             return
         await self._submit_composer()
 
@@ -524,9 +524,9 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                 return
         await super().on_event(event)
 
-    def on_key(self, event: Key) -> None:
+    async def on_key(self, event: Key) -> None:
         """按键处理:选择器/子agent 选择、Esc 中断、方向键回顾输入历史。"""
-        if self._picker is not None and self._handle_picker_key(event):
+        if self._picker is not None and await self._handle_picker_key(event):
             event.stop()
             event.prevent_default()
             return
@@ -921,7 +921,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         token = self._begin_active_chat_turn()
         self._chat_worker = self.run_worker(self._run_nudge_turn(token))
 
-    def _handle_command_action(self, action: dict[str, Any] | None, *, output: str = "") -> bool:
+    async def _handle_command_action(self, action: dict[str, Any] | None, *, output: str = "") -> bool:
         """按命令动作分派 UI 行为:提交聊天、换会话、打开各类选择器、回放会话等。"""
         if not action:
             return False
@@ -933,7 +933,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return True
         if action_type == "new_session":
             self._picker = None
-            self._clear_output()
+            await self._clear_output()
             if output:
                 self._ui_line(BlockKind.COMMAND, output)
             return False
@@ -990,7 +990,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return False
         if action_type == "replay_session":
             self._picker = None
-            self._replay_current_session()
+            await self._replay_current_session()
             recalled_text = str(action.get("recalled_text") or "").strip()
             if recalled_text:
                 self._insert_input_text(recalled_text)
@@ -1007,7 +1007,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return False
         return False
 
-    def _handle_picker_key(self, event: Key) -> bool:
+    async def _handle_picker_key(self, event: Key) -> bool:
         """选择器按键:上/下移动、Enter 选中、Esc 取消。"""
         picker = self._picker
         if picker is None:
@@ -1021,7 +1021,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             self._render_picker()
             return True
         if event.key == "enter":
-            self._picker_select_index(picker.selected_index)
+            await self._picker_select_index(picker.selected_index)
             return True
         if event.key == "escape":
             kind = picker.kind
@@ -1030,7 +1030,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             return True
         return False
 
-    def _picker_select_number(self, number: int) -> bool:
+    async def _picker_select_number(self, number: int) -> bool:
         picker = self._picker
         if picker is None:
             return False
@@ -1038,10 +1038,10 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if index < 0 or index >= len(picker.items):
             self._ui_line(BlockKind.ERROR, "Invalid selection.")
             return True
-        self._picker_select_index(index)
+        await self._picker_select_index(index)
         return True
 
-    def _picker_select_index(self, index: int) -> None:
+    async def _picker_select_index(self, index: int) -> None:
         """选中选择器某项:构造命令交给命令处理器并刷新输出。"""
         picker = self._picker
         if picker is None or self.command_handler is None:
@@ -1055,7 +1055,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         result = self.command_handler.handle(command)
         if result.output:
             self._ui_line(BlockKind.COMMAND, result.output)
-        self._handle_command_action(result.action)
+        await self._handle_command_action(result.action)
         self._refresh_session_subtitle()
 
     def _open_picker(self, **fields) -> None:
@@ -1085,19 +1085,53 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         input_widget.focus()
 
     def _replace_last_command_output(self, text: str) -> None:
-        """就地更新最后一条命令输出块,找不到时追加新行。"""
-        block = self.transcript.find_last_command_block()
-        if block is not None:
-            block.text = text
-            self._rerender_transcript()
-            return
-        self._ui_line(BlockKind.COMMAND, text)
+        """就地更新最后一条命令输出块,找不到时追加新行。
 
-    def _clear_output(self) -> None:
+        不做整树重建:remove+remount 会撞上 Textual 异步 prune,同一帧内
+        旧子行(thinking/tool)还没卸载,重挂同名行要么 DuplicateIds 要么
+        被僵尸行去重吃掉,导致 picker 上下移动时 transcript 的子行消失。
+        """
+        block = self.transcript.find_last_command_block()
+        if block is None:
+            self._ui_line(BlockKind.COMMAND, text)
+            return
+        block.text = text
+        output = self._query_mounted("#output")
+        if output is None:
+            return
+        target = next(
+            (w for w in getattr(output, "children", ()) if getattr(w, "id", None) == f"command-block-{id(block)}"),
+            None,
+        )
+        if target is not None and hasattr(target, "update"):
+            target.update(_entry_renderable_block(block, text))
+            return
+        self._append_block(block)
+
+    async def _clear_output(self) -> None:
+        """重置 transcript 与输出区,并使在途的流式/工具 UI 回调失效。
+
+        历史重放或换会话时,旧回合迟到的事件(后台工具完成、残留的流 drain)
+        若落到新重放的 DOM 上会撞出重复的 child id;这里推进 epoch 并把流缓冲
+        作废,让晚到的回调在新视图上无操作。移除是异步 prune,重挂前必须
+        等待卸载完成,否则同名子行会 DuplicateIds。
+        """
         self._clear_task_plan_panel_if_mounted()
+        self._discard_stream_deltas()
+        self._start_new_stream_segment()
+        self._stop_working_animation()
+        self._stop_activity_animation()
+        self._ui_epoch += 1
         self.transcript = TranscriptModel()
         self.projector = TranscriptProjector(self.transcript)
         self.task_plan_panel_state = TuiTaskPlanPanelState()
+        await self._remove_output_children_async()
+
+    async def _remove_output_children_async(self) -> None:
+        output = self.query_one("#output")
+        if getattr(self, "is_running", False) and hasattr(output, "remove_children"):
+            await output.remove_children()
+            return
         self._remove_output_children()
 
     def _rerender_transcript(self) -> None:
@@ -1118,7 +1152,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                 if remove is not None:
                     remove()
 
-    def _replay_current_session(self) -> None:
+    async def _replay_current_session(self) -> None:
         """把当前会话历史回放到输出区,并同步挂起的输入。"""
         current_session = self.current_session
         if current_session is None:
@@ -1127,7 +1161,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if rebuild_view is None:
             return
         view = rebuild_view()
-        self._clear_output()
+        await self._clear_output()
         if view.task_plan is not None:
             self._render_task_plan_panel(view.task_plan)
         self.projector = TranscriptProjector(self.transcript)

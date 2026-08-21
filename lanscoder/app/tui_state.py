@@ -25,6 +25,13 @@ class ChildItem:
     status: str | None = None
     body: str = ""
     expanded: bool = False
+    # THINKING: 流式计时与非流式结算标记
+    started_at: float | None = None
+    finished: bool = False
+    duration_seconds: float | None = None
+    # TOOL: 完整调用原文(折叠行只用 label 预览)
+    name: str = ""
+    arguments: str = ""
 
 
 @dataclass(slots=True)
