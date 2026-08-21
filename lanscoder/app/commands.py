@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 from lanscoder.context.inspector import ContextInspectionReport, ContextInspector
 from lanscoder.app.ports import ContextManagerLike
-from lanscoder.context.manager import ContextCompactRequest, ContextCompactResult, ContextWindowTrigger
+from lanscoder.context.manager import ContextCompactRequest, ContextWindowTrigger
 from lanscoder.context.models import SessionView
 from lanscoder.context.runtime_state import SessionRuntimeState
 from lanscoder.context.token_budget import ContextBudget
@@ -105,9 +105,14 @@ class ContextCommandHandler:
                 target_tokens=_manual_target_tokens(budget),
             )
         )
-        if _is_noop_compact(result):
-            return f"Manual compact skipped: {result.programmatic_event.reason} " f"({result.before_tokens} -> {result.after_tokens} tokens)"
-        return f"Manual compact {result.status}: {result.reason} " f"({result.before_tokens} -> {result.after_tokens} tokens)"
+        before, after = result.before_tokens, result.after_tokens
+        if before == after:
+            return f"Not enough messages to compact ({before} tokens)"
+        if result.status == "success":
+            return f"Context compacted: {before} -> {after} tokens"
+        if result.reason == "no_summary":
+            return f"Tool results compacted: {before} -> {after} tokens (LLM summary skipped: recent turns protected)"
+        return f"Manual compact {result.status}: {result.reason} ({before} -> {after} tokens)"
 
 
 def _render_context_report(report: ContextInspectionReport) -> str:
@@ -158,8 +163,3 @@ def _manual_target_tokens(budget: ContextBudget) -> int | None:
     proposed = min(budget.low_watermark - 1, int(budget.input_tokens * 0.6))
     target = max(budget.fixed_tokens + 1, proposed)
     return target if target < budget.input_tokens else None
-
-
-def _is_noop_compact(result: ContextCompactResult) -> bool:
-    """判断一次压缩是否无操作:事件标记 noop 且前后 token 数不变。"""
-    return result.programmatic_event is not None and result.programmatic_event.noop and result.l3_event is None and result.before_tokens == result.after_tokens

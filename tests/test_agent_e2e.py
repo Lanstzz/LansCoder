@@ -428,7 +428,7 @@ def test_manual_compact_command_e2e_writes_l3_handoff_when_only_current_plain_di
 
     assert first.content == "旧回复"
     assert second.content == "第二轮回复"
-    assert "Manual compact success" in result.output
+    assert "Context compacted" in result.output
     store = JsonlSessionStore(tmp_path / ".lanscoder")
     compact = _compact_events(store, "sess_manual_compact")[0]
     assert compact.payload["trigger"] == "manual"
