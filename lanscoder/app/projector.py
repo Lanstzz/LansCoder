@@ -55,20 +55,22 @@ class TranscriptProjector:
             return True
         return False
 
-    def append_thinking(self, chunk: str, *, track_duration: bool = True) -> None:
+    def append_thinking(self, chunk: str, *, track_duration: bool = True, duration_seconds: float | None = None) -> None:
         block = self._ensure_assistant()
         if block.children and block.children[-1].kind == ChildKind.THINKING:
             block.children[-1].body += chunk
             return
-        block.children.append(
-            ChildItem(
-                ChildKind.THINKING,
-                f"t{len(block.children)}",
-                "Thinking…",
-                body=chunk,
-                started_at=time.monotonic() if track_duration else None,
-            )
+        child = ChildItem(
+            ChildKind.THINKING,
+            f"t{len(block.children)}",
+            "Thinking…",
+            body=chunk,
+            started_at=time.monotonic() if track_duration else None,
         )
+        if duration_seconds is not None:
+            child.duration_seconds = duration_seconds
+            child.finished = True
+        block.children.append(child)
 
     def tool_event(
         self,
@@ -135,12 +137,12 @@ class TranscriptProjector:
         self._current = None
 
 
-def _reasoning_from_message(message) -> str:
+def _reasoning_from_message(message) -> tuple[str, float | None]:
     metadata = getattr(message, "metadata", None) or {}
     diagnostics = metadata.get("diagnostics") or {}
     if not isinstance(diagnostics, dict):
-        return ""
-    return str(diagnostics.get("reasoning") or "")
+        return "", None
+    return str(diagnostics.get("reasoning") or ""), diagnostics.get("reasoning_seconds") or None
 
 
 def replay_messages(projector: TranscriptProjector, messages) -> None:
@@ -154,9 +156,11 @@ def replay_messages(projector: TranscriptProjector, messages) -> None:
         elif role == "assistant":
             projector.start_assistant()
             # 投影顺序决定显示顺序:thinking 先于同消息的 tool_call 与文本
-            reasoning = _reasoning_from_message(message)
+            reasoning, reasoning_seconds = _reasoning_from_message(message)
             if reasoning:
-                projector.append_thinking(reasoning, track_duration=False)
+                # track_duration=False 使 started_at 为 None,`_finalize_thinking` 只在
+                # started_at 非 None 时覆盖时长,故预设的 duration_seconds 不被结算覆盖。
+                projector.append_thinking(reasoning, track_duration=False, duration_seconds=reasoning_seconds)
             for part in parts:
                 if part.kind == "text" and getattr(part, "content", None):
                     projector.append_assistant_text(part.content)
