@@ -13,12 +13,13 @@ def build_messages():
 
     def result(cid, name, ok, body):
         return SimpleNamespace(kind="tool_result", id=cid, content=body, metadata={"tool_call_id": cid, "tool_name": name, "ok": ok})
+
     return [
         SimpleNamespace(role="user", parts=[text("帮我改登录")]),
         SimpleNamespace(
             role="assistant",
             parts=[text("先看实现"), call("c1", "read", {"path": "auth.py"})],
-            metadata={"diagnostics": {"reasoning": "核心在 session 校验"}},
+            metadata={"diagnostics": {"reasoning": "核心在 session 校验", "reasoning_seconds": 2.5}},
         ),
         SimpleNamespace(role="tool", parts=[result("c1", "read", True, "ok 200")]),
         SimpleNamespace(role="assistant", parts=[text("改好了")], metadata={}),
@@ -182,13 +183,67 @@ def test_projector_append_thinking_track_duration_false_leaves_no_duration():
     assert child.duration_seconds is None
 
 
-def test_projector_replay_thinking_finished_without_duration():
+def test_projector_replay_thinking_restores_duration_from_metadata():
     model = TranscriptModel()
     p = TranscriptProjector(model)
     replay_messages(p, build_messages())
     thinking = [c for c in model.blocks[1].children if c.kind == ChildKind.THINKING]
     assert thinking and thinking[0].finished is True
-    assert thinking[0].duration_seconds is None
+    assert thinking[0].duration_seconds == 2.5
+
+
+def build_reasoning_messages(*, seconds):
+    from types import SimpleNamespace
+
+    def text(s):
+        return SimpleNamespace(kind="text", content=s, metadata={})
+
+    return [
+        SimpleNamespace(role="user", parts=[text("hi")]),
+        SimpleNamespace(
+            role="assistant",
+            parts=[text("answer")],
+            metadata={"diagnostics": {"reasoning": "replayed", "reasoning_seconds": seconds}},
+        ),
+    ]
+
+
+def test_projector_replay_e2e_restores_reasoning_duration():
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    replay_messages(p, build_reasoning_messages(seconds=12.5))
+    thinking = [c for c in model.blocks[1].children if c.kind == ChildKind.THINKING]
+    assert thinking and thinking[0].finished is True
+    assert thinking[0].duration_seconds == 12.5
+
+
+def test_projector_replay_missing_duration_stays_thought():
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    replay_messages(p, build_reasoning_messages(seconds=None))
+    thinking = [c for c in model.blocks[1].children if c.kind == ChildKind.THINKING]
+    assert thinking and thinking[0].duration_seconds is None
+
+
+def test_projector_replay_consecutive_reasoning_only_messages_merge_once():
+    """相邻 reasoning-only 消息在重放中必须合并成一个子行(与 live 合并语义对位)。"""
+    from types import SimpleNamespace
+
+    def reasoning_only(seconds):
+        return SimpleNamespace(
+            role="assistant",
+            parts=[SimpleNamespace(kind="text", content="", metadata={})],
+            metadata={"diagnostics": {"reasoning": f"r{seconds}", "reasoning_seconds": seconds}},
+        )
+
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    p.start_user("hi")
+    replay_messages(p, [reasoning_only(3.0), reasoning_only(4.0)])
+    p.end_turn()
+    thinking = [c for c in model.blocks[1].children if c.kind == ChildKind.THINKING]
+    assert len(thinking) == 1
+    assert thinking[0].duration_seconds == 3.0  # 首个 reasoning 的秒数胜出
 
 
 def test_projector_replay_tool_keeps_full_arguments_and_result():
