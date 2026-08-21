@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 import re
-import tempfile
 import threading
 import time
 
@@ -3884,12 +3883,16 @@ class ReasoningStreamingProvider(ChatProvider):
         yield ChatStreamEvent(kind="message_completed", response=self.response)
 
 
-def _memory_session() -> AgentSession:
-    store = JsonlSessionStore(tempfile.mkdtemp())
-    return AgentSession.create(store=store, session_id="sess_reasoning_seconds", agents_md="")
+@dataclass
+class SlowCompleteProvider(FakeProvider):
+    def complete(self, request: ChatRequest) -> ChatResponse:
+        time.sleep(0.01)
+        return super().complete(request)
 
 
-def test_streaming_measurement_records_reasoning_seconds() -> None:
+def test_streaming_measurement_records_reasoning_seconds(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_reasoning_seconds", agents_md="")
     response = ChatResponse(
         provider="reasoning-stream",
         model="reasoning-stream-model",
@@ -3897,17 +3900,54 @@ def test_streaming_measurement_records_reasoning_seconds() -> None:
         diagnostics=ProviderDiagnostics(reasoning="think part two"),
     )
     loop = create_agent_loop(
-        session=_memory_session(),
+        session=session,
         provider=ReasoningStreamingProvider(response),
         background_manager=None,
     )
     result = _run_streaming(loop, "你好")
     assert result.diagnostics.reasoning_seconds is not None
     assert result.diagnostics.reasoning_seconds > 0
+    # 钉住「首 reasoning_delta 到首 text_delta」的边界语义：sleep 0.01 后才有 text_delta。
+    assert result.diagnostics.reasoning_seconds < 0.5
 
 
-def test_streaming_without_reasoning_keeps_reasoning_seconds_none() -> None:
+def test_streaming_without_reasoning_keeps_reasoning_seconds_none(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_reasoning_seconds_none", agents_md="")
     response = ChatResponse(provider="r", model="r", content="plain", diagnostics=ProviderDiagnostics())
-    loop = create_agent_loop(session=_memory_session(), provider=ReasoningStreamingProvider(response), background_manager=None)
+    loop = create_agent_loop(session=session, provider=ReasoningStreamingProvider(response), background_manager=None)
     result = _run_streaming(loop, "你好")
+    assert result.diagnostics.reasoning_seconds is None
+
+
+def test_non_streaming_complete_records_reasoning_seconds(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_reasoning_non_stream", agents_md="")
+    provider = SlowCompleteProvider(
+        [
+            ChatResponse(
+                provider="fake",
+                model="fake-model",
+                content="回答",
+                diagnostics=ProviderDiagnostics(reasoning="推理过程"),
+            )
+        ]
+    )
+
+    result = create_agent_loop(session=session, provider=provider)._run_user_turn_sync("问题")
+
+    assert result.diagnostics.reasoning_seconds is not None
+    assert result.diagnostics.reasoning_seconds >= 0
+    assert result.diagnostics.reasoning_seconds < 0.5
+
+
+def test_non_streaming_without_reasoning_keeps_reasoning_seconds_none(tmp_path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    session = AgentSession.create(store=store, session_id="sess_reasoning_non_stream_none", agents_md="")
+    provider = SlowCompleteProvider(
+        [ChatResponse(provider="fake", model="fake-model", content="回答", diagnostics=ProviderDiagnostics())]
+    )
+
+    result = create_agent_loop(session=session, provider=provider)._run_user_turn_sync("问题")
+
     assert result.diagnostics.reasoning_seconds is None
