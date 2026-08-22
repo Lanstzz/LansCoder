@@ -147,8 +147,8 @@ ScrollBarCorner {
 }
 
 .user-message {
-    color: #1c1d21;
-    background: #d8dae0;
+    color: #f8f8f8;
+    background: #373737;
     border-left: solid #ffffff;
 }
 
