@@ -2,40 +2,40 @@ from __future__ import annotations
 
 
 def permission_choice_for_text(text: str, pending) -> str | None:
-    normalized = text.strip().lower().replace(" ", "_")
+    """把用户输入解析为权限选择:只接受数字 1..N(按选项顺序)。
+
+    prewrite review 场景额外接受 `reject: <反馈>` 以驳回并附理由;
+    其余输入一律视为无效,由调用方提示只能输入有效编号。
+    """
     raw = text.strip()
-    if raw.lower().startswith(("reject:", "reject_with_feedback:")):
+    normalized = raw.lower()
+    payload = getattr(pending, "payload", {}) or {}
+    if isinstance(payload.get("prewrite_review"), dict) and normalized.startswith(("reject:", "reject_with_feedback:")):
         return f"reject_with_feedback: {raw.split(':', 1)[1].strip()}"
-    aliases = {
-        "1": "deny",
-        "no": "deny",
-        "deny": "deny",
-        "4": "reject_with_feedback",
-        "reject": "reject_with_feedback",
-        "reject_with_feedback": "reject_with_feedback",
-        "2": "allow_once",
-        "allow_once": "allow_once",
-        "once": "allow_once",
-        "allow": "allow_once",
-        "3": "allow_always_same_scope",
-        "allow_always": "allow_always_same_scope",
-        "always": "allow_always_same_scope",
-        "allow_always_same_scope": "allow_always_same_scope",
-    }
-    if normalized in aliases:
-        return aliases[normalized]
-    for option in getattr(pending, "options", []) or []:
-        if normalized in {str(option.id).lower(), str(option.label).strip().lower().replace(" ", "_")}:
-            return str(option.id)
-    return None
+    if not raw.isdigit():
+        return None
+    index = int(raw) - 1
+    options = list(getattr(pending, "options", []) or [])
+    if index < 0 or index >= len(options):
+        return None
+    return str(getattr(options[index], "id", "") or "")
 
 
 def permission_options_text(pending) -> str:
     options = getattr(pending, "options", []) or []
     if not options:
-        return "请回复权限选择：deny / allow_once / allow_always_same_scope"
-    rendered = ", ".join(f"{option.id} ({option.label})" for option in options)
-    return f"请回复权限选择：{rendered}"
+        return "只能输入许可编号(1/2/3)确认；其他输入无效。"
+    choices: list[str] = []
+    for index, option in enumerate(options, start=1):
+        label = str(getattr(option, "label", "") or getattr(option, "id", "") or "")
+        option_id = str(getattr(option, "id", "") or "")
+        choices.append(f"[{index}] {permission_option_label(label, option_id)}")
+    allowed = "/".join(map(str, range(1, len(options) + 1)))
+    hint = f"只能输入 {allowed}：{'  '.join(choices)}"
+    payload = getattr(pending, "payload", {}) or {}
+    if isinstance(payload.get("prewrite_review"), dict):
+        hint += "；写前审查可输入 reject: <反馈>"
+    return hint
 
 
 def permission_prompt_text(pending) -> str:

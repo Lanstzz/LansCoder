@@ -16,6 +16,11 @@ from lanscoder.app.activity_view import (
     truncate_activity_text,
     turn_metrics_text,
 )
+from lanscoder.app.permission_view import (
+    ask_user_prompt_text,
+    permission_options_text,
+    permission_prompt_text,
+)
 from lanscoder.app.review_view import render_prewrite_review
 from lanscoder.app.topbar_view import (
     PERMISSION_MODE_COLORS,
@@ -672,7 +677,35 @@ class LansCoderViewMixin:
             return
         self._stop_working_animation()
         self._stop_activity_animation()
-        self._show_permission_zone()
+        if getattr(pending, "kind", None) == "permission_confirmation":
+            payload = getattr(pending, "payload", {}) or {}
+            review_payload = payload.get("prewrite_review")
+            if isinstance(review_payload, dict):
+                self._review_expanded_paths.clear()
+                self._write_review_payload(review_payload)
+            self._write_output_block(
+                permission_prompt_text(pending),
+                classes="message permission-message permission-requested",
+            )
+            self._set_activity("waiting · permission")
+            return
+        self._write_output_block(ask_user_prompt_text(pending), classes="message permission-message permission-requested")
+        self._set_activity("waiting · input")
+
+    def _write_permission_hint(self, pending) -> None:
+        """无效权限输入:在输出区补一行提示,不重渲染提示本身。"""
+        self._write_output_block(permission_options_text(pending), classes="message permission-message")
+
+    def _write_output_block(self, text: str, *, classes: str = "message") -> None:
+        output = self.query_one("#output")
+        if hasattr(output, "mount"):
+            was_pinned = self._is_output_pinned_to_bottom(output)
+            output.mount(_plain_static(text, classes=classes))
+            if was_pinned:
+                self._scroll_output_end(output)
+            return
+        if hasattr(output, "write_line"):
+            output.write_line(text)
 
     def _write_review_payload(self, payload: dict[str, object]) -> None:
         rendered = render_prewrite_review(payload, expanded_paths=self._review_expanded_paths)

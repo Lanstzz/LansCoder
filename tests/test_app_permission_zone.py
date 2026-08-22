@@ -1,76 +1,87 @@
 from types import SimpleNamespace
-from unittest.mock import Mock
 
-import pytest
+from lanscoder.app.permission_view import (
+    permission_choice_for_text,
+    permission_options_text,
+)
 
-from lanscoder.app.tui import LansCoderApp, LansCoderTuiConfig
+_PREWRITE_PAYLOAD = {
+    "prewrite_review": {
+        "tool_name": "edit",
+        "files": [
+            {
+                "path": "README.md",
+                "operation": "modify",
+                "diff": "--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new",
+                "added_lines": 1,
+                "removed_lines": 1,
+            }
+        ],
+        "summary": {"added_lines": 1, "removed_lines": 1},
+        "error": None,
+    }
+}
 
 
-class _PendingRunner:
-    def __init__(self, pending):
-        self.last_pending_input = pending
-        self._resumed = []
-
-    async def aresume_with_user_input(self, request_id, answer):
-        self._resumed.append((request_id, answer))
-        return SimpleNamespace(text="done", model="m", provider="p")
-
-    async def achat(self, **kwargs):
-        return SimpleNamespace(text="x", model="m", provider="p")
-
-
-def _pending(kind, *, options=(), payload=None):
+def _pending(options, *, payload=None):
     return SimpleNamespace(
         id="req-1",
-        kind=kind,
-        question="允许执行吗？",
+        kind="permission_confirmation",
+        question="允许吗？",
         options=[SimpleNamespace(id=oid, label=olabel) for oid, olabel in options],
         payload=payload or {},
     )
 
 
-def _make_app(pending):
-    runner = _PendingRunner(pending)
-    app = LansCoderApp(config=LansCoderTuiConfig(), chat_runner=runner, command_handler=Mock())
-    return app, runner
+def test_digits_map_to_options_by_position():
+    pending = _pending([("deny", "Deny"), ("allow_once", "Allow once"), ("allow_always_same_scope", "Allow always")])
+    assert permission_choice_for_text("1", pending) == "deny"
+    assert permission_choice_for_text("2", pending) == "allow_once"
+    assert permission_choice_for_text("3", pending) == "allow_always_same_scope"
 
 
-@pytest.mark.anyio
-@pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_permission_zone_shows_buttons_for_options():
-    pending = _pending("permission_confirmation", options=[("deny", "deny"), ("allow_once", "allow_once")])
-    app, _runner = _make_app(pending)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        zone = _query_zone(app)
-        assert zone is not None and not zone.has_class("hidden")
-        buttons = _zone_buttons(app)
-        assert {b.label for b in buttons} == {"deny", "allow once"}
+def test_number_out_of_range_is_invalid():
+    pending = _pending([("deny", "Deny"), ("allow_once", "Allow once")])
+    assert permission_choice_for_text("3", pending) is None
+    assert permission_choice_for_text("0", pending) is None
+    assert permission_choice_for_text("4", pending) is None
 
 
-@pytest.mark.anyio
-@pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_permission_button_click_submits_choice():
-    pending = _pending("permission_confirmation", options=[("deny", "deny"), ("allow_once", "allow_once")])
-    app, runner = _make_app(pending)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        buttons = _zone_buttons(app)
-        allow = next(b for b in buttons if b.id == "permission-allow_once")
-        allow.press()
-        await pilot.pause()
-        assert runner._resumed == [("req-1", "allow_once")]
+def test_text_aliases_are_rejected():
+    pending = _pending([("deny", "Deny"), ("allow_once", "Allow once"), ("allow_always_same_scope", "Allow always")])
+    for word in ("deny", "allow", "allow once", "always", "no", "reject", "y", "OK"):
+        assert permission_choice_for_text(word, pending) is None
 
 
-def _query_zone(app):
-    try:
-        return app.query_one("#permission-zone")
-    except Exception:
-        return None
+def test_non_numeric_and_surrounding_whitespace():
+    pending = _pending([("deny", "Deny"), ("allow_once", "Allow once")])
+    assert permission_choice_for_text(" 2 ", pending) == "allow_once"
+    assert permission_choice_for_text("2.0", pending) is None
+    assert permission_choice_for_text("", pending) is None
 
 
-def _zone_buttons(app):
-    try:
-        return list(app.query("#permission-zone Button"))
-    except Exception:
-        return []
+def test_reject_feedback_only_for_prewrite_review():
+    pending = _pending([("deny", "Deny"), ("allow_once", "Apply reviewed change")], payload=_PREWRITE_PAYLOAD)
+    assert permission_choice_for_text("reject: 请保留标题", pending) == "reject_with_feedback: 请保留标题"
+    assert permission_choice_for_text("reject_with_feedback: x", pending) == "reject_with_feedback: x"
+
+
+def test_reject_feedback_without_prewrite_is_invalid():
+    pending = _pending([("deny", "Deny"), ("allow_once", "Allow once")])
+    assert permission_choice_for_text("reject: 别改", pending) is None
+
+
+def test_options_text_lists_strict_numbers():
+    pending = _pending([("deny", "Deny"), ("allow_once", "Allow once"), ("allow_always_same_scope", "Allow always")])
+    text = permission_options_text(pending)
+    assert text.startswith("只能输入 1/2/3")
+    assert "[1] deny" in text
+    assert "[2] allow once" in text
+    assert "[3] allow always" in text
+
+
+def test_options_text_mentions_reject_for_prewrite():
+    pending = _pending([("deny", "Deny"), ("allow_once", "Apply reviewed change")], payload=_PREWRITE_PAYLOAD)
+    hint = permission_options_text(pending)
+    assert hint.startswith("只能输入 1/2")
+    assert "reject: <反馈>" in hint
