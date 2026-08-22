@@ -3756,21 +3756,20 @@ async def test_lanscoder_app_recalls_input_history_with_arrow_keys() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_lanscoder_app_displays_pending_permission_prompt_in_zone() -> None:
+async def test_lanscoder_app_displays_pending_permission_prompt_inline() -> None:
     runner = FakePermissionWaitingRunner()
     app = LansCoderApp(chat_runner=runner)
 
     async with app.run_test() as pilot:
         app._write_chat_response(ChatResponse(provider="fake", model="fake", content="等待权限确认。"))
         await pilot.pause()
-        zone = app.query_one("#permission-zone")
-        assert not zone.has_class("hidden")
-        rendered = str(zone.render())
+        # 点击区已删除:权限提示作为消息块写进输出区
+        rendered = "\n".join(str(w.render()) for w in app.query("#output Static"))
         assert "Review before writing · 1 file · +1 -1" in rendered
         assert "-old" in rendered
         assert "+new" in rendered
-        buttons = {button.id for button in zone.query("Button")}
-        assert buttons == {"permission-deny", "permission-allow_once", "permission-allow_always_same_scope"}
+        assert "permission requested" in rendered
+        assert "[1] deny  [2] allow once  [3] allow always" in rendered
         assert app._activity_text == "waiting · permission"
         assert [block.kind for block in app.transcript.blocks] == [BlockKind.ASSISTANT]
 
@@ -3892,12 +3891,30 @@ async def test_lanscoder_app_routes_permission_answer_to_resume() -> None:
 
     async with app.run_test() as pilot:
         await pilot.click("#input")
-        await pilot.press(*"allow once")
+        await pilot.press(*"2")
         await pilot.press("enter")
         await pilot.pause()
 
     assert runner.inputs == []
     assert runner.resumes == [("perm_write", "allow_once")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_lanscoder_app_rejects_permission_text_alias_with_hint() -> None:
+    runner = FakePermissionResumeRunner()
+    app = LansCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#input")
+        await pilot.press(*"allow once")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # 严格 1/2/3:文字别名不识别,只写提示行,不恢复回合
+        assert runner.resumes == []
+        rendered = "\n".join(str(w.render()) for w in app.query("#output Static"))
+        assert "只能输入 1/2" in rendered
 
 
 @pytest.mark.anyio
@@ -3921,6 +3938,21 @@ async def test_lanscoder_app_routes_ask_user_answer_to_resume() -> None:
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_lanscoder_app_routes_permission_rejection_feedback_to_resume() -> None:
     runner = FakePermissionResumeRunner()
+    # reject: 反馈 仅在 prewrite_review 场景生效
+    runner.last_pending_input.payload["prewrite_review"] = {
+        "tool_name": "edit",
+        "files": [
+            {
+                "path": "README.md",
+                "operation": "modify",
+                "diff": "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new",
+                "added_lines": 1,
+                "removed_lines": 1,
+            }
+        ],
+        "summary": {"added_lines": 1, "removed_lines": 1},
+        "error": None,
+    }
     app = LansCoderApp(chat_runner=runner)
 
     async with app.run_test() as pilot:
@@ -3954,7 +3986,7 @@ async def test_lanscoder_app_permission_resume_keeps_same_active_turn_metrics(
         assert started_at > 0
 
         app._turn_tool_count = 2
-        await pilot.press(*"allow once")
+        await pilot.press(*"2")
         await pilot.press("enter")
         await pilot.pause()
 
@@ -4168,60 +4200,22 @@ async def test_stream_finalization_repeated_close_does_not_render_twice_under_lo
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_ask_user_button_click_submits_option_label() -> None:
+async def test_ask_user_prompt_written_inline_in_output() -> None:
     runner = FakeAskUserResumeRunner()
     app = LansCoderApp(chat_runner=runner)
 
     async with app.run_test() as pilot:
         app._write_pending_input()
         await pilot.pause()
-        zone = app.query_one("#permission-zone")
-        assert not zone.has_class("hidden")
-        buttons = {button.id: button for button in zone.query("Button")}
-        assert set(buttons) == {"permission-1", "permission-2"}
-        # ask_user 按钮提交选项 label(与键入路径 "2"→"prod" 一致),而非原始 id
-        await pilot.click(buttons["permission-2"])
-        await pilot.pause()
-
-    assert runner.resumes == [("ask_env", "prod")]
+        rendered = "\n".join(str(w.render()) for w in app.query("#output Static"))
+        assert "Which environment?" in rendered
+        assert "[1] dev" in rendered
+        assert "[2] prod" in rendered
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_permission_zone_removes_stale_buttons_on_rerender() -> None:
-    runner = FakePermissionWaitingRunner()
-    app = LansCoderApp(chat_runner=runner)
-
-    async with app.run_test() as pilot:
-        app._write_pending_input()
-        await pilot.pause()
-        zone = app.query_one("#permission-zone")
-        assert {button.id for button in zone.query("Button")} == {
-            "permission-deny",
-            "permission-allow_once",
-            "permission-allow_always_same_scope",
-        }
-        runner.last_pending_input = UserInputRequest(
-            id="perm_write2",
-            kind="permission_confirmation",
-            question="允许吗？",
-            options=[
-                UserInputOption(id="deny", label="Deny"),
-                UserInputOption(id="allow_once", label="Allow once"),
-            ],
-        )
-        app._write_pending_input()
-        await pilot.pause()
-
-        assert {button.id for button in zone.query("Button")} == {
-            "permission-deny",
-            "permission-allow_once",
-        }
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_permission_invalid_typed_answer_reshows_zone_without_writing_block() -> None:
+async def test_permission_invalid_typed_answer_writes_hint_without_resuming() -> None:
     runner = FakePermissionResumeRunner()
     app = LansCoderApp(chat_runner=runner)
 
@@ -4230,12 +4224,12 @@ async def test_permission_invalid_typed_answer_reshows_zone_without_writing_bloc
         await pilot.press(*"no such option")
         await pilot.press("enter")
         await pilot.pause()
-        zone = app.query_one("#permission-zone")
-        assert not zone.has_class("hidden")
         assert runner.resumes == []
         assert app._chat_busy is False
-        # 非法答案只重新展示 zone 提示,不写入新的 transcript 块
+        # 非法答案只在输出区补一条提示,不写入新的 transcript 块
         assert [block.kind for block in app.transcript.blocks] == [BlockKind.USER]
+        rendered = "\n".join(str(w.render()) for w in app.query("#output Static"))
+        assert "只能输入 1/2" in rendered
 
 
 @pytest.mark.anyio
@@ -4532,9 +4526,7 @@ async def test_stale_tool_event_after_recall_epoch_is_dropped() -> None:
     async with app.run_test() as pilot:
         app._dismiss_welcome()
         previous_tool_handler = app._install_tool_event_handler()
-        runner.tool_event_handler(
-            ToolExecutionEvent(kind="started", tool_call=ToolCall(id="call_x", name="echo", arguments={}))
-        )
+        runner.tool_event_handler(ToolExecutionEvent(kind="started", tool_call=ToolCall(id="call_x", name="echo", arguments={})))
         await pilot.pause()
         assert any(c.key == "call_x" for b in app.transcript.blocks for c in b.children)
 
@@ -4542,9 +4534,7 @@ async def test_stale_tool_event_after_recall_epoch_is_dropped() -> None:
         await pilot.pause()
         tools_after_replay = [c.key for b in app.transcript.blocks for c in b.children if c.kind == ChildKind.TOOL]
 
-        runner.tool_event_handler(
-            ToolExecutionEvent(kind="started", tool_call=ToolCall(id="call_stale", name="echo", arguments={}))
-        )
+        runner.tool_event_handler(ToolExecutionEvent(kind="started", tool_call=ToolCall(id="call_stale", name="echo", arguments={})))
         await pilot.pause()
         tools_final = [c.key for b in app.transcript.blocks for c in b.children if c.kind == ChildKind.TOOL]
         assert "call_stale" not in tools_final
@@ -4643,12 +4633,12 @@ async def test_interrupt_chat_turn_settles_running_tool_child_to_error() -> None
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_resume_after_permission_pending_rearms_permission_zone() -> None:
-    """重放当前会话后,挂起的权限请求重新武装按钮区,点击仍能提交。
+async def test_resume_after_permission_pending_rewrites_prompt_inline() -> None:
+    """重放当前会话后,挂起的权限请求重新写入输出区提示,数字输入仍能提交。
 
-    `_replay_current_session` 的收尾路径是 `_write_pending_input()` →
-    `_show_permission_zone()`;此处验证挂起的 permission_confirmation 跨
-    重放后按钮区出现且按钮点击走正常 resume 协议。
+    `_replay_current_session` 的收尾路径是 `_write_pending_input()` → 把
+    permission 提示作为消息块写进输出区;此处验证重放后提示在输出区出现且
+    键入 "2" 走正常 resume 协议。
     """
     runner = FakePermissionResumeRunner()
     runner.sync_pending_input_from_current_session = lambda: runner.last_pending_input
@@ -4658,13 +4648,14 @@ async def test_resume_after_permission_pending_rearms_permission_zone() -> None:
         await app._replay_current_session()
         await pilot.pause()
 
-        zone = app.query_one("#permission-zone")
-        assert not zone.has_class("hidden")
-        buttons = {button.id: button for button in zone.query("Button")}
-        assert set(buttons) == {"permission-deny", "permission-allow_once"}
+        rendered = "\n".join(str(w.render()) for w in app.query("#output Static"))
+        assert "permission requested" in rendered
+        assert "[1] deny  [2] allow once" in rendered
         assert app._activity_text == "waiting · permission"
 
-        await pilot.click(buttons["permission-allow_once"])
+        await pilot.click("#input")
+        await pilot.press(*"2")
+        await pilot.press("enter")
         await pilot.pause()
 
     assert runner.inputs == []
