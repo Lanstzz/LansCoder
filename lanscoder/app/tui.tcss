@@ -1,7 +1,9 @@
 Screen {
     layout: vertical;
     background: #0f1014;
-    color: #cfd1d6;
+    color: #d1d5db;
+    link-color: #4f8cff;
+    link-color-hover: #7db6ff;
     overflow: hidden;
 }
 
@@ -34,7 +36,7 @@ ScrollBarCorner {
     padding: 0 2;
     background: #0f1014;
     color: #6e6d72;
-    border-bottom: solid #303238;
+    border-bottom: solid #232830;
     text-style: none;
 }
 
@@ -53,7 +55,7 @@ ScrollBarCorner {
     margin: 0;
     padding: 0;
     background: #0f1014;
-    color: #cfd1d6;
+    color: #d1d5db;
 }
 
 .composer {
@@ -75,36 +77,36 @@ ScrollBarCorner {
     padding: 0 1;
     background: #0f1014;
     background-tint: transparent;
-    color: #808185;
+    color: #8a93a6;
     border: none;
 }
 
 #input:focus {
     background: #0f1014;
     background-tint: transparent;
-    color: #cfd1d6;
+    color: #d1d5db;
     border: none;
 }
 
 #input > .input--cursor {
-    background: #cfd1d6;
+    background: #d1d5db;
     color: #0f1014;
     text-style: none;
 }
 
 #input > .input--selection {
     background: #0f1014;
-    color: #cfd1d6;
+    color: #d1d5db;
 }
 
 #input > .text-area--placeholder {
-    color: #808185;
+    color: #8a93a6;
 }
 
 .activity-line {
     height: 1;
     margin: 0 3;
-    color: #2b5fd9;
+    color: #66c4d8;
 }
 
 .task-plan-panel {
@@ -112,7 +114,7 @@ ScrollBarCorner {
     max-height: 8;
     margin: 0 3 1 3;
     padding: 0 1;
-    color: #cfd1d6;
+    color: #d1d5db;
     background: #0f1014;
     border-left: solid #4f8cff;
 }
@@ -132,18 +134,18 @@ ScrollBarCorner {
 .command-message,
 .reasoning-message,
 .tool-message {
-    color: #808185;
+    color: #8a93a6;
     background: #0f1014;
-    border-left: solid #666769;
+    border-left: solid #4a5365;
 }
 
 .tool-running,
 .tool-done,
 .tool-failed,
 .tool-denied {
-    color: #808185;
+    color: #8a93a6;
     background: #0f1014;
-    border-left: solid #666769;
+    border-left: solid #4a5365;
 }
 
 .user-message {
@@ -153,7 +155,7 @@ ScrollBarCorner {
 }
 
 .assistant-message {
-    color: #cfd1d6;
+    color: #d1d5db;
     background: #0f1014;
     border-left: solid #4f8cff;
 }
@@ -162,27 +164,55 @@ ScrollBarCorner {
     margin: 0;
 }
 
-/* 助手消息第一段是标签行（LansCoder），染成品牌蓝，正文段落保持默认色。 */
-.assistant-message MarkdownParagraph:first-of-type {
+/* 助手消息第一段是标签行（LansCoder），染成品牌蓝，正文段落保持默认色。
+   必须用直系子选择器：`:first-of-type` 会误中每个列表项自己的首个段落。 */
+.assistant-message > MarkdownParagraph:first-of-type {
     color: #4f8cff;
 }
 
+/* markdown 内建色覆盖：标题/行内代码/代码块/引用/圆点/表格统一进品牌蓝-青灰系 */
+.assistant-message MarkdownH1 { color: #6198ff; content-align: left top; }
+.assistant-message MarkdownH2 { color: #72a3ff; }
+.assistant-message MarkdownH3 { color: #84afff; }
+.assistant-message MarkdownH4,
+.assistant-message MarkdownH5,
+.assistant-message MarkdownH6 { color: #95baff; }
+.assistant-message .code_inline {
+    color: #e2e8f0;
+    background: #4f8cff 15%;
+}
+.assistant-message MarkdownFence {
+    color: #cbd5e1;
+    background: #151820;
+}
+.assistant-message MarkdownBlockQuote {
+    color: #94a3b8;
+    border-left: outer #4f8cff 40%;
+}
+.assistant-message MarkdownBullet { color: #4f8cff 60%; }
+.assistant-message MarkdownBulletList Vertical,
+.assistant-message MarkdownOrderedList Vertical { color: #d1d5db; }
+.assistant-message MarkdownHorizontalRule { border-bottom: solid #4f8cff 60%; }
+.assistant-message MarkdownTableContent { keyline: thin #2a3340; }
+.assistant-message MarkdownTableContent .cell { color: #cbd5e1; }
+.assistant-message MarkdownTableContent .header { color: #e2e8f0; }
+
 .reasoning-message {
-    color: #2b5fd9;
+    color: #66c4d8;
     border-left: solid #4f8cff;
 }
 
 .permission-message,
 .permission-requested {
-    color: #b28443;
+    color: #FF4444;
     background: #0f1014;
-    border-left: solid #b28443;
+    border-left: solid #FF4444;
 }
 
 .error-message {
-    color: #c85f5f;
+    color: #e57378;
     background: #0f1014;
-    border-left: solid #c85f5f;
+    border-left: solid #e57378;
 }
 
 .streaming {
@@ -193,7 +223,7 @@ ScrollBarCorner {
     width: 100%;
     height: 1;
     margin: 0 0 1 3;
-    color: #808185;
+    color: #8a93a6;
 }
 
 .child-row.expanded {
@@ -216,8 +246,8 @@ ScrollBarCorner {
     margin: 0 3 0 3;
     padding: 0 1;
     background: #0f1014;
-    color: #808185;
-    border-top: solid #303238;
+    color: #8a93a6;
+    border-top: solid #232830;
 }
 #subagent-panel.hidden {
     display: none;
@@ -225,10 +255,10 @@ ScrollBarCorner {
 #subagent-panel Static {
     width: 100%;
     height: 1;
-    color: #808185;
+    color: #8a93a6;
 }
 #subagent-panel Static.selected {
-    background: #2b5fd9;
+    background: #66c4d8;
     color: #ffffff;
     text-style: bold;
 }
