@@ -5086,3 +5086,82 @@ async def test_live_stream_thinking_after_tool_mounts_below_prior_text(monkeypat
     assert "child-thinking" in str(thought_row.classes)
     assert first_markdown.updates[-1] == "LansCoder:\n\n我先看看。"
     assert second_markdown.updates[-1] == "LansCoder:\n\n看完了。"
+
+
+class _FakeInput:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def clear(self) -> None:
+        pass
+
+
+@pytest.mark.anyio
+async def test_lanscoder_app_force_scrolls_to_bottom_after_normal_submit(monkeypatch) -> None:
+    output = FakeOutput()
+    output.scroll_y = 1
+    output.max_scroll_y = 10
+    app = LansCoderApp()
+    app._picker = None
+    monkeypatch.setattr(app, "query_one", lambda *args, **kwargs: _FakeInput("你好") if args[0] == "#input" else output)
+    submitted: list[str] = []
+    monkeypatch.setattr(app, "_submit_chat_text", lambda text, attachments=None: submitted.append(text))
+
+    await app._submit_composer()
+
+    assert submitted == ["你好"]
+    assert output.scroll_end_calls >= 1
+
+
+@pytest.mark.anyio
+async def test_lanscoder_app_force_scrolls_to_bottom_after_slash_command(monkeypatch) -> None:
+    class _Handler:
+        class Result:
+            handled = True
+            output = "done"
+            action = None
+
+        def handle(self, text: str):
+            return self.Result()
+
+    output = FakeOutput()
+    output.scroll_y = 1
+    output.max_scroll_y = 10
+    app = LansCoderApp()
+    app._picker = None
+    app.command_handler = _Handler()
+    monkeypatch.setattr(app, "query_one", lambda *args, **kwargs: _FakeInput("/foo") if args[0] == "#input" else output)
+
+    async def _noop_action(action=None, output=""):
+        return None
+
+    monkeypatch.setattr(app, "_handle_command_action", _noop_action)
+    monkeypatch.setattr(app, "_refresh_session_subtitle", lambda: None)
+
+    await app._submit_composer()
+
+    assert output.scroll_end_calls >= 1
+
+
+@pytest.mark.anyio
+async def test_lanscoder_app_force_scrolls_to_bottom_after_unknown_command(monkeypatch) -> None:
+    class _Handler:
+        class Result:
+            handled = False
+            output = ""
+            action = None
+
+        def handle(self, text: str):
+            return self.Result()
+
+    output = FakeOutput()
+    output.scroll_y = 1
+    output.max_scroll_y = 10
+    app = LansCoderApp()
+    app._picker = None
+    app.command_handler = _Handler()
+    monkeypatch.setattr(app, "query_one", lambda *args, **kwargs: _FakeInput("/nope") if args[0] == "#input" else output)
+
+    await app._submit_composer()
+
+    assert output.scroll_end_calls >= 1

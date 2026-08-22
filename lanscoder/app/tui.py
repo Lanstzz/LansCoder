@@ -457,6 +457,9 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if attachment_chips:
             user_text = f"{user_text}\n{attachment_chips}"
         self._ui_line(BlockKind.USER, user_text)
+        # 用户发送后强制回到底部:普通消息、slash 命令、未知命令都走这里,
+        # 不像 _append_block 只在已贴底时跟随。
+        self._scroll_output_end(self.query_one("#output"))
 
         if text.startswith("/"):
             if self.command_handler is None:
@@ -472,8 +475,10 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                 self._ui_line(BlockKind.COMMAND, result.output)
                 await self._handle_command_action(result.action, output=result.output)
                 self._refresh_session_subtitle()
+                self._scroll_output_end(self.query_one("#output"))
                 return
             self._ui_line(BlockKind.ERROR, f"Unknown command: {text}")
+            self._scroll_output_end(self.query_one("#output"))
             return
 
         self._staged_attachments.clear()
