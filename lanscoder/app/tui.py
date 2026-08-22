@@ -117,6 +117,9 @@ class _ActiveChatTurn:
     # 回合开始时刻块末位子行是否 THINKING:为真则本回合首条 reasoning 会合并
     # 进上一行(文本 live/replay 已并入),时长归该行首条 reasoning。
     started_last_child_was_thinking: bool = False
+    # 已被 reconcile 消费的 reasoning 条目数:权限暂停/恢复的同一回合跨段累计,
+    # 恢复段只配对新条目,避免拿全量条目去顶/物化出重复 thinking 行。
+    reasonings_consumed: int = 0
 
 
 class LansCoderApp(LansCoderViewMixin, App[None]):
@@ -660,12 +663,17 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         return token
 
     def _resume_active_chat_turn(self) -> int:
-        """为挂起回合分配新 token 继续,无活跃回合时新建。"""
+        """为挂起回合分配新 token 继续,无活跃回合时新建。
+
+        恢复段开启新的 thinking 基线(挂起回复的 USER 块之后会新建 assistant
+        块),消费计数保留——同一回合的 reasoning 条目跨段继续累计。
+        """
         active_turn = self._active_chat_turn
         if active_turn is not None:
             token = self._next_chat_turn_token()
             active_turn.token = token
             self._preserve_turn_metrics()
+            active_turn.started_thinking_count, active_turn.started_last_child_was_thinking = self._capture_turn_start_baseline()
             return token
         return self._begin_active_chat_turn()
 
@@ -711,12 +719,16 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if not entries:
             return
         turn = self._active_chat_turn
+        # 同一回合跨权限暂停/恢复累计条目;已消费的(请求段配对过的)不再对恢复段配对
+        pending = entries[turn.reasonings_consumed :] if turn is not None else entries
+        if not pending:
+            return
         block = self.transcript.last_block()
         thinking = [c for c in (block.children if block else []) if c.kind == ChildKind.THINKING]
         after_baseline = thinking[turn.started_thinking_count :] if turn else thinking
         idx = 0
         last_was_thinking = turn.started_last_child_was_thinking if turn else bool(block and block.children and block.children[-1].kind == ChildKind.THINKING)
-        for reasoning, seconds, ended_with_tool in entries:
+        for reasoning, seconds, ended_with_tool in pending:
             if last_was_thinking:
                 # 本条目 reasoning 已并入上一行(其文本),时长归该行首条 reasoning;刷新可在外圈做
                 last_was_thinking = not ended_with_tool
@@ -748,6 +760,8 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
             block_index = len(self.transcript.blocks) - 1
             self._refresh_child_row(block_index, current_child)
             last_was_thinking = not ended_with_tool
+        if turn is not None:
+            turn.reasonings_consumed += len(pending)
 
     def _handle_escape_interrupt(self) -> bool:
         """Esc 双重打断窗口:第一次提示,窗口内再按则中断当前回合。"""
