@@ -15,6 +15,7 @@ class BlockKind(StrEnum):
 class ChildKind(StrEnum):
     THINKING = "thinking"
     TOOL = "tool"
+    TEXT_RUN = "text_run"
 
 
 @dataclass(slots=True)

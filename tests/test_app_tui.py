@@ -116,6 +116,20 @@ def _static_output_text(app: LansCoderApp) -> str:
     return "\n".join(part for part in [static_text, markdown_text] if part)
 
 
+def _markdown_widget_text(widget) -> str:
+    source = str(getattr(widget, "source", "") or "")
+    if source:
+        return source
+    return "\n".join(getattr(widget, "updates", []) or [])
+
+
+def _child_row_text(widget) -> str:
+    content = str(getattr(widget, "content", "") or "")
+    if content:
+        return content
+    return str(getattr(widget, "renderable", ""))
+
+
 class FakeMarkdownUpdateResult:
     def __init__(self, exception: BaseException | None) -> None:
         self._exception = exception
@@ -2308,6 +2322,7 @@ async def test_stream_segments_on_both_sides_of_tool_become_selectable() -> None
         await app.wait_for_stream_finalization(first)
         assert first.allow_select is True
         assert first._markdown == "LansCoder:\n\nbefore tool"
+        app.projector.tool_event("call_t", "grep", "started")
 
         app._append_stream_text("after tool")
         app._stream_text_started = True
@@ -4055,6 +4070,7 @@ async def test_tool_split_keeps_tail_buffer_without_duplicating_pre_tool_text() 
         app._close_stream_segment_for_tool()
         await app.wait_for_stream_finalization(first)
         assert first._markdown == "LansCoder:\n\nbefore the tool"
+        app.projector.tool_event("call_t", "grep", "started")
 
         app._stream_text_started = True
         app._live_tool_events_seen = True
@@ -4401,7 +4417,7 @@ async def test_live_turn_tool_row_before_text_lands_above_markdown() -> None:
 
         output = app.query_one("#output")
         mounted_types = [type(widget).__name__ for widget in output.children]
-        assert mounted_types == ["ChildRow", "LansCoderMarkdown"]
+        assert mounted_types == ["ChildRow"]
         tool_row = app.query_one("#child-0-call_echo", ChildRow)
         assert "[>] tool echo" in str(tool_row.content)
         assert tool_row.size.height >= 1
@@ -4950,3 +4966,123 @@ def test_background_notification_ui_text_full_matrix() -> None:
     assert background_notification_ui_text(label="r", tool_name="delegate", status="failed", error=None) == "❌ 子agent [r] 失败: 未知错误"
     assert background_notification_ui_text(label="r", tool_name="delegate", status="cancelled", error=None) == "⚠️ 子agent [r] cancelled"
     assert background_notification_ui_text(label="r", tool_name="delegate", status="", error=None) == "⚠️ 子agent [r]"
+
+
+def _two_assistant_turn_messages() -> list:
+    from types import SimpleNamespace
+
+    def text(s):
+        return SimpleNamespace(kind="text", content=s, metadata={})
+
+    def call(cid, name, args):
+        return SimpleNamespace(kind="tool_call", content=None, id=cid, metadata={"tool_call_id": cid, "tool_name": name, "arguments": args})
+
+    def result(cid, name, ok, body):
+        return SimpleNamespace(kind="tool_result", id=cid, content=body, metadata={"tool_call_id": cid, "tool_name": name, "ok": ok})
+
+    return [
+        SimpleNamespace(role="user", parts=[text("帮我改登录")]),
+        SimpleNamespace(
+            role="assistant",
+            parts=[text("先看实现"), call("c1", "read", {"path": "auth.py"})],
+            metadata={"diagnostics": {"reasoning": "核心在 session 校验"}},
+        ),
+        SimpleNamespace(role="tool", parts=[result("c1", "read", True, "ok 200")]),
+        SimpleNamespace(
+            role="assistant",
+            parts=[text("改好了")],
+            metadata={"diagnostics": {"reasoning": "再核一遍"}},
+        ),
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_render_block_into_renders_canonical_run_order() -> None:
+    """render_block_into 按 children 时间序渲染:thinking 行、文本段、工具行交错。"""
+    app = LansCoderApp()
+
+    async with app.run_test() as pilot:
+        app._dismiss_welcome()
+        app.projector.start_user("hi")
+        app.projector.append_thinking("first thought")
+        app.projector.append_assistant_text("text one")
+        app.projector.tool_event("c1", "read", "started", arguments={"path": "a.py"})
+        app.projector.append_thinking("second thought")
+        app.projector.append_assistant_text("text two")
+        app.projector.end_turn()
+        app.render_block_into(app.transcript.blocks[1], 1)
+        await pilot.pause()
+
+        kinds = [type(w).__name__ for w in app.query_one("#output").children]
+        assert kinds == ["ChildRow", "LansCoderMarkdown", "ChildRow", "ChildRow", "LansCoderMarkdown"]
+        widgets = list(app.query_one("#output").children)
+        markdown_indexes = [i for i, kind in enumerate(kinds) if kind == "LansCoderMarkdown"]
+        assert len(markdown_indexes) == 2
+        first_run, second_run = (_markdown_widget_text(widgets[i]) for i in markdown_indexes)
+        assert "text one" in first_run
+        assert "text two" in second_run
+        assert "text two" not in first_run
+        assert "text one" not in second_run
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_replay_renders_turn_text_runs_in_canonical_order() -> None:
+    """/resume 重放一个 turn 的两次模型调用:文本段按工具边界分开,第二次 thinking 在工具之下。"""
+    view = SessionView(session_id="sess_runs", messages=_two_assistant_turn_messages())
+    session = FakeSession()
+    session.rebuild_view = lambda: view
+    app = LansCoderApp(current_session=session)
+
+    async with app.run_test() as pilot:
+        app._dismiss_welcome()
+        await app._replay_current_session()
+        await pilot.pause()
+
+        kinds = [type(w).__name__ for w in app.query_one("#output").children]
+        assert kinds == ["Static", "ChildRow", "LansCoderMarkdown", "ChildRow", "ChildRow", "LansCoderMarkdown"]
+        widgets = list(app.query_one("#output").children)
+        markdown_indexes = [i for i, kind in enumerate(kinds) if kind == "LansCoderMarkdown"]
+        assert len(markdown_indexes) == 2
+        first_run, second_run = (_markdown_widget_text(widgets[i]) for i in markdown_indexes)
+        assert "先看实现" in first_run
+        assert "改好了" in second_run
+        assert "先看实现" not in second_run
+        assert "改好了" not in first_run
+        tool_at = next(i for i, kind in enumerate(kinds) if kind == "ChildRow" and "[>] tool read" in _child_row_text(widgets[i]))
+        second_thought_at = next(i for i, kind in enumerate(kinds) if kind == "ChildRow" and "Thought" in _child_row_text(widgets[i]) and i > tool_at)
+        assert tool_at < second_thought_at < markdown_indexes[1]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_live_stream_thinking_after_tool_mounts_below_prior_text(monkeypatch) -> None:
+    """live 流中,工具之后到达的 thinking 行必须挂在工具之下,而非旧文本段之上。"""
+    runner = FakeToolEventAsyncChatRunner()
+    runner.stream_event_handler = lambda event: None
+    output = FakeOutput()
+    app = LansCoderApp(chat_runner=runner)
+    monkeypatch.setattr(app, "query_one", lambda *args, **kwargs: output)
+
+    previous_stream_handler = app._install_stream_event_handler()
+    previous_tool_handler = app._install_tool_event_handler()
+    runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="我先看看。"))
+    runner.tool_event_handler(
+        ToolExecutionEvent(
+            kind="started",
+            tool_call=ToolCall(id="call_echo", name="echo", arguments={}),
+        )
+    )
+    runner.stream_event_handler(ChatStreamEvent(kind="reasoning_delta", text="再验证一下"))
+    runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="看完了。"))
+    app._restore_tool_event_handler(previous_tool_handler)
+    app._restore_stream_event_handler(previous_stream_handler)
+
+    mounted_types = [type(w).__name__ for w in output.mounted]
+    assert mounted_types == ["LansCoderMarkdown", "ChildRow", "ChildRow", "LansCoderMarkdown"]
+    first_markdown, tool_row, thought_row, second_markdown = output.mounted
+    assert "tool echo" in str(tool_row.content)
+    assert "child-thinking" in str(thought_row.classes)
+    assert first_markdown.updates[-1] == "LansCoder:\n\n我先看看。"
+    assert second_markdown.updates[-1] == "LansCoder:\n\n看完了。"

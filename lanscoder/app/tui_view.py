@@ -312,16 +312,18 @@ class LansCoderViewMixin:
         output = self.query_one("#output")
         was_pinned = self._is_output_pinned_to_bottom(output)
         if block.kind == BlockKind.ASSISTANT:
-            # 块级顺序:[thinking 子行, 正文 markdown, tool 子行]
-            # 模型无法表达 text-tool-text 交错,重建时按此稳定约定;live 流走到达顺序。
-            thinking = [c for c in block.children if c.kind == ChildKind.THINKING]
-            tools = [c for c in block.children if c.kind == ChildKind.TOOL]
-            for child in thinking:
-                self._mount_child_row(output, block_index, child)
-            markdown = LansCoderMarkdown(entry_markdown_text_block(block), classes="message assistant-message")
-            output.mount(markdown)
-            for child in tools:
-                self._mount_child_row(output, block_index, child)
+            # 块级顺序 = children 时间序:[thinking 行, 文本段 markdown, tool 行] 交错。
+            # 文本段是 TEXT_RUN 子项,live 流与 replay 重建同序,故同一渲染器结果一致。
+            for child in block.children:
+                if child.kind == ChildKind.TEXT_RUN:
+                    output.mount(
+                        LansCoderMarkdown(
+                            f"LansCoder:\n\n{child.body}",
+                            classes="message assistant-message",
+                        )
+                    )
+                else:
+                    self._mount_child_row(output, block_index, child)
             if was_pinned:
                 self._scroll_output_end(output)
             return
@@ -342,33 +344,33 @@ class LansCoderViewMixin:
         target = next((w for w in getattr(output, "children", ()) if getattr(w, "id", None) == row_id), None)
         return target if isinstance(target, ChildRow) else None
 
-    def _mount_block_children(self, output, block_index: int, block: TranscriptBlock) -> None:
-        """Mount every not-yet-mounted child row of a block, in model order."""
-        for child in block.children:
-            if self._mounted_child_row(output, block_index, child.key) is None:
-                self._mount_child_row(output, block_index, child)
-
     def _ensure_stream_block_rows(self, block_index: int, block: TranscriptBlock) -> None:
-        """挂载 live assistant 块:子行与文本框都按到达顺序追加。
+        """增量挂载 live assistant 块:只处理上次挂载点之后的 children。
 
-        首个事件先挂全部子行再挂流式 markdown(子行在文本上方);文本框已存在
-        时新子行直接追加在它之后——thinking 先于正文、工具后于其前的正文,
-        保持事件时间序。
+        行与文本段都按 children 时间序追加,thinking 行位于其文本段之前、
+        工具行在其后,时间序即 DOM 序。每个 TEXT_RUN 一个流式 markdown
+        widget;walked 到的最后一个 TEXT_RUN 是当前开启的文本段,其 widget
+        即流式写入目标 ``_stream_text_widget``。
         """
         if block.kind != BlockKind.ASSISTANT:
             return
         output = self._query_mounted("#output")
         if output is None or not hasattr(output, "mount"):
             return
-        if self._stream_text_widget is None:
-            self._mount_block_children(output, block_index, block)
-            self._stream_text_widget = LansCoderMarkdown(
-                classes="message assistant-message streaming",
-                selectable=False,
-            )
-            output.mount(self._stream_text_widget)
-        else:
-            self._mount_block_children(output, block_index, block)
+        mounted = self._stream_mounted_child_counts.get(block_index, 0)
+        for child in block.children[mounted:]:
+            if child.kind == ChildKind.TEXT_RUN:
+                # 构造时不带正文:内容由后续 flush 写入,避免 _on_mount 重复渲染
+                widget = LansCoderMarkdown(
+                    classes="message assistant-message streaming",
+                    selectable=False,
+                )
+                output.mount(widget)
+                self._stream_text_widget = widget
+            else:
+                self._mount_child_row(output, block_index, child)
+            mounted += 1
+        self._stream_mounted_child_counts[block_index] = mounted
 
     def _mount_child_row(self, output, block_index: int, child: ChildItem) -> None:
         existing = self._mounted_child_row(output, block_index, child.key)
@@ -392,18 +394,8 @@ class LansCoderViewMixin:
         )
         if child.expanded:
             row.add_class("expanded")
-        # THINKING 行必须位于正文 markdown 之上:正文 widget 已挂载时插到它前
-        # 面,否则(工具后新建的行)会被 append 到末尾、渲染在回答下方。
-        if child.kind == ChildKind.THINKING:
-            self._mount_row_above_stream_text(output, row)
-            return
-        output.mount(row)
-
-    def _mount_row_above_stream_text(self, output, row: ChildRow) -> None:
-        widget = self._stream_text_widget
-        if widget is not None and any(w is widget for w in getattr(output, "children", ())):
-            output.mount(row, before=widget)
-            return
+        # THINKING/TOOL 行都按 children 时间序直接追加;thinking 行的文本段
+        # 位于其后(append_assistant_text 新建 TEXT_RUN),无需再插到正文之上。
         output.mount(row)
 
     def _refresh_child_row(self, block_index: int, child: ChildItem) -> None:

@@ -180,6 +180,8 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._stream_flush_timer: Timer | None = None
         self._stream_markdown_update = None
         self._stream_finalizations: dict[LansCoderMarkdown, object] = {}
+        # 每块已增量挂载的 children 计数(流式挂载只处理新增条目)
+        self._stream_mounted_child_counts: dict[int, int] = {}
         self._stream_event_lock = threading.Lock()
         self._stream_event_generation = 0
         self._stream_event_dispatch_scheduled = False
@@ -1132,6 +1134,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._clear_task_plan_panel_if_mounted()
         self._discard_stream_deltas()
         self._start_new_stream_segment()
+        self._stream_mounted_child_counts.clear()
         self._stop_working_animation()
         self._stop_activity_animation()
         self._ui_epoch += 1
@@ -1151,6 +1154,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         """按 transcript 块重建输出区内容,保留模型与块索引(供子行点击定位)。"""
         self.projector.end_turn()
         self._remove_output_children()
+        self._stream_mounted_child_counts.clear()
         for index, block in enumerate(self.transcript.blocks):
             self.render_block_into(block, index)
 
