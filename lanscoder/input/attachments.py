@@ -35,7 +35,6 @@ _TEXT_MEDIA_TYPES = {
 
 @dataclass(slots=True)
 class UserAttachment:
-
     kind: AttachmentKind
     path: Path
     filename: str
@@ -46,7 +45,6 @@ class UserAttachment:
 
 @dataclass(slots=True)
 class PreparedAttachment:
-
     kind: AttachmentKind
     filename: str
     media_type: str
@@ -116,7 +114,11 @@ def is_text_like_media_type(media_type: str, path: Path | None = None) -> bool:
 
 
 def attach_path(path: str | Path, *, source: str = "path") -> UserAttachment:
-    resolved = Path(path).expanduser().resolve()
+    try:
+        resolved = Path(path).expanduser().resolve()
+    except RuntimeError:
+        # ~ 前缀无法解析时当成不存在的文件,与后续 exists() 语义一致。
+        raise FileNotFoundError(f"Attachment not found: {path}") from None
     if not resolved.exists():
         raise FileNotFoundError(f"Attachment not found: {resolved}")
     if not resolved.is_file():
@@ -137,7 +139,6 @@ def attach_path(path: str | Path, *, source: str = "path") -> UserAttachment:
 
 
 def parse_path_candidates(text: str) -> list[str]:
-
     if not text or not text.strip():
         return []
     candidates: list[str] = []
@@ -178,7 +179,12 @@ def _path_from_candidate(candidate: str) -> Path | None:
     from urllib.parse import unquote
 
     text = unquote(text)
-    path = Path(text).expanduser()
+    try:
+        path = Path(text).expanduser()
+    except RuntimeError:
+        # `~user` 前缀无法解析时 Path.expanduser 会抛 RuntimeError,把它
+        # 当作“不是文件”忽略,而不是让粘贴解析整段崩溃。
+        return None
     try:
         resolved = path.resolve()
     except OSError:
@@ -193,7 +199,6 @@ def resolve_paste_attachments(
     *,
     include_clipboard_image: bool = True,
 ) -> list[UserAttachment]:
-
     attachments: list[UserAttachment] = []
     seen_paths: set[Path] = set()
 
@@ -241,7 +246,6 @@ def prepare_attachments_for_session(
     store_root: Path,
     session_id: str,
 ) -> list[PreparedAttachment]:
-
     if not attachments:
         return []
     if len(attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
