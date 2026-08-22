@@ -39,8 +39,10 @@ def test_projector_merges_consecutive_assistant_into_one_block():
     p.end_turn()
     assert [b.kind for b in model.blocks] == [BlockKind.USER, BlockKind.ASSISTANT]
     block = model.blocks[1]
+    # 正文是 children 里的 TEXT_RUN 条目,工具事件切断文本段
+    assert [c.kind for c in block.children] == [ChildKind.TEXT_RUN, ChildKind.TOOL, ChildKind.TEXT_RUN]
     assert block.text == "ab"
-    assert block.children[0].kind == ChildKind.TOOL and block.children[0].key == "c1"
+    assert [c.body for c in block.children if c.kind == ChildKind.TEXT_RUN] == ["a", "b"]
 
 
 def test_projector_thinking_merges_chunks_into_one_child():
@@ -263,7 +265,32 @@ def test_projector_replay_thinking_sits_before_tool_children():
     p = TranscriptProjector(model)
     replay_messages(p, build_messages())
     kinds = [c.kind for c in model.blocks[1].children]
-    assert kinds == [ChildKind.THINKING, ChildKind.TOOL]
+    # canonical 序:thinking 在前,文本段被工具边界切成两段
+    assert kinds == [ChildKind.THINKING, ChildKind.TEXT_RUN, ChildKind.TOOL, ChildKind.TEXT_RUN]
+
+
+def test_projector_replay_splits_text_runs_at_tool_boundaries():
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    replay_messages(p, build_messages())
+    block = model.blocks[1]
+    runs = [c for c in block.children if c.kind == ChildKind.TEXT_RUN]
+    assert [c.body for c in runs] == ["先看实现", "改好了"]
+    assert block.text == "先看实现改好了"
+
+
+def test_projector_text_chunks_merge_into_one_run():
+    model = TranscriptModel()
+    p = TranscriptProjector(model)
+    p.start_user("hi")
+    p.append_assistant_text("he")
+    p.append_assistant_text("llo")
+    p.end_turn()
+    block = model.blocks[1]
+    runs = [c for c in block.children if c.kind == ChildKind.TEXT_RUN]
+    assert len(runs) == 1
+    assert runs[0].body == "hello"
+    assert block.text == "hello"
 
 
 def _notification_message(meta: dict) -> SimpleNamespace:

@@ -33,10 +33,19 @@ class TranscriptProjector:
         self._ensure_assistant()
 
     def append_assistant_text(self, chunk: str) -> bool:
-        """追加一段回答文本;若此前有未结算的 thinking,一并结算。返回是否发生了结算。"""
+        """追加一段回答文本;若此前有未结算的 thinking,一并结算。返回是否发生了结算。
+
+        正文以 TEXT_RUN 子项保存在时间序里:末位子项仍是 TEXT_RUN 时续接
+        (同一连续文本段),否则新建——工具事件追加 TOOL 子项正好切断文本段,
+        live 流式与 replay 推导共用该规则,分段天然一致。
+        """
         block = self._ensure_assistant()
         finalized = self._finish_thinking()
         block.text += chunk
+        if block.children and block.children[-1].kind == ChildKind.TEXT_RUN:
+            block.children[-1].body += chunk
+        else:
+            block.children.append(ChildItem(ChildKind.TEXT_RUN, f"r{len(block.children)}", "", body=chunk))
         return finalized
 
     def _finalize_thinking(self, child: ChildItem) -> None:
