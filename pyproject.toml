@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "LansCoder"
-version = "1.1.0"
+version = "1.2.0"
 description = "A local Python coding agent with a Textual TUI."
 readme = "README.md"
 requires-python = ">=3.11"
