@@ -4267,6 +4267,75 @@ async def test_child_row_click_toggles_collapsed_tool_child() -> None:
         assert row.size.height == 1
 
 
+class _FakeDenyFlowRunner(FakeChatRunner):
+    """同时具备 stream/tool 事件挂点的假 runner,用于驱动拒绝后的事件流。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stream_event_handler = lambda event: None
+        self.tool_event_handler = lambda event: None
+
+
+def _output_child_classes(app):
+    return [type(w).__name__ for w in app.query_one("#output").children]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_deny_resume_thinking_row_mounts_before_answer_text() -> None:
+    """拒绝后新建的 THINKING 行必须挂在正文 markdown 之前,而非 output 末尾。
+
+    用户拒绝后:denied 工具事件先挂工具行与流式 markdown 占位,随后
+    reasoning 建 thinking 子行、answer 文本填充占位;修复前 thinking 被
+    append 到末尾(markdown 之下,即用户看到的"回答下方两个 thought")。
+    """
+    runner = _FakeDenyFlowRunner()
+    app = LansCoderApp(chat_runner=runner)
+
+    async with app.run_test() as pilot:
+        app.projector.start_user("run python")
+        token = app._begin_active_chat_turn()
+        app._install_stream_event_handler(token)
+        app._install_tool_event_handler(token)
+        await pilot.pause()
+
+        # 权限请求时刻(UI 忽略 permission_requested,不产生工具行)
+        runner.tool_event_handler(
+            ToolExecutionEvent(
+                kind="permission_requested",
+                tool_call=ToolCall(id="call_py", name="python", arguments={}),
+            )
+        )
+        await pilot.pause()
+
+        # 拒绝后重装事件处理器(等价 _resume_permission_turn),denied 先到
+        token2 = app._resume_active_chat_turn()
+        app._install_stream_event_handler(token2)
+        app._install_tool_event_handler(token2)
+        runner.tool_event_handler(
+            ToolExecutionEvent(
+                kind="denied",
+                tool_call=ToolCall(id="call_py", name="python", arguments={}),
+                result=ToolResult(name="python", ok=False, content="用户拒绝"),
+            )
+        )
+        await pilot.pause()
+        runner.stream_event_handler(ChatStreamEvent(kind="reasoning_delta", text="用户拒了,改走本地路径"))
+        await pilot.pause()
+        runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="好的,不运行了。"))
+        await pilot.pause()
+        await pilot.pause()
+
+        children = list(app.query_one("#output").children)
+        kinds = [type(w).__name__ for w in children]
+        rendered = [str(w.render()) for w in children]
+        tool_at = next(i for i, k in enumerate(kinds) if k == "ChildRow" and "✕" in rendered[i])
+        thought_at = next(i for i, k in enumerate(kinds) if k == "ChildRow" and "Thought" in rendered[i])
+        markdown_at = kinds.index("LansCoderMarkdown")
+        # 正确顺序:工具失败行 < thinking 行 < 回答正文
+        assert tool_at < thought_at < markdown_at
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_live_turn_mounts_thinking_row_above_markdown() -> None:
@@ -4757,6 +4826,44 @@ async def test_finish_chat_turn_reconcile_survives_nudge_token_advance() -> None
         await pilot.pause()
     assert child.duration_seconds == 5.0
     assert runner.nudges == [True]  # nudge 照常触发
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_finish_chat_turn_resume_does_not_materialize_duplicate_reasoning() -> None:
+    """权限暂停/恢复的同一回合:首段 reasoning 已在请求段配对,恢复段只配对新条目。
+
+    用户回复产生独立 USER 块与新 assistant 块;收尾 reconcile 若拿全量条目
+    配对,会用 R1 顶掉 R2 的 live 行并再物化一条 R2,出现两个相同 thinking。
+    """
+    runner = ReasoningRecordingRunner([("R1", 3.0, True)])
+    app = LansCoderApp(chat_runner=runner, current_session=FakeSession())
+    async with app.run_test() as pilot:
+        # 请求段:现场推理 R1,回合挂起待输入 -> 请求段收尾配对(R1)
+        app.projector.start_user("写 README")
+        app._begin_active_chat_turn()
+        app.projector.append_thinking("R1", track_duration=True)
+        app.projector.end_turn()
+        runner.last_pending_input = "pending"  # 挂起中,_finish_chat_turn 保留同一回合
+        app._chat_busy = True
+        app._finish_chat_turn(app._chat_turn_token)
+        await pilot.pause()
+
+        # 恢复段(同一回合):用户回复后重新武装,新 assistant 块推理 R2 再执行工具
+        app.projector.start_user("2")
+        app._resume_active_chat_turn()
+        app.projector.append_thinking("R2", track_duration=True)
+        app.projector.tool_event("c1", "write", "finished", ok=True, result_body="ok")
+        app.projector.end_turn()
+        runner.last_turn_reasonings = [("R1", 3.0, True), ("R2", 4.0, False)]
+        runner.last_pending_input = None
+        app._chat_busy = True
+        app._finish_chat_turn(app._chat_turn_token)
+        await pilot.pause()
+
+    thinking = [c for block in app.transcript.blocks for c in block.children if c.kind == ChildKind.THINKING]
+    assert [c.body for c in thinking] == ["R1", "R2"]
+    assert [c.duration_seconds for c in thinking] == [3.0, 4.0]
 
 
 @pytest.mark.anyio

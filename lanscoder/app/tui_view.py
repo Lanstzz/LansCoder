@@ -392,6 +392,18 @@ class LansCoderViewMixin:
         )
         if child.expanded:
             row.add_class("expanded")
+        # THINKING 行必须位于正文 markdown 之上:正文 widget 已挂载时插到它前
+        # 面,否则(工具后新建的行)会被 append 到末尾、渲染在回答下方。
+        if child.kind == ChildKind.THINKING:
+            self._mount_row_above_stream_text(output, row)
+            return
+        output.mount(row)
+
+    def _mount_row_above_stream_text(self, output, row: ChildRow) -> None:
+        widget = self._stream_text_widget
+        if widget is not None and any(w is widget for w in getattr(output, "children", ())):
+            output.mount(row, before=widget)
+            return
         output.mount(row)
 
     def _refresh_child_row(self, block_index: int, child: ChildItem) -> None:
