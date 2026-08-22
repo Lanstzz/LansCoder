@@ -11,16 +11,16 @@
 
 LansCoder is a locally-runnable Python coding agent. It understands your codebase, edits files, and runs shell commands — like Claude Code or Aider. But its core design goal isn't feature volume; it's **understandability.**
 
-~30,000 lines of Python, clean module boundaries, solid test coverage. Real enough to use daily, small enough to read from end to end.
+~28,000 lines of Python, clean module boundaries, solid test coverage. Real enough to use daily, small enough to read from end to end.
 
 96.38% reward pass@1 on the Harbor Aider Polyglot benchmark.
 
 ## Highlights
 
-- **Small, so you can read it** — ~30k lines of Python, not 570k lines of TypeScript. Every module's job is obvious.
+- **Small, so you can read it** — ~28k lines of Python, not 570k lines of TypeScript. Every module's job is obvious.
 - **Built to learn from** — strict layering, clear dependency rules. Great for studying how coding agents work, for hacking on, or for interview prep.
-- **Actually usable** — 40+ built-in tools, multi-provider support, MCP integration, session persistence, context compression. Not a toy.
-- **Preview before you write** — syntax-highlighted diffs shown before every file change, even in high-permission mode.
+- **Actually usable** — 29 built-in tools, multi-provider support, MCP integration, session persistence, context compression. Not a toy.
+- **Preview before you write** — syntax-highlighted diffs shown before every file change, even in high-permission mode; confirmation via strict 1/2/3 input, with `reject: <feedback>` for write review.
 
 ## Quick start
 
@@ -82,10 +82,10 @@ python -m venv .venv
 
 | Capability | What it does |
 |-----------|--------------|
-| Coding agent | Understands code, edits files, runs shell commands, 40+ built-in tools |
+| Coding agent | Understands code, edits files, runs shell commands, 29 built-in tools |
 | Multi-model | OpenAI-compatible and Anthropic providers, hot-switchable mid-session |
-| Permissions | Standard / aggressive / bypass modes, diff preview before every mutation |
-| TUI | Textual-based terminal UI, streams reasoning, tool calls, and results in real time |
+| Permissions | Standard / aggressive / bypass modes, diff preview before every mutation; prompts answered with 1/2/3, `reject: <feedback>` on write review |
+| TUI | Textual-based terminal UI; streams reasoning, tool calls, and results in real time, with nested collapsible transcript rows and per-reasoning durations |
 | Sessions | Create, resume, fork, share — persisted as JSONL |
 | Context compression | 4-level pipeline (L1–L4) to manage token usage in long conversations |
 | Background subagents | Subagents run independently in the background, notify on completion |
@@ -96,12 +96,15 @@ python -m venv .venv
 ```
 lanscoder/
 ├── app/           Textual TUI
-├── agent/         Agent loop and orchestration
+├── agent/         Agent loop, tool execution, permission resume
 ├── providers/     Model provider adapters
-├── tools/         Tool registration and execution (40+ tools)
-├── permissions/   Policy and grant management
+├── tools/         Tool registration and execution (29 built-in tools)
+├── permissions/   Policy, grants, and permission coordinator
 ├── context/       Event log and context management
 ├── session/       Session lifecycle
+├── planning/      Task plan service and projection
+├── subagent/      Background subagent types
+├── input/         Attachments and clipboard
 ├── mcp/           MCP protocol integration
 ├── memory/        Cross-session persistent memory
 ├── skills/        Local skill discovery and loading

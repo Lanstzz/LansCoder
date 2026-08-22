@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LansCoder — A local coding agent you can read end to end</title>
-<meta name="description" content="LansCoder is a locally-runnable Python coding agent. ~30k lines of Python, clean module boundaries, solid test coverage. Real enough to use daily, small enough to read from end to end.">
+<meta name="description" content="LansCoder is a locally-runnable Python coding agent. ~28k lines of Python, clean module boundaries, solid test coverage. Real enough to use daily, small enough to read from end to end.">
 <style>
   /* ── Reset & Base ── */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -246,10 +246,10 @@
 
 <!-- ── Hero ── -->
 <section class="hero">
-  <div class="hero-badge">v1.0.0 &middot; MIT</div>
+  <div class="hero-badge">v1.2.0 &middot; MIT</div>
   <h1>A coding agent <em>you can read</em> end to end</h1>
   <p class="sub">
-    LansCoder is a locally-runnable Python coding agent with ~30k lines of clean,
+    LansCoder is a locally-runnable Python coding agent with ~28k lines of clean,
     well-structured Python. Real enough to use daily, small enough to understand
     completely.
   </p>
@@ -278,11 +278,11 @@
   </p>
   <div class="stat-row">
     <div class="stat">
-      <div class="stat-num">~30k</div>
+      <div class="stat-num">~28k</div>
       <div class="stat-label">lines of Python</div>
     </div>
     <div class="stat">
-      <div class="stat-num">40+</div>
+      <div class="stat-num">29</div>
       <div class="stat-label">built-in tools</div>
     </div>
     <div class="stat">
@@ -305,7 +305,7 @@
       <div class="feature-card">
         <div class="feature-icon">&#x2699;</div>
         <h3>Coding Agent</h3>
-        <p>Understands your codebase, edits files, and runs shell commands. 40+ built-in tools cover file ops, search, git, and more.</p>
+        <p>Understands your codebase, edits files, and runs shell commands. 29 built-in tools cover file ops, search, git, and more.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon">&#x25F0;</div>
@@ -315,12 +315,12 @@
       <div class="feature-card">
         <div class="feature-icon">&#x1F512;</div>
         <h3>Permissions</h3>
-        <p>Standard, aggressive, or bypass modes. Syntax-highlighted diffs previewed before every file mutation — even in high-permission mode.</p>
+        <p>Standard, aggressive, or bypass modes. Syntax-highlighted diffs previewed before every file mutation — even in high-permission mode. Prompts confirm via strict 1/2/3 input.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon">&#x2398;</div>
         <h3>Terminal UI</h3>
-        <p>Built on Textual. Streams reasoning, tool calls, and results in real time. Autocomplete, session picker, diff review — all in the terminal.</p>
+        <p>Built on Textual. Streams reasoning, tool calls, and results in real time, with nested collapsible transcript rows and per-reasoning durations. Autocomplete, session picker, diff review — all in the terminal.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon">&#x1F4BE;</div>
@@ -342,14 +342,17 @@
   <h2>Architecture</h2>
   <p>Strict layering, clear dependency rules. Each module has one job.</p>
   <div class="arch-tree">
-<span class="dir">lanscoder/</span>
+<span class="dir">└──</span> <span class="hl">lanscoder/</span>
 <span class="dir">├──</span> <span class="hl">app/</span>           <span class="comment"># Textual TUI — terminal interface, pickers, views</span>
-<span class="dir">├──</span> <span class="hl">agent/</span>         <span class="comment"># Agent loop — orchestration, subagents, prompts</span>
+<span class="dir">├──</span> <span class="hl">agent/</span>         <span class="comment"># Agent loop — tool execution, permission resume</span>
 <span class="dir">├──</span> <span class="hl">providers/</span>     <span class="comment"># Model adapters — OpenAI-compatible, Anthropic</span>
-<span class="dir">├──</span> <span class="hl">tools/</span>         <span class="comment"># Tool registry — 40+ tools, execution sandbox</span>
-<span class="dir">├──</span> <span class="hl">permissions/</span>   <span class="comment"># Policy engine — rules, grants, confirmations</span>
+<span class="dir">├──</span> <span class="hl">tools/</span>         <span class="comment"># Tool registry — 29 built-in tools, execution sandbox</span>
+<span class="dir">├──</span> <span class="hl">permissions/</span>   <span class="comment"># Policy engine — rules, grants, coordinator</span>
 <span class="dir">├──</span> <span class="hl">context/</span>       <span class="comment"># Context management — 4-level compaction (L1–L4)</span>
 <span class="dir">├──</span> <span class="hl">session/</span>       <span class="comment"># Session lifecycle — create, resume, fork, persist</span>
+<span class="dir">├──</span> <span class="hl">planning/</span>      <span class="comment"># Task plan service and projection</span>
+<span class="dir">├──</span> <span class="hl">subagent/</span>      <span class="comment"># Background subagent types</span>
+<span class="dir">├──</span> <span class="hl">input/</span>         <span class="comment"># Attachments and clipboard</span>
 <span class="dir">├──</span> <span class="hl">mcp/</span>           <span class="comment"># MCP integration — external tool servers</span>
 <span class="dir">├──</span> <span class="hl">memory/</span>        <span class="comment"># Cross-session persistent memory</span>
 <span class="dir">├──</span> <span class="hl">skills/</span>        <span class="comment"># Local skill discovery and loading</span>
