@@ -69,6 +69,8 @@ ScrollBarCorner {
 /* 联想栏是 composer 上方的兄弟节点:左右对齐输入框,弹出时不推挤输入框。 */
 #main SlashSuggest {
     margin: 0 2 1 2;
+    background: #0f1014;
+    border: solid #4f8cff;
 }
 
 #input {
@@ -106,7 +108,7 @@ ScrollBarCorner {
 .activity-line {
     height: 1;
     margin: 0 3;
-    color: #66c4d8;
+    color: #4f8cff;
 }
 
 .task-plan-panel {
