@@ -1,72 +1,72 @@
-# LansCoder Agent Development Rules
+# LansCoder Agent 开发规则
 
-## Conversational Style
+## 对话风格
 
-- Keep answers short and concise.
-- No emojis in commits, issues, PR comments, or code.
-- No fluff or cheerful filler text. Use direct technical prose.
-- When the user asks a question, answer it first before making edits or running implementation commands.
-- When responding to user feedback or an analysis, explicitly state whether you agree or disagree before describing what you changed.
-- Define unavoidable jargon before using it. Prefer concrete examples over abstract summaries.
+- 回答保持简短精炼。
+- 提交信息、议题、PR 评论和代码中不使用表情符号。
+- 不使用花哨或欢快的填充文字。使用直接的技术性散文。
+- 当用户提出问题时，先回答问题，再进行修改或执行实现命令。
+- 当回应用户的反馈或分析时，先明确表示同意或不同意，再描述你做了哪些改动。
+- 在使用不可避免的行话之前先给出定义。优先使用具体示例而非抽象概括。
+- 当用户的需求模糊、部分、尚有未描述清楚的点时，一定要反问弄清所有问题。在需求完全明确之前不开始实现。
 
-## Code Quality
+## 代码质量
 
-- Read files in full before wide-ranging changes, before editing files you have not fully inspected, and when asked to investigate or audit. Do not rely on search snippets for broad changes.
-- Use standard Python style with 4-space indentation, explicit names, and small functions that stay close to their module's responsibility.
-- Prefer dataclasses for structured data already represented that way.
-- Keep provider-specific fields inside provider adapters, and keep UI concerns inside `lanscoder/app`.
-- Keep dependency direction one-way: upper layers may depend on lower layers, but lower layers must not depend on upper layers; same-layer modules interact through abstractions. Before adding a dependency, confirm it will not create a circular import.
-- Inline single-use helpers that have only one call site.
-- Write comments explaining why, not what; skip comments when the code is self-explanatory; do not keep commented-out dead code.
-- Always ask before removing functionality or code that appears intentional.
-- Do not preserve backward compatibility unless the user explicitly asks for it.
+- 在进行大范围修改之前、在编辑尚未完整审阅的文件时、以及在被要求调查或审计时，应完整阅读文件。不要依赖搜索片段来进行大范围修改。
+- 使用标准 Python 风格，4 空格缩进，显式命名，小函数且职责与模块保持一致。
+- 对于已以该方式表示的结构化数据，优先使用数据类（dataclass）。
+- 保持依赖方向单向：上层可依赖下层，但下层不得依赖上层；同层模块通过抽象进行交互。在添加依赖之前，确认不会造成循环导入。
+- 对于只有一个调用点的单次使用辅助函数，直接内联。
+- 编写注释解释为什么，而非是什么；当代码本身已自解释时跳过注释；不要保留被注释掉的死代码。
+- 在移除功能或看起来有意为之的代码之前，务必先询问。
+- 除非用户明确要求，否则不保留向后兼容性。
 
-## Commands and Verification
+## 命令与验证
 
-- The project's development virtual environment is `.venv`; run dev commands from it, e.g. `.venv/bin/python -m pytest`.
-- After code changes, run the linter and formatter (e.g., `ruff`) on the modified files. Fix all issues before proceeding.
-- Create or modify test files for new features and bug fixes. After writing or editing a test file, run it and iterate until it passes.
-- Run the narrowest relevant tests first, then the full suite for broad or cross-module changes.
-- Use fakes and fixtures instead of real API keys or network access in tests.
-- For ad-hoc scripts, write them to a temp file (e.g., `/tmp`), run, edit if needed, remove when done. Do not embed multi-line scripts in bash commands.
-- Never commit unless the user asks.
+- 项目的开发虚拟环境为 `.venv`；从中运行开发命令，例如 `.venv/bin/python -m pytest`。
+- 代码修改后，对修改的文件运行 linter 和格式化工具（如 `ruff`）。在继续之前修复所有问题。
+- 为新功能和缺陷修复创建或修改测试文件。在编写或编辑测试文件后，运行它并迭代直至通过。
+- 先运行最相关的窄范围测试，对于大范围或跨模块修改再运行完整测试套件。
+- 在测试中使用伪造对象和夹具（fixture），而非真实的 API 密钥或网络访问。
+- 对于临时脚本，将其写入临时文件（例如 `/tmp`），运行，如需则编辑，完成后删除。不要在 bash 命令中嵌入多行脚本。
+- 除非用户要求，否则绝不提交。
 
-## Dependency Management
+## 依赖管理
 
-- Adding a new dependency requires explicit user approval. Before asking, provide a brief justification explaining why the existing dependencies cannot satisfy the requirement.
-- When approved, use `pip install <package>` and update `pyproject.toml` accordingly. Regenerate lock files if the project uses them.
-- Do not modify `requirements.txt` or `pyproject.toml` without user confirmation.
+- 添加新依赖需要明确的用户批准。在询问之前，提供简要理由说明为什么现有依赖无法满足需求。
+- 获得批准后，使用 `pip install <package>` 并相应更新 `pyproject.toml`。如果项目使用锁文件，则重新生成。
+- 未经用户确认，不得修改 `requirements.txt` 或 `pyproject.toml`。
 
-## Git Operations
+## Git 操作
 
-Since this is a single-developer project, Git rules are relaxed but still require discipline:
+由于这是单人开发项目，Git 规则较为宽松，但仍需保持纪律：
 
-- Commit only files you changed in this session. Stage explicit paths (`git add <path1> <path2>`); never `git add -A` or `git add ..`.
-- Before committing, run `git status` and verify you are only staging your files.
-- Message format: `{feat,fix,docs}: <concise imperative message describing the behavior change>`. Example: `feat: add permission confirmation protocol`.
-- Never run `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, or `git commit --no-verify`.
+- 仅提交本次会话中修改的文件。显式指定路径进行暂存（`git add <路径1> <路径2>`）；绝不使用 `git add -A` 或 `git add ..`。
+- 提交前，运行 `git status` 并确认只暂存了你的文件。
+- 消息格式：`{feat,fix,docs}: <描述行为变更的简洁祈使句>`。示例：`feat: 添加权限确认协议`。
+- 绝不运行 `git reset --hard`、`git checkout .`、`git clean -fd`、`git stash` 。
 
-## Testing Guidelines
+## 测试指南
 
-- This repository uses `pytest`. Add or update tests for behavior changes, especially around agent loops, context recovery, permissions, providers, and tool execution.
-- Test files use `test_*.py`; test functions should describe behavior, for example `test_resume_without_id_requests_picker`.
-- If you create or modify a test file, run it and iterate on test or implementation until it passes.
+- 本仓库使用 `pytest`。为行为变更添加或更新测试，尤其是围绕代理循环、上下文恢复、权限、提供商和工具执行等方面。
+- 测试文件使用 `test_*.py`；测试函数应描述行为，例如 `test_resume_without_id_requests_picker`。
+- 如果创建或修改了测试文件，运行它并迭代测试或实现直至通过。
 
-## Versioning and Release
+## 版本管理与发布
 
-This project uses versioned releases. When preparing a release:
+本项目使用版本化发布。在准备发布时：
 
-1. Update the version number in `pyproject.toml`.
-2. Run the full test suite and linter to ensure everything is clean.
-3. Create a git tag for the version.
-4. Ask the user before executing the release steps.
+1. 更新 `pyproject.toml` 中的版本号。
+2. 运行完整测试套件和 linter，确保一切正常。
+3. 为版本创建 git 标签。
+4. 在执行发布步骤之前询问用户。
 
-## Security and Configuration
+## 安全与配置
 
-- Provider and model selection is configured through TOML, not environment variables: a `default_model` plus `[providers]` and `[models]` sections in `~/.config/lanscoder/config.toml` (global) and/or `./lanscoder.toml` (project, overrides global).
-- Only API keys come from the environment, resolved via each provider's `api_key_env` (e.g., `DEEPSEEK_API_KEY`) with a fallback to `LANSCODER_API_KEY`; `.env` files are loaded automatically.
-- Do not commit secrets, local session data, virtual environments, or machine-specific configuration.
+- 提供商和模型选择通过 TOML 配置，而非环境变量：在 `~/.config/lanscoder/config.toml`（全局）和/或 `./lanscoder.toml`（项目，覆盖全局）中配置 `default_model` 以及 `[providers]` 和 `[models]` 部分。
+- 仅 API 密钥来自环境，通过各提供商的 `api_key_env`（例如 `DEEPSEEK_API_KEY`）解析，并回退到 `LANSCODER_API_KEY`；自动加载 `.env` 文件。
+- 不提交密钥、本地会话数据、虚拟环境或机器特定配置。
 
-## User Override
+## 用户优先
 
-- If the user's instructions conflict with any rule in this document, ask for explicit confirmation before overriding. Only then execute their instructions.
+- 如果用户的指令与本文件中的任何规则冲突，请在覆盖之前要求用户明确确认。仅在此之后执行其指令。

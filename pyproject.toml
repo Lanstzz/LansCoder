@@ -39,3 +39,7 @@ testpaths = ["tests"]
 [tool.black]
 line-length = 200
 target-version = ["py311"]
+
+[tool.ruff]
+line-length = 200
+target-version = "py311"
