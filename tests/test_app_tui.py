@@ -2683,6 +2683,36 @@ def test_lanscoder_app_auto_scroll_fires_during_stream_when_layout_grows_max_scr
     assert output.scroll_end_calls == 1
 
 
+def test_lanscoder_app_auto_scroll_fires_on_child_row_mount_when_pinned(
+    monkeypatch,
+) -> None:
+    """Regression: mounting a new child row (tool / thinking) grows the output
+    pane, and Textual does not follow the bottom automatically. When the user is
+    pinned, _refresh_child_row -> _mount_child_row must scroll explicitly.
+
+    Tool-start events in a long task mount a TOOL row with no text flush
+    following; without this scroll the pane grows and the user is left looking
+    at stale lines.
+    """
+    output = _LayoutUpdatingFakeOutput(growth_per_mount=4)
+    output.scroll_y = 10
+    output.max_scroll_y = 10  # user is at the bottom
+    app = LansCoderApp()
+    monkeypatch.setattr(app, "query_one", lambda *args, **kwargs: output)
+    monkeypatch.setattr(app, "_query_mounted", lambda *args, **kwargs: output)
+
+    app._begin_active_chat_turn()
+    app.projector.start_assistant()
+    app.projector.tool_event("call_1", "grep", "started", arguments={"q": "x"})
+    block_index = len(app.transcript.blocks) - 1
+    app._ensure_stream_block_rows(block_index, app.transcript.blocks[-1])
+
+    assert output.scroll_end_calls == 1
+    # mount 增长了内容,但用户贴底,必须依然滚动
+    assert output.max_scroll_y == 14
+    assert output.scroll_y == 10
+
+
 def test_lanscoder_app_finalize_scrolls_when_pinned_and_update_grows_content(
     monkeypatch,
 ) -> None:

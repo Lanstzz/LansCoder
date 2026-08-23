@@ -364,7 +364,7 @@ class LansCoderViewMixin:
         target = next((w for w in getattr(output, "children", ()) if getattr(w, "id", None) == row_id), None)
         return target if isinstance(target, ChildRow) else None
 
-    def _ensure_stream_block_rows(self, block_index: int, block: TranscriptBlock) -> None:
+    def _ensure_stream_block_rows(self, block_index: int, block: TranscriptBlock, *, scroll: bool = True) -> None:
         """增量挂载 live assistant 块:只处理上次挂载点之后的 children。
 
         行与文本段都按 children 时间序追加,thinking 行位于其文本段之前、
@@ -378,7 +378,15 @@ class LansCoderViewMixin:
         if output is None or not hasattr(output, "mount"):
             return
         mounted = self._stream_mounted_child_counts.get(block_index, 0)
-        for child in block.children[mounted:]:
+        children = block.children[mounted:]
+        if not children:
+            return
+        # 批量挂载新子项会增高输出区,Textual 不会自动贴底跟随,统一补一次滚动;
+        # _append_stream_text 会经 flush 兜底滚动,故传入 scroll=False 避免双滚。
+        was_pinned = False
+        if scroll:
+            was_pinned = self._is_output_pinned_to_bottom(output)
+        for child in children:
             if child.kind == ChildKind.TEXT_RUN:
                 # 构造时不带正文:内容由后续 flush 写入,避免 _on_mount 重复渲染
                 widget = LansCoderMarkdown(
@@ -388,11 +396,13 @@ class LansCoderViewMixin:
                 output.mount(widget)
                 self._stream_text_widget = widget
             else:
-                self._mount_child_row(output, block_index, child)
+                self._mount_child_row(output, block_index, child, scroll=False)
             mounted += 1
         self._stream_mounted_child_counts[block_index] = mounted
+        if was_pinned:
+            self._scroll_output_end(output)
 
-    def _mount_child_row(self, output, block_index: int, child: ChildItem, *, before: object | None = None) -> None:
+    def _mount_child_row(self, output, block_index: int, child: ChildItem, *, before: object | None = None, scroll: bool = True) -> None:
         existing = self._mounted_child_row(output, block_index, child.key)
         if existing is not None:
             # 防御性去重:迟到/重复的挂载请求刷新既有的行而不是再插一次
@@ -416,10 +426,17 @@ class LansCoderViewMixin:
             row.add_class("expanded")
         # THINKING/TOOL 行都按 children 时间序追加;thinking 行可被物化插入到
         # 末尾正文之前(before 指向其下方 TEXT_RUN 的 markdown widget)。
+        # 挂载新行会增高输出区,Textual 不会自动贴底跟随,须显式滚动;
+        # 批量挂载(scroll=False)由外层 _ensure_stream_block_rows 统一滚一次。
+        was_pinned = False
+        if scroll:
+            was_pinned = self._is_output_pinned_to_bottom(output)
         if before is not None:
             output.mount(row, before=before)
         else:
             output.mount(row)
+        if was_pinned:
+            self._scroll_output_end(output)
 
     def _refresh_child_row(self, block_index: int, child: ChildItem) -> None:
         if not getattr(self, "is_running", False):
@@ -942,7 +959,8 @@ class LansCoderViewMixin:
                 block_index = len(self.transcript.blocks) - 1
                 block = self.transcript.last_block()
                 if block is not None:
-                    self._ensure_stream_block_rows(block_index, block)
+                    # 挂载后紧跟 flush 兜底滚动,无需在此双滚
+                    self._ensure_stream_block_rows(block_index, block, scroll=False)
             if not self._stream_rendered_text:
                 self._flush_stream_text()
             else:
