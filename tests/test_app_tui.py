@@ -4803,6 +4803,9 @@ class ReasoningRecordingRunner:
         self.last_turn_reasonings = reasonings
         self.last_pending_input = None
         self.background_manager = None
+        self.stream_event_handler = None
+        self.tool_event_handler = None
+        self.last_display_lines = []
 
 
 @pytest.mark.anyio
@@ -4900,6 +4903,97 @@ async def test_finish_chat_turn_materializes_non_streaming_thinking_row() -> Non
         # 物化行位于输出区,正文 markdown 随后由 _write_chat_response 挂载在其下方
         output = app.query_one("#output")
         assert [w.id for w in output.children if isinstance(w.id, str) and w.id.startswith("child-")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_live_late_reasoning_hoists_above_open_text() -> None:
+    """后到的 reasoning(先 text 后 reasoning 的乱序流)不得落在正文之下。
+
+    回归:OpenAI-compatible 同 chunk 内先发 content 后发 reasoning_content 时,
+    append_thinking 推理行排在 TEXT_RUN 之后,显示在最终回复下方。
+    """
+    runner = FakeStreamingAsyncChatRunner()
+    app = LansCoderApp(chat_runner=runner, current_session=FakeSession())
+    async with app.run_test() as pilot:
+        app._dismiss_welcome()
+        app._install_stream_event_handler()
+        app._begin_active_chat_turn()
+        runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="final answer"))
+        await pilot.pause()
+        runner.stream_event_handler(ChatStreamEvent(kind="reasoning_delta", text="late think"))
+        await pilot.pause()
+        block = app.transcript.blocks[-1]
+        assert [c.kind for c in block.children] == [ChildKind.THINKING, ChildKind.TEXT_RUN]
+        output = app.query_one("#output")
+        mounted = [type(w).__name__ for w in output.children if isinstance(w, ChildRow) or isinstance(w, LansCoderMarkdown)]
+        assert mounted == ["ChildRow", "LansCoderMarkdown"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_live_late_reasoning_chunks_merge_into_one_hoisted_row() -> None:
+    """分片 reasoning 在正文之后到达时合并为单行,且仍位于正文之上。"""
+    runner = FakeStreamingAsyncChatRunner()
+    app = LansCoderApp(chat_runner=runner, current_session=FakeSession())
+    async with app.run_test() as pilot:
+        app._dismiss_welcome()
+        app._install_stream_event_handler()
+        app._begin_active_chat_turn()
+        runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="final answer"))
+        await pilot.pause()
+        runner.stream_event_handler(ChatStreamEvent(kind="reasoning_delta", text="part1 "))
+        await pilot.pause()
+        runner.stream_event_handler(ChatStreamEvent(kind="reasoning_delta", text="part2"))
+        await pilot.pause()
+        block = app.transcript.blocks[-1]
+        assert [c.kind for c in block.children] == [ChildKind.THINKING, ChildKind.TEXT_RUN]
+        thinking_row = app.query_one("#child-0-t1", ChildRow)
+        assert "part1 part2" in str(thinking_row.content)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_finish_chat_turn_materialized_thinking_sits_above_final_text() -> None:
+    """长 task 收尾 reconcile 物化的 thinking 行必须位于最终正文段之上。
+
+    回归:最终文本已在流式阶段挂载(TEXT_RUN 是块末位子项),物化分支此前
+    盲目 append 到 children 末尾,使 thinking 行渲染在最终回复下方。
+    """
+    runner = ReasoningRecordingRunner([("r1", 3.0, True), ("r2-missing", 4.0, False)])
+    app = LansCoderApp(chat_runner=runner, current_session=FakeSession())
+    async with app.run_test() as pilot:
+        app._dismiss_welcome()
+        app._install_stream_event_handler()
+        app._install_tool_event_handler()
+        app._begin_active_chat_turn()
+        # 第一轮 thinking + tool(流式,存在 live 行)
+        runner.stream_event_handler(ChatStreamEvent(kind="reasoning_delta", text="r1 "))
+        runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="stage one "))
+        await pilot.pause()
+        runner.tool_event_handler(ToolExecutionEvent(kind="started", tool_call=ToolCall(id="c1", name="grep", arguments={})))
+        await pilot.pause()
+        # 最终回复文本已流式挂载,其 reasoning 条目在 store 里但没有 live 行
+        runner.stream_event_handler(ChatStreamEvent(kind="text_delta", text="final answer"))
+        await pilot.pause()
+        app._stream_text_started = True
+        app._live_tool_events_seen = True
+        app._chat_busy = True
+        app._finish_chat_turn(app._chat_turn_token)
+        await pilot.pause()
+        app._write_chat_response(ChatResponse(provider="fake", model="fake", content="final answer"))
+        await pilot.pause()
+
+        block = app.transcript.blocks[-1]
+        kinds = [c.kind for c in block.children]
+        # 物化的 thinking 行插在末尾正文段之前,不落在最终回复下方
+        assert kinds == [ChildKind.THINKING, ChildKind.TEXT_RUN, ChildKind.TOOL, ChildKind.THINKING, ChildKind.TEXT_RUN]
+        thinking = [c for c in block.children if c.kind == ChildKind.THINKING]
+        assert thinking[-1].duration_seconds == 4.0
+        # DOM 顺序与 children 一致:物化 ChildRow 在最终 markdown 之前
+        output = app.query_one("#output")
+        mounted = [type(w).__name__ for w in output.children if isinstance(w, ChildRow) or isinstance(w, LansCoderMarkdown)]
+        assert mounted == ["ChildRow", "LansCoderMarkdown", "ChildRow", "ChildRow", "LansCoderMarkdown"]
 
 
 @pytest.mark.anyio

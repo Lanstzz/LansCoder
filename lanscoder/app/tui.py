@@ -58,7 +58,12 @@ from lanscoder.app import model_topbar_themes
 from lanscoder.app.projector import TranscriptProjector, replay_messages
 from lanscoder.app.tui_state import BlockKind, ChildItem, ChildKind, TuiTaskPlanPanelState, TranscriptModel
 from lanscoder.app.topbar_view import _provider_name_markup, _provider_model_markup
-from lanscoder.app.tui_view import LansCoderViewMixin, _entry_renderable_block
+from lanscoder.app.tui_view import (
+    _last_assistant_markdown_widget,
+    _trailing_text_run_start,
+    LansCoderViewMixin,
+    _entry_renderable_block,
+)
 from lanscoder.app.tui_widgets import (
     ComposerTextArea,
     LansCoderMarkdown,
@@ -758,9 +763,16 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
                     duration_seconds=seconds,
                     finished=True,
                 )
-                block.children.append(current_child)
+                # 物化行必须插在末尾正文段(TEXT_RUN)之前:reconcile 在最终文本
+                # 已流式挂载后才跑,盲目 append 会把 thinking 排到最终回复下方。
+                insert_at = _trailing_text_run_start(block)
+                block.children.insert(insert_at, current_child)
                 block_index = len(self.transcript.blocks) - 1
-                self._mount_child_row(self.query_one("#output"), block_index, current_child)
+                before_widget = _last_assistant_markdown_widget(self.query_one("#output"))
+                if before_widget is None:
+                    self._mount_child_row(self.query_one("#output"), block_index, current_child)
+                else:
+                    self._mount_child_row(self.query_one("#output"), block_index, current_child, before=before_widget)
             idx += 1
             current_child.duration_seconds = seconds
             current_child.finished = True

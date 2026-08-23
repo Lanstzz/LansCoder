@@ -49,6 +49,26 @@ from lanscoder.planning.projection import project_plan
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 
 
+def _trailing_text_run_start(block: TranscriptBlock) -> int:
+    """返回块内末尾连续 TEXT_RUN 段的起始下标;无正文段时返回 len(children)。
+
+    物化 thinking 行必须插到该位置之前,才能保证 thinking 不落在最终回复正文
+    下方(末尾正文段就是在它之后流式挂载的最终回答)。
+    """
+    index = len(block.children)
+    while index > 0 and block.children[index - 1].kind == ChildKind.TEXT_RUN:
+        index -= 1
+    return index
+
+
+def _last_assistant_markdown_widget(output) -> object | None:
+    """输出区最后一个 assistant 正文 markdown widget(即末尾 TEXT_RUN 的 widget)。"""
+    for widget in reversed(getattr(output, "children", ())):
+        if isinstance(widget, LansCoderMarkdown):
+            return widget
+    return None
+
+
 def _entry_renderable_block(block: TranscriptBlock, rendered: str) -> object:
     if block.kind != BlockKind.COMMAND:
         return rendered
@@ -372,7 +392,7 @@ class LansCoderViewMixin:
             mounted += 1
         self._stream_mounted_child_counts[block_index] = mounted
 
-    def _mount_child_row(self, output, block_index: int, child: ChildItem) -> None:
+    def _mount_child_row(self, output, block_index: int, child: ChildItem, *, before: object | None = None) -> None:
         existing = self._mounted_child_row(output, block_index, child.key)
         if existing is not None:
             # 防御性去重:迟到/重复的挂载请求刷新既有的行而不是再插一次
@@ -394,9 +414,12 @@ class LansCoderViewMixin:
         )
         if child.expanded:
             row.add_class("expanded")
-        # THINKING/TOOL 行都按 children 时间序直接追加;thinking 行的文本段
-        # 位于其后(append_assistant_text 新建 TEXT_RUN),无需再插到正文之上。
-        output.mount(row)
+        # THINKING/TOOL 行都按 children 时间序追加;thinking 行可被物化插入到
+        # 末尾正文之前(before 指向其下方 TEXT_RUN 的 markdown widget)。
+        if before is not None:
+            output.mount(row, before=before)
+        else:
+            output.mount(row)
 
     def _refresh_child_row(self, block_index: int, child: ChildItem) -> None:
         if not getattr(self, "is_running", False):
@@ -741,11 +764,37 @@ class LansCoderViewMixin:
         if self._reasoning_is_fallback:
             self._reasoning_is_fallback = False
             self._working_text = ""
+        block = self.transcript.last_block()
+        hoist_above_text = block is not None and block.kind == BlockKind.ASSISTANT and block.children and block.children[-1].kind == ChildKind.TEXT_RUN
         self.projector.append_thinking(text)
-        if self._stream_text_widget is not None:
-            block_index = len(self.transcript.blocks) - 1
-            block = self.transcript.last_block()
-            if block is not None and block.kind == BlockKind.ASSISTANT and block.children:
+        block_index = len(self.transcript.blocks) - 1
+        block = self.transcript.last_block()
+        if hoist_above_text and block is not None and block.children:
+            # 后到的 reasoning 落在正文之下:text_run 只会由 append_assistant_text
+            # 追加在其它子项之后,故新 THINKING 必然在块末,直接移回正文段之前。
+            if block.children[-1].kind == ChildKind.THINKING:
+                child = block.children.pop()
+                insert_at = len(block.children)
+                while insert_at > 0 and block.children[insert_at - 1].kind == ChildKind.TEXT_RUN:
+                    insert_at -= 1
+                if insert_at > 0 and block.children[insert_at - 1].kind == ChildKind.THINKING:
+                    # 与本行之上已有的 thinking 合并(分片 reasoning 应合成一行)
+                    block.children[insert_at - 1].body += child.body
+                    self._refresh_child_row(block_index, block.children[insert_at - 1])
+                else:
+                    block.children.insert(insert_at, child)
+                    output = self._query_mounted("#output")
+                    if output is not None:
+                        before = self._stream_text_widget if self._stream_text_widget is not None else _last_assistant_markdown_widget(output)
+                        self._mount_child_row(output, block_index, child, before=before)
+                        # 手动挂载取代计数器推进,避免 ensure 重挂已挂载的正文段
+                        self._stream_mounted_child_counts[block_index] = self._stream_mounted_child_counts.get(block_index, 0) + 1
+                    self._refresh_child_row(block_index, child)
+            else:
+                # 合并进既有 THINKING(append_thinking 已并入):保持原位置
+                self._refresh_child_row(block_index, block.children[-1])
+        else:
+            if self._stream_text_widget is not None and block is not None and block.kind == BlockKind.ASSISTANT and block.children:
                 self._ensure_stream_block_rows(block_index, block)
                 self._refresh_child_row(block_index, block.children[-1])
         # 活动区只显示 thinking 状态,不展示推理正文(正文在折叠子行里看)
