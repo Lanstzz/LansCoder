@@ -45,6 +45,7 @@
 - 提交前，运行 `git status` 并确认只暂存了你的文件。
 - 消息格式：`{feat,fix,docs}: <描述行为变更的简洁祈使句>`。示例：`feat: 添加权限确认协议`。
 - 绝不运行 `git reset --hard`、`git checkout .`、`git clean -fd`、`git stash` 。
+- 提交信息用英文。
 
 ## 测试指南
 
@@ -64,7 +65,6 @@
 ## 安全与配置
 
 - 提供商和模型选择通过 TOML 配置，而非环境变量：在 `~/.config/lanscoder/config.toml`（全局）和/或 `./lanscoder.toml`（项目，覆盖全局）中配置 `default_model` 以及 `[providers]` 和 `[models]` 部分。
-- 仅 API 密钥来自环境，通过各提供商的 `api_key_env`（例如 `DEEPSEEK_API_KEY`）解析，并回退到 `LANSCODER_API_KEY`；自动加载 `.env` 文件。
 - 不提交密钥、本地会话数据、虚拟环境或机器特定配置。
 
 ## 用户优先

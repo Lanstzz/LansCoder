@@ -1,0 +1,56 @@
+{
+  "description": "VibeCollab private-repository session journal",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.ai-team/session.mjs\" hook",
+            "commandWindows": "for /f \"delims=\" %R in ('git rev-parse --show-toplevel') do node \"%R\\.ai-team\\session.mjs\" hook",
+            "timeout": 10,
+            "statusMessage": "Starting private session journal"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.ai-team/session.mjs\" hook",
+            "commandWindows": "for /f \"delims=\" %R in ('git rev-parse --show-toplevel') do node \"%R\\.ai-team\\session.mjs\" hook",
+            "timeout": 10,
+            "statusMessage": "Recording private task prompt"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.ai-team/session.mjs\" hook",
+            "commandWindows": "for /f \"delims=\" %R in ('git rev-parse --show-toplevel') do node \"%R\\.ai-team\\session.mjs\" hook",
+            "timeout": 10,
+            "statusMessage": "Updating private session journal"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.ai-team/session.mjs\" hook",
+            "commandWindows": "for /f \"delims=\" %R in ('git rev-parse --show-toplevel') do node \"%R\\.ai-team\\session.mjs\" hook",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

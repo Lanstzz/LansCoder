@@ -1,57 +1,62 @@
 # LansCoder
 
-> A local coding agent you can read end to end.
+[English](README.en.md) · [PyPI](https://pypi.org/project/lanscoder/) · [更新日志](#更新日志)
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+> **一个可以从头读到尾的 AI 编程代理** —— 目标不是在一个更大的 agent 面前堆功能，而是让系统**真实可用**，同时**小到能通读**，并理解每个子系统为什么存在。
 
-![LansCoder TUI screenshot](./assets/tui-screenshot.png)
+![LansCoder TUI 界面](docs/images/lanscoder-demo.gif)
 
-## What is it?
+---
 
-LansCoder is a locally-runnable Python coding agent. It understands your codebase, edits files, and runs shell commands — like Claude Code or Aider. But its core design goal isn't feature volume; it's **understandability.**
+## 这是什么
 
-~28,000 lines of Python, clean module boundaries, solid test coverage. Real enough to use daily, small enough to read from end to end.
+LansCoder 是一个在终端里运行的 AI 编程代理。像 Claude Code 或 Aider 一样，它能理解你的代码库、编辑文件、运行命令；但它的代码只有 **约 2.9 万行 Python**，分布在 15 个职责清晰的模块里——从入口、代理循环到工具系统，你可以完整地读一遍，并看懂每一层在做什么。
 
-96.38% reward pass@1 on the Harbor Aider Polyglot benchmark.
+它不是玩具：**33 个内置工具**、OpenAI 兼容 + Anthropic 双模型适配、MCP 集成、会话恢复与分支、L1–L3 上下文压缩管线，并在 Harbor Aider Polyglot 基准上达到 **96.38% reward pass@1**（213/221，本地锁定配置，[口径见基准文档](docs/benchmark.md)）。
 
-## Highlights
+**核心承诺**：目标不是比一个更大的 agent 功能更多，而是保持系统真实可用的同时，小到足以通读——理解每个子系统为什么存在。
 
-- **Small, so you can read it** — ~28k lines of Python, not 570k lines of TypeScript. Every module's job is obvious.
-- **Built to learn from** — strict layering, clear dependency rules. Great for studying how coding agents work, for hacking on, or for interview prep.
-- **Actually usable** — 29 built-in tools, multi-provider support, MCP integration, session persistence, context compression. Not a toy.
-- **Preview before you write** — syntax-highlighted diffs shown before every file change, even in high-permission mode; confirmation via strict 1/2/3 input, with `reject: <feedback>` for write review.
+---
 
-## Quick start
+## 为什么值得读
 
-Choose your preferred install method:
+### 与大型生产级 agent 相比
 
-**Shell (one-liner, all platforms):**
+| 维度 | LansCoder | 大型生产级 agent（如 Claude Code / OpenCode） |
+|------|-----------|----------------------------------------------|
+| 首要目标 | 让 agent 内部机制**可读、可教** | 交付更完整的生产级 agent 平台 |
+| 代码规模 | ~29k 行 Python（204 文件 · 15 模块） | 约 57 万行（Claude Code ≈ 570k 行 TypeScript；OpenCode ≈ 575k 行 TS/JS） |
+| 工程取舍 | 主动砍掉部分平台面，保持**可检查性** | 接受更高复杂度，支撑更广产品面 |
+| 适合谁 | 学习、二次开发、本地实验 | 需要更大、更完整 agent 环境的用户 |
+
+---
+
+## 快速上手
+
+**一键安装（macOS / Linux / Windows Git Bash）**：
 
 ```sh
 curl -sSL https://raw.githubusercontent.com/Lanstzz/LansCoder/main/install.sh | bash
 ```
 
-**pipx (all platforms):**
+**或通过 pipx 安装**：
 
 ```sh
 pipx install lanscoder
+lanscoder config init
 ```
 
-After installation, run `lanscoder config init` to generate a config file, then edit it with your API key:
+编辑配置文件，填入你的 API 密钥：
 
-- **macOS / Linux**: `~/.config/lanscoder/config.toml`
-- **Windows**: `C:\Users\<username>\.config\lanscoder\config.toml`
-
-Example config:
+- **macOS / Linux**：`~/.config/lanscoder/config.toml`
+- **Windows**：`C:\Users\<用户名>\.config\lanscoder\config.toml`
 
 ```toml
-default_model = "deepseek/deepseek-v4-flash"
-
 [providers.deepseek]
 type = "openai-compatible"
 base_url = "https://api.deepseek.com"
-api_key = "sk-xxx"
+api_key = "你的 API key"
+parallel_tool_calls = true
 
 [models."deepseek/deepseek-v4-flash"]
 label = "DeepSeek V4 Flash"
@@ -64,65 +69,142 @@ mode = "ask"
 theme = "default"
 ```
 
-Then launch from your project directory:
+然后在工作目录启动：
 
 ```sh
 lanscoder
 ```
 
-Development setup:
+---
+
+## 功能概览
+
+| 能力 | 说明 |
+|------|------|
+| 编程代理 | 理解代码、编辑文件、运行命令，33 个内置工具按权限分级 |
+| 多模型 | OpenAI 兼容 + Anthropic 适配器，会话内热切换模型 |
+| 权限控制 | 标准 / 宽松 / 放行三种模式，写前 diff 预览、敏感路径询问、持久授权 |
+| TUI 界面 | Textual 构建的终端界面，实时展示推理、工具调用与结果 |
+| 会话管理 | 创建、恢复、分支、分享会话，JSONL 持久化，断点续跑 |
+| 上下文压缩 | L1–L3 四级压缩管线，控制长会话 token 消耗 |
+| 后台子代理 | 子代理后台独立运行、完成后通知，支持并行任务与 worktree 隔离 |
+| 持久记忆 | 跨会话 recall，项目级 / 用户级作用域 |
+| skill系统 | 本地技能文件发现与加载 |
+| MCP 集成 | 连接外部 MCP 工具服务器（stdio / SSE） |
+
+---
+
+## 技术架构
+
+```
+┌────────────────────────────────────────────────────────────┐
+│                    表现层 · app/ (Textual TUI)               │
+│      转录视图 · 权限视图 · 子代理面板 · 模型切换 · 斜杠命令       │
+└──────────────────────────┬─────────────────────────────────┘
+                           │
+┌──────────────────────────┴─────────────────────────────────┐
+│                   编排层 · agent/                           │
+│  代理循环 · 回合协议 · 工具流 · 子代理引擎 · 权限协调 · 护栏      │
+└───────┬──────────────────────────────┬─────────────────────┘
+        │                              │
+┌───────┴──────────┐        ┌──────────┴──────────────┐
+│  能力层 · tools/  │        │  能力层 · permissions/  │
+│  33 个内置工具     │        │  策略 · 单一执法闸门      │
+│  （工具与权限互不知晓，agent 是唯一协调者）              │
+└───────┬──────────┘        └──────────┬──────────────┘
+        └──────────────┬───────────────┘
+                       │
+┌──────────────────────┴──────────────────────────────────┐
+│              横切层 · 基础设施                            │
+│  providers/  模型适配（OpenAI · Anthropic）               │
+│  context/    事件日志 · 上下文构建 · L1–L3 压缩            │
+│  session/    会话生命周期 · JSONL 持久化 · 恢复/分支        │
+│  mcp/ memory/ skills/ planning/ config/ input/ subagent/ │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 技术栈
+
+| 层级 | 技术 |
+|------|------|
+| 运行时 | Python 3.11+ · anyio 异步 |
+| 终端 UI | Textual |
+| 模型适配 | OpenAI SDK（兼容接口）· Anthropic SDK |
+| 工具集成 | MCP（stdio / SSE） |
+| 持久化 | JSONL 会话存储 · TOML 配置（tomlkit）· portalocker |
+| 质量 | pytest（127 文件 / 3.7 万行测试）· trio · ruff · black · 依赖方向 AST 门禁 |
+| 发布 | PyPI · pipx · 一键安装脚本 |
+
+---
+
+## 文档
+
+完整文档见 [docs/](docs/)：
+
+- [快速开始](docs/getting-started/) — 安装、配置、5 分钟跑通
+- [能力指南](docs/guides/) — 权限模型、上下文压缩、会话管理
+- [架构](docs/architecture/) — 分层设计与依赖规则
+- [基准测试](docs/benchmark.md) — 96.38% 的评测口径与复现
+- [FAQ](docs/faq.md) — 常见问题
+
+---
+
+## 适合谁
+
+- 想**深入理解 Coding Agent 内部原理**的开发者
+- 想基于 Agent Harness **做二次开发**的人
+- 准备面试、需要**能讲清楚架构**的项目
+
+---
+
+## 开发
 
 ```sh
 python -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
-.venv/bin/python -m pytest
+.venv/bin/python -m pytest      
+.venv/bin/python -m ruff check lanscoder tests
 ```
 
-## Features at a glance
+贡献指南见 [docs/development.md](docs/development.md)。
 
-| Capability | What it does |
-|-----------|--------------|
-| Coding agent | Understands code, edits files, runs shell commands, 29 built-in tools |
-| Multi-model | OpenAI-compatible and Anthropic providers, hot-switchable mid-session |
-| Permissions | Standard / aggressive / bypass modes, diff preview before every mutation; prompts answered with 1/2/3, `reject: <feedback>` on write review |
-| TUI | Textual-based terminal UI; streams reasoning, tool calls, and results in real time, with nested collapsible transcript rows and per-reasoning durations |
-| Sessions | Create, resume, fork, share — persisted as JSONL |
-| Context compression | 4-level pipeline (L1–L4) to manage token usage in long conversations |
-| Background subagents | Subagents run independently in the background, notify on completion |
-| MCP integration | Connect external tool servers via Model Context Protocol |
+---
 
-## Architecture
+## 更新日志
 
-```
-lanscoder/
-├── app/           Textual TUI
-├── agent/         Agent loop, tool execution, permission resume
-├── providers/     Model provider adapters
-├── tools/         Tool registration and execution (29 built-in tools)
-├── permissions/   Policy, grants, and permission coordinator
-├── context/       Event log and context management
-├── session/       Session lifecycle
-├── planning/      Task plan service and projection
-├── subagent/      Background subagent types
-├── input/         Attachments and clipboard
-├── mcp/           MCP protocol integration
-├── memory/        Cross-session persistent memory
-├── skills/        Local skill discovery and loading
-├── config/        TOML configuration
-└── utils/         Shared utilities
-```
+### v1.2.0 (2026-08)
 
-## Who is it for?
+- **TUI 品牌化**：统一深色配色、建议框与活动行对齐
+- **转录重构**：嵌套可折叠回合模型，live 与重放渲染顺序一致
+- **权限体验**：修复暂停/恢复错序，权限提示移入瞬时按钮区，恢复严格 1/2/3 输入
+- **后台通知**：持久化通知标签与错误信息，退出前冲刷待发通知
+- **权限执法解耦**：PermissionCoordinator 成为单一执法闸门，tools 层对 permissions 零引用，移除 `runtime/` 包
+- **架构门禁**：依赖方向端到端测试锁定包边界
 
-- Developers who want to **deeply understand how coding agents work**
-- People looking to **extend or modify** a Python-based coding agent
-- Anyone who needs **a project they can explain architecturally** for interviews or portfolios
-- AI enthusiasts who want to **experiment with different models** locally
+### v1.1.0 (2026-08)
 
-## Contributing
+- **同步/异步统一**：非流式回合收敛到统一异步核心，删除旧同步分支
+- **子代理面板**：后台子代理选择、高亮与停止交互
+- **worktree 隔离**：子代理可在隔离 git worktree 中运行且可取消
+- **子代理可观测**：delegate 结果上报 token 用量与耗时
+- **工程化**：ruff / black 纳入 dev 依赖
 
-Issues and PRs are welcome. Tests cover most core modules — please make sure they pass before submitting.
+### v1.0.1 (2026-08)
+
+- **压缩管线 v3/v4**：LLM 摘要压缩（保留最近 N 轮原文）、hard-truncate 兜底、压缩策略版本化
+
+### v1.0.0
+
+- 首个稳定版本：核心代理循环、Textual TUI、工具系统、会话持久化、上下文管理
+
+---
+
+## 项目声明
+
+- 这是可运行的个人工程项目，不代表已完成的规模化市场验证。
+- 基准分数（96.38%）为本地锁定配置下测得，非官方榜单排名，[口径详见 benchmark 文档](docs/benchmark.md)。
+- 仓库不包含生产环境密钥；请从示例配置创建本地配置。
 
 ## License
 
-MIT
+[MIT](LICENSE)

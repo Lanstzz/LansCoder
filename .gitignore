@@ -12,7 +12,6 @@ htmlcov/
 .env
 .env.*
 .local/
-AGENTS.md
 agent.md
 agents.md
 text/
@@ -35,9 +34,8 @@ benchmark/topic_selfplay/runs/
 *.docx
 *.docm
 ~$*.docx
-docs/
 # Local tool data and course site (not part of the repo)
 .codojo/
 lanscoder-course/
 handoff.md
-
+workspace/
