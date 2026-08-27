@@ -16,17 +16,15 @@ from lanscoder.app.model_state import ModelSelectionState, ModelStateStore
 from lanscoder.app.permission_commands import PermissionCommandHandler
 from lanscoder.app.recall_commands import RecallCommandHandler
 from lanscoder.app.router import CompositeCommandHandler
-from lanscoder.app.runtime import AgentChatRunner, CurrentSessionState
+from lanscoder.app.runtime import AgentChatRunner
 from lanscoder.app.session_commands import SessionCommandHandler
 from lanscoder.app.skill_commands import SkillCommandHandler
 from lanscoder.app.tui import LansCoderApp, LansCoderTuiConfig
 from lanscoder.config.models import ModelCatalog, ModelProfile
 from lanscoder.config.settings import AppConfig, load_config
-from lanscoder.context.llm_compact import LlmCompactService
-from lanscoder.context.manager import ContextWindowManager
 from lanscoder.context.provider_summarizer import ProviderLlmCompactSummarizer
-from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.triggers import ContextCompactionConfig
+from lanscoder.core.session import create_agent_session
 from lanscoder.mcp.adapter import adapt_mcp_tool
 from lanscoder.mcp.config import load_mcp_configs
 from lanscoder.mcp.manager import McpManager
@@ -140,7 +138,6 @@ def create_lanscoder_app(
             provider = create_provider_for_model(selected_profile)
         except ProviderConfigError as error:
             raise ValueError(str(error)) from error
-    store = JsonlSessionStore(resolved_data_root)
     sandbox_access = SandboxAccess()
     background_manager = BackgroundJobManager()
     resolved_tools = (
@@ -162,6 +159,29 @@ def create_lanscoder_app(
     tool_provider = McpToolProvider(resolved_tools, mcp_manager, include_mcp=tools is None)
     current_tools = tool_provider()
     resolved_provider = provider
+    handle = create_agent_session(
+        provider=resolved_provider,
+        project_root=project_path,
+        data_root=resolved_data_root,
+        tools=current_tools,
+        session_id=session_id,
+        resume=resume_session,
+        limits=AgentLoopLimits.default(),
+        request_options=_main_request_options(selected_profile),
+        context_window=selected_profile.context_window if selected_profile is not None else None,
+        background_manager=background_manager,
+    )
+    chat_runner = handle.runner
+    # TUI 专属接线:core 是 headless 装配源;流式开关 / MCP 热更新工具集 / 压缩配置
+    # 属应用层行为,在 handle 之上补齐,不改 core 装配。
+    chat_runner.tools_provider = tool_provider
+    chat_runner.use_streaming = _should_use_streaming(resolved_provider, resolved_app_config)
+    context_manager = chat_runner.context_manager
+    if compact_config is not None:
+        context_manager.config = compact_config
+    current = chat_runner.current_session
+    session = current.session
+    store = session.store
     bootstrap = SessionBootstrap(
         store=store,
         project_root=project_path,
@@ -169,17 +189,7 @@ def create_lanscoder_app(
         tools=current_tools,
         sandbox_access=sandbox_access,
     )
-    session = bootstrap.resume(session_id) if resume_session and session_id is not None else bootstrap.from_project(session_id=session_id)
-    current = CurrentSessionState(session)
-    compact_summarizer = ProviderLlmCompactSummarizer(resolved_provider)
-    context_manager = ContextWindowManager(
-        store=store,
-        config=compact_config,
-        l3_service=LlmCompactService(
-            store=store,
-            summarizer=compact_summarizer,
-        ),
-    )
+    compact_summarizer = context_manager.l3_service.summarizer
     catalog = SessionCatalog(resolved_data_root)
     from lanscoder.session.index import SessionIndex
 
@@ -232,18 +242,6 @@ def create_lanscoder_app(
     memory_handler = MemoryCommandHandler(
         memory_provider=lambda: current.session.memory_manager,
         writer_provider=lambda: current.session.writer,
-    )
-    chat_runner = AgentChatRunner(
-        current_session=current,
-        provider=resolved_provider,
-        tools=current_tools,
-        tools_provider=tool_provider,
-        context_manager=context_manager,
-        limits=AgentLoopLimits.default(),
-        use_streaming=_should_use_streaming(resolved_provider, resolved_app_config),
-        request_options=_main_request_options(selected_profile),
-        context_window=selected_profile.context_window if selected_profile is not None else None,
-        background_manager=background_manager,
     )
     context_handler = ContextCommandHandler(
         session=current,
