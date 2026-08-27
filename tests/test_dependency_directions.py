@@ -202,3 +202,15 @@ def test_every_classification_table_key_classifies() -> None:
 def test_gated_tool_set_all_classify() -> None:
     for name in GATED:
         assert classify(name, {}) is not None, name
+
+
+def test_core_never_references_app() -> None:
+    """Step 1 约束: core 是 headless 唯一装配源,永不 import app。"""
+
+    assert _unexpected_module_refs(LANSCODER / "core", ("lanscoder.app",)) == []
+
+
+def test_agent_never_references_core() -> None:
+    """Step 1 约束: agent 是下层会话绑定引擎,永不 import core(不产生新环)。"""
+
+    assert _unexpected_module_refs(LANSCODER / "agent", ("lanscoder.core",)) == []

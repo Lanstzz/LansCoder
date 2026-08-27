@@ -68,3 +68,28 @@ def test_loop_does_not_import_subagent_module() -> None:
 
     leaked = _fresh_import_leak_check("lanscoder.agent.loop", ("lanscoder.agent.subagent_engine",))
     assert leaked is None, leaked
+
+
+def test_core_import_does_not_pull_app() -> None:
+    """``lanscoder.core`` 是 headless 装配源,必须能脱离 ``lanscoder.app`` 独立 import。
+
+    Step 1 把装配根从 ``app/runtime.py`` 搬到 ``lanscoder/core/runtime.py``;若 core
+    反向 import app 会形成环,这条约束锁死该边界。
+    """
+
+    leaked = _fresh_import_leak_check("lanscoder.core", ("lanscoder.app",))
+    assert leaked is None, leaked
+
+
+def test_core_runtime_import_does_not_pull_app() -> None:
+    """装配根本身(``lanscoder.core.runtime``)不得把 app 拖进 import 链。"""
+
+    leaked = _fresh_import_leak_check("lanscoder.core.runtime", ("lanscoder.app",))
+    assert leaked is None, leaked
+
+
+def test_agent_import_does_not_pull_core() -> None:
+    """``lanscoder.agent`` 是下层引擎,不得反向依赖 core(依赖方向终态约束)。"""
+
+    leaked = _fresh_import_leak_check("lanscoder.agent", ("lanscoder.core",))
+    assert leaked is None, leaked
