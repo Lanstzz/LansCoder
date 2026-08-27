@@ -17,10 +17,10 @@
 ## Acceptance scenarios
 
 - [x] **SC-1 (Step 1 零行为变化)**: Given 装配根从 `app/runtime.py` 原样搬到 `lanscoder/core/runtime.py` 且 `app/runtime.py` 变为 re-export shim,When 运行全量测试与依赖方向/层边界测试,Then 全部绿、行为零变化。证据: `pytest` 1666 passed、`ruff` all checks passed。
-- [ ] **SC-2 (Step 2 只加不改)**: Given 新增 `create_agent_session`(headless 唯一装配源:provider + session + 工具 + context 管理器 + runner)及 L1/L2 公共 API,When 运行新增测试与全量回归,Then 旧行为不变、新测试绿。
+- [x] **SC-2 (Step 2 只加不改)**: Given 新增 `create_agent_session`(headless 唯一装配源:provider + session + 工具 + context 管理器 + runner)及 L1/L2 公共 API,When 运行新增测试与全量回归,Then 旧行为不变、新测试绿。证据: `pytest` 1689 passed(新增 23 用例)、`ruff` all checks passed。
 - [ ] **SC-3 (Step 3 factory 消费 core)**: Given `app/factory.py` 改为消费 `create_agent_session`(模型选择逻辑如 ModelStateStore 保留在 factory,传入选好的 provider),When 运行 factory 测试与 TUI 回归,Then 行为保持、测试绿。
 - [x] **SC-4 (依赖方向)**: Given `lanscoder/core` 存在,When 运行 AST 依赖方向扫描与 fresh-interpreter 泄漏检查,Then `core` 永不 import `app`、`agent` 永不 import `core`,且 `tests/test_dependency_directions.py` 与 `tests/test_layer_boundaries.py` 已把 core 纳入约束。证据: 新增 6 个用例全绿(`test_core_runtime_shim.py` 3 + layer boundaries 3 + dependency directions 2)。
-- [ ] **SC-5 (无 TUI 可用)**: Given 只 import `lanscoder.core` 的 L1/L2/L3,When 在不初始化 Textual TUI 的环境运行最小 headless smoke test,Then 三层均可正常创建与驱动。
+- [x] **SC-5 (无 TUI 可用)**: Given 只 import `lanscoder.core` 的 L1/L2/L3,When 在不初始化 Textual TUI 的环境运行最小 headless smoke test,Then 三层均可正常创建与驱动。证据: fresh-interpreter 泄漏检查(`import lanscoder.core` 不拉入 app)+ `test_core_agent_loop` / `test_core_agent` / `test_core_session` 全 headless 跑通。
 
 ## Invariants
 
@@ -44,27 +44,28 @@
 - 本任务已编码进 `.ai-team/TASK.md`;repo-task-sync skill 已注册到 `~/.codex/skills`;仓库补齐 `AGENTS.md` 与真实 `PROJECT.md`。
 - 依赖方向结论已核实(handoff「依赖方向结论」节)。
 - **Step 1 完成**: 装配根(`register_loop_tools` / `create_agent_loop` / `CurrentSessionState` / `AgentChatRunner`)原样迁至 `lanscoder/core/runtime.py`(新增 `__all__`),`lanscoder/app/runtime.py` 变 re-export shim;依赖方向/层边界测试纳入 core;新增 shim 防漂移测试。
+- **Step 2 完成**: 新增 `lanscoder/core/{events,messages,agent_loop,agent,session}.py` + 更新 `__init__.py`——L1 `agent_loop`(AsyncIterator[AgentEvent],O1=方案 A 临时会话适配)、L2 `Agent`(subscribe/prompt/steer/follow_up/abort)、L3 `create_agent_session`(headless 装配源,返回 `AgentSessionHandle(session, runner, agent)`)。
 
 ## Pending
 
 - [ ] 评审并合并本 PR(spec + TASK.md + PROJECT.md + AGENTS.md)。
 - [x] Step 1:装配根搬迁到 `lanscoder/core/runtime.py`,`app/runtime.py` 变 re-export shim,依赖/层边界测试纳入 core。
-- [ ] Step 2:新增 `create_agent_session` + L1/L2 公共 API + 新测试。
+- [x] Step 2:新增 `create_agent_session` + L1/L2 公共 API + 新测试。
 - [ ] Step 3:`app/factory.py` 改为消费 core 装配,行为保持。
 
 ## Next step
 
-评审并合并本 Step 1 PR;合并后开始 Step 2:新增 `create_agent_session`(headless 唯一装配源)+ L1 `agent_loop` / L2 `Agent` 公共 API(O1=方案 A,`LoopContext` 显式注入)+ `LoopMessage`/`AgentEvent` 模型 + 新测试。
+评审并合并本 Step 2 PR;合并后开始 Step 3:`app/factory.py` 改为消费 `create_agent_session`(模型选择逻辑如 ModelStateStore 保留在 factory,把选好的 provider 传入),行为保持,factory 测试回归绿。
 
 ## Verification
 
-- [x] `pytest` 全量绿: 1666 passed(2026-08-27)。
+- [x] `pytest` 全量绿: 1689 passed(Step 2,2026-08-27;Step 1 为 1666)。
 - [x] `node .ai-team/check.mjs --base origin/main` 通过(Step 1 分支)。
 - [x] `ruff check lanscoder tests` 通过。
-- [x] SC-1 / SC-4 已以真实命令退出码记录;SC-2 / SC-3 / SC-5 待 Step 2 / Step 3。
+- [x] SC-1 / SC-2 / SC-4 / SC-5 已以真实命令退出码记录;SC-3 待 Step 3(factory 消费 core)。
 
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: Task 0(需求+spec)与 Step 1(装配根搬迁+shim+依赖约束)已完成并各自开 PR。下一步: 评审合并 Step 1 PR,然后开始 Step 2(create_agent_session + L1/L2)。
+- Summary: Task 0(需求+spec)、Step 1(装配根搬迁)、Step 2(L1/L2/L3 公共 API)已完成并各自开 PR。下一步: 评审合并 Step 2 PR,然后开始 Step 3(factory 消费 core)。
