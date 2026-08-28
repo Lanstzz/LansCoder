@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from lanscoder.app.factory import create_lanscoder_app
-from lanscoder.app.runtime import create_agent_loop
+from lanscoder.core.runtime import create_agent_loop
 from lanscoder.agent.session import AgentSession
 from lanscoder.context.llm_compact import LlmCompactService
 from lanscoder.context.manager import ContextWindowManager

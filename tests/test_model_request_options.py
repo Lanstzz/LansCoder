@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from lanscoder.agent.session import AgentSession
-from lanscoder.app.runtime import AgentChatRunner, CurrentSessionState
+from lanscoder.core.runtime import AgentChatRunner, CurrentSessionState
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.errors import ProviderError, ProviderErrorKind

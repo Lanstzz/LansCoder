@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from lanscoder.app.runtime import AgentChatRunner, CurrentSessionState
+from lanscoder.core.runtime import AgentChatRunner, CurrentSessionState
 from lanscoder.agent.loop import ToolExecutionEvent
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.session import AgentSession

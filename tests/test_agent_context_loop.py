@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from lanscoder.app.runtime import create_agent_loop
+from lanscoder.core.runtime import create_agent_loop
 from lanscoder.agent.loop import AgentLoop, ToolExecutionEvent
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.user_input import AgentTurnStatus

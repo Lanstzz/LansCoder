@@ -5,7 +5,7 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lanscoder.app.runtime import create_agent_loop
+from lanscoder.core.runtime import create_agent_loop
 from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.session import AgentSession
 from lanscoder.agent.subagent_engine import SubagentEngine
@@ -110,7 +110,7 @@ def _create_task_plan(session: AgentSession, *, task_id: str) -> None:
 def _child_runner_factory(provider):
     """Build a child-loop factory closed over ``provider`` for one test.
 
-    Mirrors the production closure in ``app/runtime.create_agent_loop``: the
+    Mirrors the production closure in ``core/runtime.create_agent_loop``: the
     child never gets the delegate tool, and cancellation flows from the parent
     turn through the current cancellation token.
     """

@@ -26,7 +26,7 @@ from lanscoder.agent.background import (
     strip_background_controls,
     with_background_controls,
 )
-from lanscoder.app.runtime import create_agent_loop
+from lanscoder.core.runtime import create_agent_loop
 from lanscoder.agent.session import AgentSession
 from lanscoder.context.context_builder import ContextBuilder
 from lanscoder.context.store import JsonlSessionStore
