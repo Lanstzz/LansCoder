@@ -1189,3 +1189,146 @@ def test_manager_hard_truncate_falls_through_when_all_recent(tmp_path: Path) -> 
     assert result.reason != "hard_truncate"
     assert result.final_failure_reason == "provider_error"
     assert not any(event.type == "checkpoint_created" for event in store.list_events("sess_test"))
+
+
+# -- CompactionStrategy 开关(Phase 2: LoCoBench 评估 A/B) ----------------
+
+def test_manager_no_compact_strategy_skips_without_events(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    view = _view(_message("msg_1", "content"))
+    pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=50))
+    l3 = FakeL3(_l3_result())
+    manager = ContextWindowManager(
+        store=store,
+        pipeline=pipeline,
+        l3_service=l3,
+        strategy="no_compact",
+    )
+
+    result = manager.compact_if_needed(
+        _compact_request(
+            view=view,
+            runtime_state=SessionRuntimeState(session_id="sess_test"),
+            trigger=ContextWindowTrigger.AUTO,
+            current_turn=1,
+            budget=_budget(input_tokens=1000),
+            estimate_budget=lambda candidate: _budget(input_tokens=50),
+        )
+    )
+
+    assert result.status == "skipped"
+    assert result.reason == "strategy_no_compact"
+    assert pipeline.calls == []
+    assert l3.calls == []
+    event_types = [event.type for event in store.list_events("sess_test")]
+    assert "compaction_completed" not in event_types
+    assert "llm_compaction_completed" not in event_types
+
+
+def test_manager_l1_l2_strategy_stops_after_programmatic_success(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    view = _view(_message("msg_1", "content"))
+    pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=50))
+    l3 = FakeL3(_l3_result())
+    manager = ContextWindowManager(
+        store=store,
+        pipeline=pipeline,
+        l3_service=l3,
+        strategy="l1_l2",
+    )
+
+    result = manager.compact_if_needed(
+        _compact_request(
+            view=view,
+            runtime_state=SessionRuntimeState(session_id="sess_test"),
+            trigger=ContextWindowTrigger.AUTO,
+            current_turn=1,
+            budget=_budget(input_tokens=1000),
+            estimate_budget=lambda candidate: _budget(input_tokens=50),
+        )
+    )
+
+    assert result.status == "success"
+    assert result.reason == "token_threshold"
+    assert result.programmatic_event is not None
+    assert result.l3_event is None
+    assert l3.calls == []
+    event_types = [event.type for event in store.list_events("sess_test")]
+    assert "compaction_completed" in event_types
+    assert "llm_compaction_completed" not in event_types
+
+
+def test_manager_l1_l2_strategy_hard_truncates_without_l3_when_above_target(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    messages = [
+        _turn_message("msg_1", created_turn=1),
+        _turn_message("msg_2", created_turn=2),
+        _turn_message("msg_3", created_turn=3),
+        _turn_message("msg_4", created_turn=4),
+    ]
+    for message in messages:
+        store.append_event(
+            SessionEvent(
+                id=f"evt_{message.id}",
+                session_id="sess_test",
+                type="user_message",
+                payload={"message_id": message.id, "parts": [message.parts[0].to_dict()]},
+            )
+        )
+    view = _view(*messages)
+    pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=900, stopped_at="not_reached"))
+    l3 = HardTruncateFakeL3(store, [_l3_result(status="failed", failure_reason="no_summary")])
+    manager = ContextWindowManager(
+        store=store,
+        pipeline=pipeline,
+        l3_service=l3,
+        strategy="l1_l2",
+        config=ContextCompactionConfig(recent_turn_window=2),
+    )
+
+    result = manager.compact_if_needed(
+        _compact_request(
+            view=view,
+            runtime_state=SessionRuntimeState(session_id="sess_test"),
+            trigger=ContextWindowTrigger.AUTO,
+            current_turn=4,
+        )
+    )
+
+    assert result.status == "success"
+    assert result.reason == "hard_truncate"
+    assert result.l3_event is not None
+    assert result.l3_event.fallback_steps is not None
+    assert result.l3_event.fallback_steps[-1]["action"] == "hard_truncate"
+    assert l3.calls == []  # L1+L2 策略绝不调用 L3 摘要(generate_candidate 未被调用)
+    checkpoint = result.view.checkpoints[-1]
+    assert checkpoint.summary == "[Earlier dialogue truncated — recent N turns kept]"
+
+
+def test_manager_l1_l2_strategy_fails_without_l3_when_nothing_to_drop(tmp_path: Path) -> None:
+    store = JsonlSessionStore(tmp_path)
+    view = _view(_message("msg_1", "content"))
+    pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=900, stopped_at="not_reached"))
+    l3 = FakeL3(_l3_result())
+    manager = ContextWindowManager(
+        store=store,
+        pipeline=pipeline,
+        l3_service=l3,
+        strategy="l1_l2",
+    )
+
+    result = manager.compact_if_needed(
+        _compact_request(
+            view=view,
+            runtime_state=SessionRuntimeState(session_id="sess_test"),
+            trigger=ContextWindowTrigger.AUTO,
+            current_turn=1,
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.reason == "l1_l2_only_above_target"
+    assert result.final_failure_reason == "l1_l2_only_above_target"
+    assert l3.calls == []
+    event_types = [event.type for event in store.list_events("sess_test")]
+    assert "llm_compaction_completed" in event_types

@@ -14,7 +14,7 @@ from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.session import AgentSession
 from lanscoder.context.llm_compact import LlmCompactService
-from lanscoder.context.manager import ContextWindowManager
+from lanscoder.context.manager import CompactionStrategy, ContextWindowManager
 from lanscoder.context.provider_summarizer import ProviderLlmCompactSummarizer
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.base import ChatProvider
@@ -48,8 +48,13 @@ def create_agent_session(
     context_window: int | None = None,
     background_manager: BackgroundJobManager | None = None,
     user_memory_root: str | Path | None = None,
+    compaction_strategy: str = "l1_l2_l3",
 ) -> AgentSessionHandle:
-    """headless 唯一装配源;持久化、内置工具、权限、上下文压缩都在这里落地。"""
+    """headless 唯一装配源;持久化、内置工具、权限、上下文压缩都在这里落地。
+
+    ``compaction_strategy`` 取值 ``no_compact`` / ``l1_l2`` / ``l1_l2_l3``
+    (默认 ``l1_l2_l3`` 保持现有全量压缩行为),供基准评估 A/B 使用。
+    """
 
     project_path = Path(project_root)
     resolved_data_root = (
@@ -83,6 +88,7 @@ def create_agent_session(
 
     context_manager = ContextWindowManager(
         store=store,
+        strategy=CompactionStrategy(compaction_strategy),
         l3_service=LlmCompactService(
             store=store,
             summarizer=ProviderLlmCompactSummarizer(provider),

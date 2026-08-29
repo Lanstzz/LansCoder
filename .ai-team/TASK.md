@@ -50,29 +50,30 @@
 - [x] **Phase 1 数据与环境(2026-08-29)**:LoCoBench-Agent clone 到 `/tmp/LoCoBench-Agent`(commit `2ab9218`,工具目录不入仓库);venv 装依赖(requirements 去 lighteval/boto3 + tiktoken + psutil + gdown);`data.zip` 1.27GB 经代理 gdown 下载并解压(4.6GB,1000 项目 / 8000 场景 / 8000 已转换 agent 场景);`convert-scenarios --limit 5` 验证通过(全 8000 走缓存,0 失败)。
 - [x] **Phase 1 最小闭环跑通(2026-08-29)**:`benchmark/locobench/` 初版 driver 就绪(`lanscoder_agent.py` / `tool_mapping.py` / `driver.py` / `README.md`)。1 个 easy 场景(`php_api_rest_easy_078_architectural_understanding_easy_01`,19K context)由 `LansCoderAgent` + deepseek-v4-flash 执行 **3 turns**,产出 `AgentEvaluationResults`:**overall 0.704 / LCBA-Comp 0.74 / LCBA-Eff 0.65**,session_status=completed,0 error,59 条工具调用(6 类 LoCoBench 工具 + LansCoder `read_memory`),provider 真实 usage 共 131,327 tokens,**未触发压缩**(19K 场景 vs 1M 窗口,符合预期)。产物在 `benchmark/runs/locobench/smoke-easy-1/`(gitignored)。
 - [x] **Phase 1 坑(已修/已记录)**:① harness 场景文件必须嵌套在 `initial_context.project_files`,否则工具工作区为空;② LansCoder 内部 loop 工具调用需从 session store 事件采集(`ChatResponse.tool_calls` 只含末条消息);③ `FinishReason` 是字符串 Literal 不是 enum(首次跑 `'str' object has no attribute 'value'` 中断,已修);④ `--max-turns N` 才是预算上限(阶段循环 success 不满足会跑满回合);⑤ 工具名带 `_copy_<id>` 副本后缀需归一化。
+- [x] **Phase 2 driver 完善(2026-08-29)**:① `create_agent_session` 新增 `compaction_strategy` 参数(no_compact / l1_l2 / l1_l2_l3,默认 l1_l2_l3 保持全量现状;`ContextWindowManager` 增加 `CompactionStrategy`,no_compact 直接跳过、l1_l2 规则压不达标时走非 LLM 硬截断兜底不调 L3),driver 新增 `--compaction-strategy`;② `benchmark/locobench/compaction_capture.py`(纯函数事件归一化:before/after tokens、level_metrics→L1/L2 hit、fallback_steps→硬截断标记)+ `analyze.py`(聚合:三套 token 口径 + CompactionEvent 统计,driver 收尾产出 `analysis.json`);③ per-turn 三口径分开标注(harness 启发式 `context_tokens` / provider 真实 usage / lanscoder `chars/4` 估算),失败回合也落 turn_stats(不丢数据)。
 
 ## Pending
 
-- **Phase 2(下一步)**:完善 `benchmark/locobench/` driver:① 给 `create_agent_session` 暴露压缩策略开关(no-compact / L1+L2 / L1+L2+L3,现为默认全量),② 验证 `CompactionEvent` 在 hard/expert 场景真实采集(before/after tokens、L1/L2/L3 hit rate、硬截断率),③ 结果对齐(harness 启发式 context_tokens / provider usage / lanscoder chars/4 分开输出)。
-- **Phase 3**:hard + expert 各 1 个冒烟,记录压缩触发情况与水位。
+- **Phase 2 ✅(2026-08-29)**:driver 压缩策略开关 + CompactionEvent 采集 + 三口径对齐已就绪(见 Completed);hard/expert 真实采集留待 Phase 3 冒烟验证。
+- **Phase 3(下一步)**:hard + expert 各 1 个冒烟,记录压缩触发情况与水位(SC-2)。
 - **Phase 4**:策略 A/B(no-compact / L1+L2 / L1+L2+L3)+ 分析脚本(上下文规模-指标曲线、压缩行为统计)。
 - **Phase 5**:`benchmark/locobench/README.md` 复现文档完善;更新 `record.md`(补 Phase 1 评估观察);全量门禁(SC-6)。
 
 ## Next step
 
-**Phase 1 已通过**(数据就绪 + 1 个 easy 跑通出分)。下一步 **Phase 2**:完善 `benchmark/locobench/` driver——给 LansCoder 压缩策略加 A/B 开关(no-compact / L1+L2 / L1+L2+L3),并把 CompactionEvent 采集对齐到 hard/expert 场景(验证 before/after tokens、L1/L2/L3 hit rate、硬截断率),随后进入 Phase 3 hard+expert 各 1 个冒烟。
+**Phase 2 已通过**(2026-08-29):压缩策略 A/B 开关(no_compact / l1_l2 / l1_l2_l3)、CompactionEvent 归一化采集(compaction_capture.py)、结果聚合(analyze.py → analysis.json)、三口径分开标注均已落地,并用 1 个 easy 场景真实复跑验证(overall 0.76,3 turns,0 压缩,符合 O3)。下一步 **Phase 3**:hard + expert 各 1 个冒烟(SC-2),用 `--compaction-strategy l1_l2_l3` 记录压缩是否触发、触发水位与 CompactionEvent 统计;随后 Phase 4 三组策略 A/B。
 
 ## Verification
 
 - [ ] `node .ai-team/check.mjs --base origin/main` → valid
 - [ ] `node .ai-team/session.mjs validate` → valid(private sessions 已启用)
-- [x] SC-1:1 个 easy 场景跑通并出分(overall 0.704 / comp 0.74 / eff 0.65,3 turns,0 error)
-- [ ] SC-2:hard + expert 各 1 个跑通
-- [ ] SC-3:三组策略对比产出
-- [ ] `pytest` / `ruff check .` 不受影响(不改核心)
+- [x] SC-1:1 个 easy 场景跑通并出分(Phase 1 overall 0.704;Phase 2 复跑 overall 0.76 / comp 0.83 / eff 0.65,3 turns)
+- [ ] SC-2:hard + expert 各 1 个跑通(Phase 3)
+- [ ] SC-3:三组策略对比产出(Phase 4)
+- [x] `pytest`(1723 passed, 2 skipped)/ `ruff check lanscoder tests benchmark/locobench` 全绿(核心仅新增默认不变策略参数,未改语义)
 
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: TASK-004 **active**——LoCoBench-Agent 接入(纯测量,不改核心),决策 Q1–Q5 已定。**Phase 1 完成**(2026-08-29):数据 4.6GB 就绪、convert-scenarios 验证通过、`benchmark/locobench/` 初版 driver 跑通 1 个 easy 场景(SC-1 ✅,overall 0.704,3 turns,0 error)。下一步 **Phase 2**:压缩策略 A/B 开关 + CompactionEvent 采集对齐,再进 hard/expert 冒烟。
+- Summary: TASK-004 **active**——LoCoBench-Agent 接入(纯测量)。**Phase 1 完成**(数据 4.6GB + 1 easy 跑通)。**Phase 2 完成**(2026-08-29):`create_agent_session` 新增 `compaction_strategy`(no_compact/l1_l2/l1_l2_l3 默认全量)、driver `--compaction-strategy`、`compaction_capture.py` 归一化采集(L1/L2/L3 hit、硬截断)、`analyze.py` 聚合(analysis.json)、per-turn 三口径分开标注;1 个 easy 场景真实复跑验证(overall 0.76,3 turns,0 压缩符合 O3)。下一步 **Phase 3**:hard + expert 各 1 个冒烟(SC-2),再 Phase 4 三组策略 A/B。

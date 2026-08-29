@@ -36,3 +36,4 @@
 | O2 | LansCoder 内部工具 `read_memory` 混入工具调用统计 | turn 1 工具列表含 `read_memory` | harness `tool_usage_log` 会把它算进 agent 工具使用;分析时需过滤非 LoCoBench 工具或标注 |
 | O3 | easy(19K context)场景不触发压缩 | 3 turns 0 个 CompactionEvent(1M 窗口) | 符合预期;压缩行为验证必须用 hard/expert(200K–1M)场景(Phase 3 冒烟验证) |
 | O4 | 回合预算由 `--max-turns` 决定,harness 阶段循环在 success 不满足时会跑满 | 首次 10 turns ≈ 30+ 次串行 LLM 调用,~10 分钟 | 冒烟/预算控制固定 `--max-turns`;批量跑时按场景难度设上限 |
+| O5 | 同一回合三套 token 口径差距大(easy 场景量化) | Phase 2 复跑(easy,19K 场景):末回合 harness 启发式 ~7.4K vs lanscoder chars/4 ~40K vs provider 真实 usage 45K/回合(累计 127K) | 与 P2/O1 同源:分析/画曲线必须按口径分开(transcript/analysis 已分开标注);压缩效果曲线建议用 provider 真实 usage 或 tiktoken 统一计量 |

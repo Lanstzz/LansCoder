@@ -6,8 +6,13 @@ L2 归档占位 / L3 LLM 摘要)。每个 LoCoBench turn 对应一次
 (harness 侧 ``--context-management none`` 时不干预)。
 
 压缩行为通过读取 session store 的 ``compaction_completed`` /
-``llm_compaction_completed`` / ``compaction_skipped`` 事件采集,与 harness
-的 per-turn ``context_tokens`` 启发式、provider 真实 usage 分开标注。
+``llm_compaction_completed`` / ``compaction_skipped`` 事件采集(经
+``compaction_capture`` 归一化:before/after tokens、L1/L2/L3 hit 数据、
+硬截断标记),与 harness 的 per-turn ``context_tokens`` 启发式、provider
+真实 usage、LansCoder ``chars/4`` 估算分开标注。
+
+``config["compaction_strategy"]`` 控制被测压缩策略:
+``no_compact`` / ``l1_l2`` / ``l1_l2_l3``(默认,与现状全量一致)。
 """
 
 from __future__ import annotations
@@ -32,13 +37,10 @@ from lanscoder.context.store import JsonlSessionStore
 from lanscoder.core.session import create_agent_session
 from lanscoder.providers.types import MainRequestOptions
 
+from benchmark.locobench.compaction_capture import COMPACTION_EVENT_TYPES, normalize_compaction_event
 from benchmark.locobench.tool_mapping import map_locobench_tools
 
 logger = logging.getLogger(__name__)
-
-COMPACTION_EVENT_TYPES = frozenset(
-    {"compaction_completed", "llm_compaction_completed", "compaction_skipped"}
-)
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -78,6 +80,7 @@ class LansCoderAgent(BaseAgent):
         self.project_root = Path(self.config.get("project_root") or ".")
         self.context_window: int | None = self.config.get("context_window")
         self.max_tool_rounds = int(self.config.get("max_tool_rounds", 60))
+        self.compaction_strategy = str(self.config.get("compaction_strategy", "l1_l2_l3"))
 
         self._handle: Any = None
         self._store: JsonlSessionStore | None = None
@@ -87,6 +90,7 @@ class LansCoderAgent(BaseAgent):
         self.compaction_events: list[dict[str, Any]] = []
         self.turn_stats: list[dict[str, Any]] = []
         self._scenario_started_at: datetime | None = None
+        self._scenario_id: str | None = None
 
     # -- BaseAgent 接口 ---------------------------------------------------
 
@@ -97,8 +101,14 @@ class LansCoderAgent(BaseAgent):
     ) -> bool:
         """装配 LansCoder 会话:LoCoBench 工具映射 + create_agent_session。"""
 
+        self._scenario_id = str((scenario_context or {}).get("scenario_id") or "")
         mapped_tools = map_locobench_tools(available_tools)
-        logger.info("LansCoderAgent: mapped %d LoCoBench functions -> %d LansCoder tools", len(available_tools or []), len(mapped_tools))
+        logger.info(
+            "LansCoderAgent: mapped %d LoCoBench functions -> %d LansCoder tools (strategy=%s)",
+            len(available_tools or []),
+            len(mapped_tools),
+            self.compaction_strategy,
+        )
 
         handle = create_agent_session(
             provider=self.provider,
@@ -112,6 +122,7 @@ class LansCoderAgent(BaseAgent):
             ),
             request_options=MainRequestOptions(),
             context_window=self.context_window,
+            compaction_strategy=self.compaction_strategy,
         )
         # benchmark 非交互:工具直接执行,不弹权限确认
         handle.runner.current_session.set_permission_mode("bypass")
@@ -137,7 +148,21 @@ class LansCoderAgent(BaseAgent):
 
         started = time.monotonic()
         before_count = self._last_event_count
-        response = await self._handle.runner.arun_user_turn(message)
+        try:
+            response = await self._handle.runner.arun_user_turn(message)
+        except Exception as exc:  # noqa: BLE001
+            # 记录失败回合,保证 transcript/scenario_stats 不丢数据,再交给 harness 记错误
+            elapsed = time.monotonic() - started
+            self.turn_stats.append(
+                {
+                    "turn": len(self.turn_stats) + 1,
+                    "user_message": message,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "elapsed_seconds": round(elapsed, 3),
+                    "compaction_events": [],
+                }
+            )
+            raise
         elapsed = time.monotonic() - started
 
         usage = response.usage
@@ -148,6 +173,25 @@ class LansCoderAgent(BaseAgent):
         event_tool_calls, new_events = self._drain_turn_events(before_count)
         for event in new_events:
             self.compaction_events.append(event)
+
+        # LansCoder 自身口径:chars/4 估算当前会话视图的上下文规模(与
+        # provider usage / harness 启发式分开标注)。
+        lanscoder_chars4: int | None = None
+        lanscoder_budget: dict[str, Any] | None = None
+        try:
+            runner = self._handle.runner
+            view = runner.current_session.rebuild_view()
+            budget = runner.context_budget(view)
+            lanscoder_chars4 = budget.input_tokens
+            lanscoder_budget = {
+                "context_window": budget.context_window,
+                "input_capacity": budget.input_capacity,
+                "high_watermark": budget.high_watermark,
+                "low_watermark": budget.low_watermark,
+                "source": budget.source,
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("计算 lanscoder chars/4 估算失败: %s", exc)
 
         by_id: dict[str, ToolCall] = {tc.call_id: tc for tc in event_tool_calls}
         for tool_call in response.tool_calls:
@@ -175,18 +219,26 @@ class LansCoderAgent(BaseAgent):
         )
         self.add_message_to_history(message_obj)
 
+        harness_context_tokens = int(len((response.content or "").split()) * 1.3)
         self.turn_stats.append(
             {
                 "turn": len(self.turn_stats) + 1,
                 "user_message": message,
                 "assistant_content": response.content or "",
                 "tool_calls": [tc.to_dict() for tc in tool_calls],
+                # 三套 token 口径分开标注,禁止混用
                 "tokens_used": tokens_used,
                 "input_tokens": usage.input_tokens if usage else None,
                 "output_tokens": usage.output_tokens if usage else None,
+                "harness_context_tokens": harness_context_tokens,
+                "harness_total_context_tokens": sum(
+                    m.context_tokens for m in self.conversation_history
+                ),
+                "lanscoder_chars4_estimate": lanscoder_chars4,
+                "lanscoder_budget": lanscoder_budget,
                 "elapsed_seconds": round(elapsed, 3),
                 "finish_reason": response.finish_reason,
-                "compaction_events": [event["summary"] for event in new_events],
+                "compaction_events": new_events,
             }
         )
 
@@ -209,6 +261,8 @@ class LansCoderAgent(BaseAgent):
         """结束评估会话,返回统计与压缩行为。"""
 
         stats = self.get_session_statistics()
+        stats["scenario_id"] = self._scenario_id
+        stats["compaction_strategy"] = self.compaction_strategy
         stats["compaction_events"] = self.compaction_events
         stats["turn_stats"] = self.turn_stats
         stats["session_id"] = self._handle.session.session_id if self._handle else None
@@ -227,6 +281,7 @@ class LansCoderAgent(BaseAgent):
         self.turn_stats = []
         self._last_event_count = 0
         self._scenario_started_at = None
+        self._scenario_id = None
 
     def flush_scenario_stats(self) -> None:
         """把当前场景的 turn/compaction 统计追加到 sidecar JSONL(可重复调用)。"""
@@ -235,6 +290,8 @@ class LansCoderAgent(BaseAgent):
             return
         record = {
             "scenario_started_at": self._scenario_started_at.isoformat(),
+            "scenario_id": self._scenario_id,
+            "compaction_strategy": self.compaction_strategy,
             "session_id": self._handle.session.session_id if self._handle else None,
             "turn_stats": self.turn_stats,
             "compaction_events": self.compaction_events,
@@ -280,25 +337,7 @@ class LansCoderAgent(BaseAgent):
                         )
                     )
             elif event.type in COMPACTION_EVENT_TYPES:
-                compaction_events.append(
-                    {
-                        "type": event.type,
-                        "trigger": payload.get("trigger"),
-                        "reason": payload.get("reason"),
-                        "status": payload.get("status"),
-                        "before_tokens": payload.get("before_tokens"),
-                        "after_tokens": payload.get("after_tokens"),
-                        "target_tokens": payload.get("target_tokens"),
-                        "checkpoint_id": payload.get("checkpoint_id"),
-                        "summary": {
-                            "type": event.type,
-                            "trigger": payload.get("trigger"),
-                            "reason": payload.get("reason"),
-                            "before_tokens": payload.get("before_tokens"),
-                            "after_tokens": payload.get("after_tokens"),
-                        },
-                    }
-                )
+                compaction_events.append(normalize_compaction_event(event.type, payload))
 
         self._last_event_count = len(events)
         return tool_calls, compaction_events

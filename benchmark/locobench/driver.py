@@ -8,6 +8,10 @@
         --model-ref deepseek/deepseek-v4-flash \
         --output-dir benchmark/runs/locobench/smoke-easy
 
+Phase 2 起可指定被测压缩策略(--compaction-strategy
+no_compact / l1_l2 / l1_l2_l3,默认 l1_l2_l3),并在输出目录额外产出
+``analysis.json``(三套 token 口径 + CompactionEvent 压缩行为聚合)。
+
 harness 侧上下文管理用 ``--context-management none``(让 LansCoder
 ``ContextWindowManager`` 独占上下文管理,因果干净)。LoCoBench-Agent 数据
 (clone 到工具目录)路径由 ``--locobench-root`` 指向;本模块只写 driver 代码,
@@ -41,6 +45,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-tool-rounds", type=int, default=60, help="LansCoder 每回合最大工具轮")
     parser.add_argument("--model-ref", default="deepseek/deepseek-v4-flash", help="LansCoder 模型引用(默认 deepseek)")
     parser.add_argument("--context-window", type=int, default=1_000_000, help="LansCoder context_window 覆盖")
+    parser.add_argument(
+        "--compaction-strategy",
+        choices=["no_compact", "l1_l2", "l1_l2_l3"],
+        default="l1_l2_l3",
+        help="LansCoder 被测压缩策略(默认 l1_l2_l3 = 全量)",
+    )
     parser.add_argument("--context-management", choices=["none", "basic", "adaptive"], default="none", help="harness 上下文管理(默认 none,由 LansCoder 独占)")
     parser.add_argument("--initial-context-mode", choices=["full", "minimal", "empty"], default="minimal", help="harness 初始上下文模式")
     parser.add_argument("--output-dir", required=True, help="结果输出目录(建议 benchmark/runs/locobench/<run>)")
@@ -270,6 +280,7 @@ async def run(args: argparse.Namespace) -> int:
             "locobench_root": str(Path(args.locobench_root).resolve()),
             "context_window": args.context_window,
             "max_tool_rounds": args.max_tool_rounds,
+            "compaction_strategy": args.compaction_strategy,
         },
     )
 
@@ -306,6 +317,20 @@ async def run(args: argparse.Namespace) -> int:
         json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     logger.info("transcript.json 已写入 %s", output_dir / "transcript.json")
+
+    from benchmark.locobench.analyze import analyze
+
+    analysis = analyze(transcript)
+    (output_dir / "analysis.json").write_text(
+        json.dumps(analysis, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    logger.info(
+        "analysis.json 已写入 %s (策略=%s, 场景=%d, 压缩 attempts=%d)",
+        output_dir / "analysis.json",
+        args.compaction_strategy,
+        len(analysis["per_scenario"]),
+        analysis["summary"]["compaction"].get("attempts", 0),
+    )
 
     return 0
 

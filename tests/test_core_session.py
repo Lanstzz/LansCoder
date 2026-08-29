@@ -87,3 +87,36 @@ async def test_resume_reuses_session_when_id_given(tmp_path) -> None:
     assert first.session.session_id == "keep"
     assert second.session.session_id == "keep"
     assert second.session is not first.session
+
+
+@pytest.mark.anyio
+async def test_create_agent_session_wires_compaction_strategy(tmp_path) -> None:
+    """compaction_strategy 透传到 ContextWindowManager(默认保持全量)。"""
+
+    provider = FakeProvider(
+        responses=[ChatResponse(provider="fake", model="m", content="hi")]
+    )
+    handle = create_agent_session(
+        provider=provider,
+        project_root=tmp_path,
+        compaction_strategy="no_compact",
+    )
+    from lanscoder.context.manager import CompactionStrategy
+
+    assert handle.runner.context_manager.strategy == CompactionStrategy.NO_COMPACT
+
+    default = create_agent_session(provider=provider, project_root=tmp_path)
+    assert default.runner.context_manager.strategy == CompactionStrategy.L1_L2_L3
+
+
+@pytest.mark.anyio
+async def test_create_agent_session_rejects_unknown_compaction_strategy(tmp_path) -> None:
+    provider = FakeProvider(
+        responses=[ChatResponse(provider="fake", model="m", content="hi")]
+    )
+    with pytest.raises(ValueError):
+        create_agent_session(
+            provider=provider,
+            project_root=tmp_path,
+            compaction_strategy="bogus",
+        )

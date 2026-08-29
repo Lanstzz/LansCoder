@@ -39,6 +39,20 @@ class ContextCompactMode(StrEnum):
     MANUAL = "manual"
 
 
+class CompactionStrategy(StrEnum):
+    """上下文压缩策略开关(LoCoBench 评估 A/B 用,默认保持全量行为)。
+
+    - ``NO_COMPACT``:完全不压缩(上下文无界增长,测量基线)。
+    - ``L1_L2``:仅规则式压缩(L1 路由压缩 + L2 归档占位);规则压不达标时
+      走非 LLM 的硬截断兜底,不调用 L3 摘要。
+    - ``L1_L2_L3``:全量——规则式压缩 + LLM 摘要(+ 失败回退/硬截断),现状默认。
+    """
+
+    NO_COMPACT = "no_compact"
+    L1_L2 = "l1_l2"
+    L1_L2_L3 = "l1_l2_l3"
+
+
 ManagerStatus = Literal["success", "skipped", "failed"]
 
 
@@ -117,9 +131,12 @@ class ContextWindowManager:
     l3_service: L3Compactor | None = None
     config: ContextCompactionConfig | None = None
     fallback_policy: CompactFallbackPolicy = CompactFallbackPolicy()
+    strategy: CompactionStrategy | str = CompactionStrategy.L1_L2_L3
 
     def __post_init__(self) -> None:
-        """缺省时补全压缩配置与规则式压缩管线。"""
+        """缺省时补全压缩配置与规则式压缩管线,并把策略归一化为枚举。"""
+        if isinstance(self.strategy, str):
+            self.strategy = CompactionStrategy(self.strategy)
         if self.config is None:
             self.config = ContextCompactionConfig()
         if self.pipeline is None:
@@ -136,6 +153,9 @@ class ContextWindowManager:
         before_tokens = request.budget.input_tokens
         input_fingerprint = session_view_fingerprint(request.view)
         auto_failure_count_before = request.runtime_state.auto_compact_failure_count
+
+        if self.strategy == CompactionStrategy.NO_COMPACT:
+            return self._unchanged("skipped", "strategy_no_compact", request, before_tokens)
 
         decision = evaluate_context_triggers(
             request.view,
@@ -208,6 +228,18 @@ class ContextWindowManager:
                 programmatic_event=programmatic.event,
             )
 
+        if self.strategy == CompactionStrategy.L1_L2:
+            return self._l1_l2_finish(
+                request=request,
+                trigger=trigger,
+                mode=mode,
+                target_tokens=target_tokens,
+                programmatic=programmatic,
+                before_tokens=before_tokens,
+                after_tokens=after_tokens,
+                before_failure_count=auto_failure_count_before,
+            )
+
         if self.l3_service is None:
             return self._final_l3_failure(
                 request=request,
@@ -264,6 +296,44 @@ class ContextWindowManager:
             after_tokens=outcome.input_tokens,
             programmatic_event=programmatic.event,
             l3_event=outcome.event,
+        )
+
+    def _l1_l2_finish(
+        self,
+        *,
+        request: ContextCompactRequest,
+        trigger: ContextWindowTrigger,
+        mode: ContextCompactMode,
+        target_tokens: int,
+        programmatic: CompactionResult,
+        before_tokens: int,
+        after_tokens: int,
+        before_failure_count: int,
+    ) -> ContextCompactResult:
+        """L1+L2 策略收尾:规则压缩仍超目标时不再调用 L3 摘要。
+
+        直接走非 LLM 的硬截断兜底(``_hard_truncate`` 会记录带
+        ``fallback_steps[].action == "hard_truncate"`` 的 L3 事件,供评估
+        统计硬截断率);硬截断也不可行时记录失败。
+        """
+
+        return self._final_l3_failure_or_hard_truncate(
+            request=request,
+            trigger=trigger,
+            mode=mode,
+            target_tokens=target_tokens,
+            view=programmatic.view,
+            before_tokens=before_tokens,
+            before_failure_count=before_failure_count,
+            programmatic=programmatic,
+            after_tokens=after_tokens,
+            event=LlmCompactEvent(
+                status="failed",
+                source_fingerprint=programmatic.event.input_fingerprint,
+                failure_reason="l1_l2_only_above_target",
+            ),
+            reason="l1_l2_only_above_target",
+            fallback_steps=None,
         )
 
     def _generate_validate_commit(

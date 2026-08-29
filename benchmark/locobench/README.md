@@ -14,8 +14,10 @@
 
 | 文件 | 说明 |
 |---|---|
-| `lanscoder_agent.py` | `LansCoderAgent(BaseAgent)`:initialize_session / process_turn / 压缩事件采集 |
+| `lanscoder_agent.py` | `LansCoderAgent(BaseAgent)`:initialize_session / process_turn / 压缩事件采集(经 `compaction_capture` 归一化) |
 | `tool_mapping.py` | LoCoBench `Tool.function` → LansCoder `Tool` 映射(async 方法在独立线程新事件循环执行) |
+| `compaction_capture.py` | CompactionEvent 归一化(纯函数,不依赖 locobench):before/after tokens、L1/L2/L3 hit、硬截断标记 |
+| `analyze.py` | 结果聚合(纯函数):三套 token 口径 + CompactionEvent 统计(CLI 与 driver 收尾都会产出 `analysis.json`) |
 | `driver.py` | CLI:`python -m benchmark.locobench.driver ...` |
 
 ## 环境准备(一次性)
@@ -52,6 +54,14 @@ export all_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 https_pr
   --scenario-id php_api_rest_easy_078_architectural_understanding_easy_01 \
   --max-turns 3 --model-ref deepseek/deepseek-v4-flash \
   --context-management none --output-dir .
+
+# Phase 2 起:指定被测压缩策略(no_compact / l1_l2 / l1_l2_l3,默认 l1_l2_l3)
+/tmp/LoCoBench-Agent/.venv/bin/python -m benchmark.locobench.driver \
+  --locobench-root /tmp/LoCoBench-Agent \
+  --difficulty hard --scenario-count 1 \
+  --model-ref deepseek/deepseek-v4-flash \
+  --context-management none --compaction-strategy l1_l2 \
+  --output-dir benchmark/runs/locobench/hard-l1l2-1
 ```
 
 产出(均在 `benchmark/runs/locobench/<run>`,gitignored):
@@ -59,16 +69,23 @@ export all_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 https_pr
 | 文件 | 内容 |
 |---|---|
 | `results.json` | harness 评估结果(overall / LCBA-Comp / LCBA-Eff / turns / tool_usage / errors) |
-| `transcript.json` | per-turn 统计:provider 真实 usage、工具调用、CompactionEvent 摘要 |
+| `transcript.json` | per-turn 统计:provider 真实 usage、harness 启发式、lanscoder chars/4、工具调用、CompactionEvent 归一化记录 |
+| `analysis.json` | 聚合分析:三套 token 口径分开 + CompactionEvent 统计(attempts / L1/L2/L3 hit rate / 硬截断率 / before-after tokens) |
 | `intermediate_agent_results/conversations_*/...json` | harness 完整对话转录 |
 | `sessions/` | LansCoder session store(turn/压缩原始事件) |
 
 ## 口径(禁止混用)
 
-- harness `conversation_history[].context_tokens`:启发式 `len(content.split())*1.3`,非真实 token。
+- harness `context_tokens` / `harness_total_context_tokens`:启发式 `len(content.split())*1.3`,非真实 token。
 - `tokens_used` / `input_tokens` / `output_tokens`:`ChatResponse.usage` provider 真实 usage。
-- `CompactionEvent`:`compaction_completed` / `llm_compaction_completed` / `compaction_skipped`
-  事件(before/after tokens、trigger、reason),从 LansCoder session store 采集。
+- `lanscoder_chars4_estimate` / CompactionEvent `before_tokens` / `after_tokens`:
+  LansCoder `(len+3)//4` 估算(含系统提示/工具 schema/历史),由 `runner.context_budget` 与
+  `compaction_completed` 事件采集。
+- CompactionEvent 归一化(`compaction_capture.normalize_compaction_event`):
+  - `compaction_completed` = L1/L2 规则压缩(带 `level_metrics` 算 L1/L2 hit rate)。
+  - `llm_compaction_completed` = L3 摘要事件;`hard_truncate=true` 表示硬截断兜底
+    (`fallback_steps[].action == "hard_truncate"`),不算 L3 摘要命中。
+  - `compaction_skipped` = 压缩被跳过(under_threshold / skipped_no_effect / strategy_no_compact)。
 
 ## 已知坑(Phase 1)
 
