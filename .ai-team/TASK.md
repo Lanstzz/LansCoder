@@ -79,10 +79,11 @@
 - [x] Step 2(D7 结构性消除落地):root 薄壳化(pyproject 改 deps/scripts/`packages=[]`;core 补 `app/*.tcss`);双 editable 开发流(README/install.sh/ci.yml/publish-pypi.yml);冲突消除验证 SC-7(双装 RECORD 零重叠、卸载不破坏)。
 - [x] Step 3(原 Step 2):CI 双 dist 发布流程 + 最小依赖验证 job(SC-2 后半、SC-3、SC-4;tag 校验同时约束 root pyproject 版本 + core `_version.py`)——实现与本地实测完成;SC-3/SC-4 的 CI 真机验证待 tag push(手动收尾)。
 - [x] Step 4(原 Step 3):CHANGELOG + 安装/发布文档 + Test PyPI 演练(SC-5、SC-6)——文档与文档契约测试完成(PR #15);Test PyPI 演练与真实 tag push 为人工发布动作,列入手动收尾。
+- [x] Release prep:版本 bump 1.2.1 → 1.3.0(PR #16,`codex/task-003-release-v1.3.0`):`_version.py` / root pyproject version / root pin `lanscoder-core[llm,mcp]==1.3.0` / CHANGELOG(Unreleased → `[1.3.0]`)四源同步;本地双 wheel 1.3.0 + twine check 全 PASSED;全量门禁绿。
 
 ## Next step
 
-手动发布收尾(非代码 PR,按 `docs/publishing.md`):① Test PyPI 演练(twine upload --repository testpypi 两个 dist + 干净 venv 验证);② 确认版本 bump + CHANGELOG 后 `git tag vX.Y.Z && git push origin vX.Y.Z` 触发真实 CI 双 build/twine/上传;③ 发布后验证 `pip install lanscoder-core` / `pipx install lanscoder`;④ 完成 SC-3/SC-4 后把 TASK-003 置为 done。
+人工发布收尾(版本已 bump 至 1.3.0,PR #16;按 `docs/publishing.md`):①(可选)Test PyPI 演练(twine upload --repository testpypi 两个 dist + 干净 venv 验证,需 Test PyPI token);② 在 GitHub Actions Secrets 配置 `PYPI_API_TOKEN`;③ `git tag v1.3.0 && git push origin v1.3.0` 触发真实 CI 双 build/twine/上传(SC-3);④ 发布后验证 `pip install lanscoder-core` / `pipx install lanscoder`;⑤ 完成 SC-3/SC-4 后把 TASK-003 置为 done。
 
 ## Verification
 
@@ -113,9 +114,10 @@
   - 新增 `tests/test_release_docs.py` → **3 passed**(CHANGELOG 含 `[Unreleased]` 且跟踪 `_version.py` 当前版本;README / 03-sdk.md / examples/sdk/README.md 均含 `pip install lanscoder-core`、`lanscoder-core[llm]` 与"薄壳"说明;`docs/publishing.md` 存在且含 testpypi/twine)。
   - 全量门禁 SC-6:`pytest` → **1725 passed**(1722 + 3 新增);`ruff check .` → All checks passed;`node .ai-team/check.mjs --base origin/main` → valid(本次 PR 含 TASK.md 同步更新)。
   - 注:SC-3/SC-4 的 CI 真机双 build/twine/上传 与 Test PyPI 演练为人工发布动作(需要 Test PyPI/PyPI token),按 `docs/publishing.md` 清单执行;本地构建/twine/最小依赖证据见 Step 3 记录。
+- [x] Release prep v1.3.0(2026-08-29 实测,exit 0):`_version.py`/root pyproject/root pin/CHANGELOG 四源一致 1.3.0;`test_dist_metadata.py` + `test_release_docs.py` + `test_core_contract.py` → 27 passed;本地 `python -m build`(root)+ `--wheel`(core)双 wheel METADATA Version 均 1.3.0;`twine check` 三产物全 PASSED;全量 `pytest` 1725 passed、`ruff check .` 通过、`check.mjs` valid。
 
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: TASK-003 进行中(active);Step 1-4 均已落地:core 子项目(PR #12)、D7 薄壳化 + SC-7(PR #13)、CI 双 dist + 最小依赖 job(PR #14)、CHANGELOG + 安装/发布文档 + 文档契约测试(PR #15);验收完成 SC-1/SC-2/SC-5/SC-6/SC-7,SC-3/SC-4 待人工发布收尾(Test PyPI 演练 → tag push 触发真实 CI,按 `docs/publishing.md`);下一步:手动发布收尾后置 TASK-003 为 done。
+- Summary: TASK-003 进行中(active);Step 1-4 + Release prep 均已落地(PR #12-16),版本已 bump 至 1.3.0;验收完成 SC-1/SC-2/SC-5/SC-6/SC-7;剩人工发布收尾(Test PyPI 演练 → 配 PYPI_API_TOKEN → `git tag v1.3.0 && push` → SC-3/SC-4 → done),按 `docs/publishing.md` 执行。
