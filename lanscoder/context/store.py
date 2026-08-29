@@ -281,3 +281,79 @@ def _apply_task_plan_payload(view: SessionView, event: SessionEvent) -> None:
     if revision != plan.revision:
         raise SessionStoreCorruptError(f"task_plan_updated revision mismatch in event {event.id}")
     view.task_plan = plan
+
+
+class InMemorySessionStore(JsonlSessionStore):
+    """内存会话存储:不建目录、不写盘,复用基类 ``_apply_event`` 重建逻辑。
+
+    用于 L1 ``agent_loop``(session-free):会话生命周期随循环结束而结束。
+    ``root`` 指向一个不会被创建的哨兵路径,满足 ``AgentSession`` 对
+    ``store.root`` 的既有引用;任何路径都不落盘。
+    """
+
+    def __init__(self) -> None:
+        # 不调用 super().__init__,避免创建 sessions 目录。
+        self.root = Path(tempfile.gettempdir()) / f"lanscoder-inmemory-{os.getpid()}-{id(self)}"
+        self._lock = threading.RLock()
+        self._events: dict[str, list[SessionEvent]] = {}
+
+    def append_event(self, event: SessionEvent) -> None:
+        with self._lock:
+            self._events.setdefault(event.session_id, []).append(event)
+
+    def list_events(self, session_id: str) -> list[SessionEvent]:
+        with self._lock:
+            return list(self._events.get(session_id, ()))
+
+    def rebuild_session_view(self, session_id: str) -> SessionView:
+        view = SessionView(session_id=session_id)
+        for sequence, event in enumerate(self.list_events(session_id), start=1):
+            self._apply_event(view, event, sequence=sequence)
+        return view
+
+    def original_user_message_texts(self, session_id: str) -> dict[str, str]:
+        texts: dict[str, str] = {}
+        for event in self.list_events(session_id):
+            if event.type != "user_message":
+                continue
+            message_id = str(event.payload.get("message_id") or "")
+            if not message_id:
+                continue
+            texts[message_id] = "\n".join(
+                str(part.get("content") or "")
+                for part in event.payload.get("parts") or []
+                if isinstance(part, dict) and part.get("kind") == "text" and part.get("content")
+            )
+        return texts
+
+    def truncate_before_message(self, session_id: str, message_id: str) -> int:
+        with self._lock:
+            events = self.list_events(session_id)
+            if not events:
+                raise ValueError(f"Session {session_id} has no events")
+
+            target_index: int | None = None
+            for index, event in enumerate(events):
+                if event.type == "user_message" and str(event.payload.get("message_id") or "") == message_id:
+                    target_index = index
+                    break
+
+            if target_index is None:
+                for index, event in enumerate(events):
+                    if str(event.payload.get("message_id") or "") == message_id:
+                        raise ValueError(
+                            f"message_id {message_id} is not a user_message event (type={events[index].type}); "
+                            "can only recall to user message boundaries"
+                        )
+                raise ValueError(f"message_id not found: {message_id} in session {session_id}")
+
+            if target_index == 0:
+                raise ValueError("Cannot truncate before the session_created event")
+
+            retained = events[:target_index]
+            self._events[session_id] = retained
+            return len(retained)
+
+    def delete_session(self, session_id: str) -> bool:
+        with self._lock:
+            return self._events.pop(session_id, None) is not None

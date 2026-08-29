@@ -2,21 +2,19 @@
 
 公开面只接收 prompts / LoopContext / LoopConfig / signal,事件以
 ``AsyncIterator[AgentEvent]`` 外推;不暴露 AgentSession、不落持久化、不 import TUI。
-内部用临时目录的内存会话适配现有会话绑定引擎(`create_agent_loop` + `AgentLoop`)。
+内部用 `InMemorySessionStore` 的内存会话适配现有会话绑定引擎(`create_agent_loop` + `AgentLoop`),不落盘、无临时文件。
 """
 
 from __future__ import annotations
 
 import asyncio
-import tempfile
 import uuid
 from collections.abc import AsyncIterator
-from pathlib import Path
 
 from lanscoder.agent.session import AgentSession
 from lanscoder.agent.tool_execution import ToolExecutionEvent
 from lanscoder.context.models import AgentMessage
-from lanscoder.context.store import JsonlSessionStore
+from lanscoder.context.store import InMemorySessionStore
 from lanscoder.providers.types import ChatStreamEvent
 from lanscoder.utils.cancellation import CancellationToken
 from lanscoder.utils.sandbox_access import SandboxAccess
@@ -126,38 +124,43 @@ async def agent_loop(
 
     async def _drive() -> None:
         session_id = config.session_id or f"loop-{uuid.uuid4().hex[:12]}"
-        with tempfile.TemporaryDirectory(prefix="lanscoder-loop-") as tmp:
-            store = JsonlSessionStore(Path(tmp))
-            session = AgentSession.create(
-                store=store,
-                session_id=session_id,
-                tools=context.tools,
-                permission_manager=None,
-                sandbox_access=SandboxAccess(),
-            )
-            loop = create_agent_loop(
-                session=session,
-                provider=config.provider,
-                limits=config.limits,
-                request_options=config.request_options,
-                context_window=config.context_window,
-                background_manager=config.background_manager,
-                guidance_provider=config.guidance_provider,
-                cancellation_token=signal,
-                stream_event_handler=on_stream,
-                tool_event_handler=on_tool,
-                enable_delegate_tool=False,
-            )
-            await queue.put(AgentStartEvent())
-            for prompt in prompts:
-                await queue.put(TurnStartEvent())
-                await queue.put(MessageStartEvent(message=prompt))
-                await loop.run_user_turn(prompt.content)
-                assistant = _last_assistant_message(session)
-                if assistant is not None:
-                    await queue.put(MessageEndEvent(message=assistant))
-                await queue.put(TurnEndEvent(message=assistant))
-            await queue.put(AgentEndEvent(messages=_all_session_messages(session)))
+        # D4: None=按 provider capabilities 自动探测;True/False=强制覆盖。
+        use_streaming = config.use_streaming
+        if use_streaming is None:
+            capabilities = getattr(config.provider, "capabilities", None)
+            use_streaming = bool(getattr(capabilities, "supports_streaming", False))
+
+        store = InMemorySessionStore()
+        session = AgentSession.create(
+            store=store,
+            session_id=session_id,
+            tools=context.tools,
+            permission_manager=None,
+            sandbox_access=SandboxAccess(),
+        )
+        loop = create_agent_loop(
+            session=session,
+            provider=config.provider,
+            limits=config.limits,
+            request_options=config.request_options,
+            context_window=config.context_window,
+            background_manager=config.background_manager,
+            guidance_provider=config.guidance_provider,
+            cancellation_token=signal,
+            stream_event_handler=on_stream if use_streaming else None,
+            tool_event_handler=on_tool,
+            enable_delegate_tool=False,
+        )
+        await queue.put(AgentStartEvent())
+        for prompt in prompts:
+            await queue.put(TurnStartEvent())
+            await queue.put(MessageStartEvent(message=prompt))
+            await loop.run_user_turn(prompt.content, streaming=use_streaming)
+            assistant = _last_assistant_message(session)
+            if assistant is not None:
+                await queue.put(MessageEndEvent(message=assistant))
+            await queue.put(TurnEndEvent(message=assistant))
+        await queue.put(AgentEndEvent(messages=_all_session_messages(session)))
 
     async def _wrap() -> None:
         try:
