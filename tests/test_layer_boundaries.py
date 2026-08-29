@@ -93,3 +93,14 @@ def test_agent_import_does_not_pull_core() -> None:
 
     leaked = _fresh_import_leak_check("lanscoder.agent", ("lanscoder.core",))
     assert leaked is None, leaked
+
+
+def test_core_import_does_not_pull_tui() -> None:
+    """SDK 承诺(P1): ``lanscoder.core`` 可在完全不 import / 初始化 TUI 的情况下使用。
+
+    ``textual`` 是 TUI 的唯一依赖;core 若把它拖进 import 链,headless 消费端
+    就被迫装上整个 UI 栈。SC-6 泄漏检查的一部分。
+    """
+
+    leaked = _fresh_import_leak_check("lanscoder.core", ("textual",))
+    assert leaked is None, leaked
