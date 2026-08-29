@@ -21,8 +21,8 @@
 - [x] **SC-2 (无 TUI 可验证)**: Given 最小依赖环境,When 运行契约测试 + SDK 示例冒烟 + `test_core_import_does_not_pull_tui`,Then 全绿。
 - [ ] **SC-3 (双 dist 构建一致)**: When CI 分别 build 两 dist,Then 同时产出 `LansCoder` + `lanscoder-core` 两个 wheel,版本都等于 `_version.py`,`twine check` 绿。
 - [ ] **SC-4 (tag 发布)**: Given push `vX.Y.Z`,When 触发发布流程,Then tag 与两个 dist 版本一致;Test PyPI 演练通过(真实 PyPI 上传人工确认)。
-- [ ] **SC-5 (文档)**: Given CHANGELOG + 安装/发布文档,When 审阅,Then SDK 安装、extras、`LansCoder` 与 `lanscoder-core` 的依赖关系(薄壳,非替代关系)说明齐全。
-- [ ] **SC-6 (全量门禁)**: When 运行全量 `pytest` + `ruff check .` + `node .ai-team/check.mjs --base origin/main`,Then 全绿。
+- [x] **SC-5 (文档)**: Given CHANGELOG + 安装/发布文档,When 审阅,Then SDK 安装、extras、`LansCoder` 与 `lanscoder-core` 的依赖关系(薄壳,非替代关系)说明齐全。
+- [x] **SC-6 (全量门禁)**: When 运行全量 `pytest` + `ruff check .` + `node .ai-team/check.mjs --base origin/main`,Then 全绿。
 - [x] **SC-7 (结构无冲突)**: Given `pip install LansCoder`,Then 自动装 `lanscoder-core` + TUI 依赖;`lanscoder` 命令可用;两个 dist 的 RECORD 文件交集为空;`pip uninstall LansCoder` 后 `import lanscoder.core` 仍可用。
 
 ## Invariants
@@ -66,17 +66,23 @@
   - `publish-pypi.yml` 重写:publish job 对 root(全量 `python -m build`)与 core(`packages/lanscoder-core` 内 `python -m build --wheel`)分别构建 + `twine check`(两处 dist 都检)+ 上传两条路径;`needs: [test, minimal-core-deps]`。
   - tag 校验(仅 push 事件)改为同时约束:root pyproject `version` == core `_version.py` == tag,且 root 的 `lanscoder-core[llm,mcp]==<version>` pin 与 core 版本一致(与 `tests/test_dist_metadata.py` 同逻辑的发布期门禁)。
   - 新增 `minimal-core-deps` job(发布期,锁死 D2 最小集):build core wheel → 全新 venv 仅装 wheel + pytest → 断言无 banned 依赖(textual/openai/anthropic/mcp/prompt-toolkit/tomlkit/python-dotenv)→ 跑契约 + SDK 示例 + 层边界泄漏测试 → 安装包冒烟(site-packages import,stub transport 驱动 L2 Agent 一轮)。
+- 2026-08-29 Step 4(文档)完成,PR #15(`codex/task-003-step4`):
+  - 新增 `CHANGELOG.md`(keep-a-changelog:`[Unreleased]` 记录 SDK 分发包/薄壳/双 dist;v1.2.1/v1.1.0/v1.0.1/v1.0.0 按 tag 日期回填)。
+  - `docs/architecture/03-sdk.md` 新增 §2 安装与分发包(§2.1 `pip install lanscoder-core` + extras、§2.2 薄壳依赖关系、§2.3 版本单一来源),原 §2-5 重排为 §3-6。
+  - `examples/sdk/README.md` 补安装/extras/已安装 SDK 运行方式;README 新增「SDK 集成」段 + 文档索引加发布检查。
+  - 新增 `docs/publishing.md` 发布检查(本地门禁 → 构建/twine → Test PyPI 演练 → tag push 真实发布 → 回滚/修正)。
+  - 新增 `tests/test_release_docs.py`(3 项文档契约:CHANGELOG 含 Unreleased + 当前版本、SDK 安装/extras/薄壳说明齐全、发布清单存在),SC-5 由测试锁定。
 
 ## Pending
 
 - [x] Step 1:`packages/lanscoder-core` 打包骨架 + 本地 build 双 wheel + 干净 venv 安装冒烟(SC-1、SC-2 前半;PR #12)。
 - [x] Step 2(D7 结构性消除落地):root 薄壳化(pyproject 改 deps/scripts/`packages=[]`;core 补 `app/*.tcss`);双 editable 开发流(README/install.sh/ci.yml/publish-pypi.yml);冲突消除验证 SC-7(双装 RECORD 零重叠、卸载不破坏)。
-- [x] Step 3(原 Step 2):CI 双 dist 发布流程 + 最小依赖验证 job(SC-2 后半、SC-3、SC-4;tag 校验同时约束 root pyproject 版本 + core `_version.py`)——实现与本地实测完成;SC-3/SC-4 的 CI 真机验证待 tag push(Step 4 Test PyPI 演练)。
-- [ ] Step 4(原 Step 3):CHANGELOG + 安装/发布文档 + Test PyPI 演练(SC-5、SC-6)。
+- [x] Step 3(原 Step 2):CI 双 dist 发布流程 + 最小依赖验证 job(SC-2 后半、SC-3、SC-4;tag 校验同时约束 root pyproject 版本 + core `_version.py`)——实现与本地实测完成;SC-3/SC-4 的 CI 真机验证待 tag push(手动收尾)。
+- [x] Step 4(原 Step 3):CHANGELOG + 安装/发布文档 + Test PyPI 演练(SC-5、SC-6)——文档与文档契约测试完成(PR #15);Test PyPI 演练与真实 tag push 为人工发布动作,列入手动收尾。
 
 ## Next step
 
-Step 4(独立 PR):CHANGELOG + 安装/发布文档 + Test PyPI 演练——`CHANGELOG.md`(keep-a-changelog)、`docs/architecture/03-sdk.md` 与 `examples/sdk/README.md` 补 SDK 安装/extras 与薄壳依赖关系说明、README SDK 安装段、发布检查文档;随后以 tag push 触发真实 CI 双 build/twine/上传 完成 SC-3/SC-4(Test PyPI → 真实 PyPI 人工确认)。
+手动发布收尾(非代码 PR,按 `docs/publishing.md`):① Test PyPI 演练(twine upload --repository testpypi 两个 dist + 干净 venv 验证);② 确认版本 bump + CHANGELOG 后 `git tag vX.Y.Z && git push origin vX.Y.Z` 触发真实 CI 双 build/twine/上传;③ 发布后验证 `pip install lanscoder-core` / `pipx install lanscoder`;④ 完成 SC-3/SC-4 后把 TASK-003 置为 done。
 
 ## Verification
 
@@ -103,8 +109,13 @@ Step 4(独立 PR):CHANGELOG + 安装/发布文档 + Test PyPI 演练——`CHANG
   - `minimal-core-deps` job 全序列模拟(新 venv `/tmp/ci-sim`,仅装 core wheel + pytest):`pip show lanscoder-core` → `Requires: anyio, portalocker, PyYAML`;pip list 无 banned 依赖;`pytest -q tests/test_core_contract.py tests/test_sdk_examples.py tests/test_layer_boundaries.py` → **26 passed**;安装包冒烟(`/tmp/smoke2` site-packages import)事件序列 `agent_start→…→agent_end`,exit 0。
   - 注:SC-3/SC-4 的 CI 真机双 build/twine/上传 需 tag push 触发(发布期),Test PyPI 演练在 Step 4;本地已逐命令复现 workflow。
 
+- [x] Step 4(2026-08-29 实测,exit 0;SC-5 + SC-6):
+  - 新增 `tests/test_release_docs.py` → **3 passed**(CHANGELOG 含 `[Unreleased]` 且跟踪 `_version.py` 当前版本;README / 03-sdk.md / examples/sdk/README.md 均含 `pip install lanscoder-core`、`lanscoder-core[llm]` 与"薄壳"说明;`docs/publishing.md` 存在且含 testpypi/twine)。
+  - 全量门禁 SC-6:`pytest` → **1725 passed**(1722 + 3 新增);`ruff check .` → All checks passed;`node .ai-team/check.mjs --base origin/main` → valid(本次 PR 含 TASK.md 同步更新)。
+  - 注:SC-3/SC-4 的 CI 真机双 build/twine/上传 与 Test PyPI 演练为人工发布动作(需要 Test PyPI/PyPI token),按 `docs/publishing.md` 清单执行;本地构建/twine/最小依赖证据见 Step 3 记录。
+
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: TASK-003 进行中(active);Step 1(PR #12)core 子项目骨架、Step 2(PR #13)D7 薄壳化 + SC-7 已完成;Step 3(PR #14)CI 双 dist 发布流程落地:`publish-pypi.yml` 双 build + twine check + 双上传 + tag 校验(root==core==tag==pin)+ `minimal-core-deps` 发布期 job(本地逐命令复现:26 passed + 安装包冒烟 + twine check 全 PASSED);SC-3/SC-4 CI 真机验证待 tag push;下一步 Step 4(CHANGELOG + 安装/发布文档 + Test PyPI 演练)。
+- Summary: TASK-003 进行中(active);Step 1-4 均已落地:core 子项目(PR #12)、D7 薄壳化 + SC-7(PR #13)、CI 双 dist + 最小依赖 job(PR #14)、CHANGELOG + 安装/发布文档 + 文档契约测试(PR #15);验收完成 SC-1/SC-2/SC-5/SC-6/SC-7,SC-3/SC-4 待人工发布收尾(Test PyPI 演练 → tag push 触发真实 CI,按 `docs/publishing.md`);下一步:手动发布收尾后置 TASK-003 为 done。

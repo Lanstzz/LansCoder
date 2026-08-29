@@ -77,6 +77,37 @@ lanscoder
 
 ---
 
+## SDK 集成(`lanscoder-core`)
+
+不想用 TUI、只想把 LansCoder 的核心能力嵌入自己的程序?`lanscoder.core` 是独立 headless SDK,
+以分发包 **`lanscoder-core`** 发布(dist 名 ≠ import 名,import 仍是 `lanscoder`),必装依赖仅
+`anyio` / `portalocker` / `PyYAML`,**不带 TUI**:
+
+```sh
+pip install lanscoder-core              # 最小集,无 TUI
+pip install "lanscoder-core[llm]"       # + openai / anthropic
+pip install "lanscoder-core[llm,mcp]"   # + openai / anthropic / mcp
+```
+
+```python
+from lanscoder.core import Agent, LoopConfig, LoopContext
+
+# transport: duck-typed LlmTransport(2 方法 + 3 属性),见 examples/sdk/minimal_llm_transport.py
+agent = Agent(
+    context=LoopContext(system_prompt="你是 headless agent。"),
+    config=LoopConfig(provider=transport, session_id="sdk-demo"),
+)
+await agent.prompt("你好")  # 需在 async 上下文中运行;完整可运行示例见 examples/sdk/
+```
+
+- 三层 API(L1 `agent_loop` / L2 `Agent` / L3 `create_agent_session`)与可运行示例见
+  [docs/architecture/03-sdk.md](docs/architecture/03-sdk.md) 与 [examples/sdk/](examples/sdk/)。
+- `LansCoder`(TUI 应用)是**薄壳**:它依赖 `lanscoder-core[llm,mcp]` + TUI 侧依赖,与 SDK 是
+  **依赖关系而非替代关系**——装 `LansCoder` 自动带上 core,两个包文件零重叠。
+- 发布/Test PyPI 演练清单见 [docs/publishing.md](docs/publishing.md)。
+
+---
+
 ## 功能概览
 
 | 能力 | 说明 |
@@ -146,6 +177,7 @@ lanscoder
 - [架构](docs/architecture/) — 分层设计与依赖规则
 - [基准测试](docs/benchmark.md) — 96.38% 的评测口径与复现
 - [FAQ](docs/faq.md) — 常见问题
+- [发布检查](docs/publishing.md) — `LansCoder` + `lanscoder-core` 双 dist 发布清单(Test PyPI → 真实 PyPI)
 
 ---
 
@@ -172,6 +204,8 @@ python -m venv .venv
 ---
 
 ## 更新日志
+
+完整变更历史见 [CHANGELOG.md](CHANGELOG.md)(keep-a-changelog)。
 
 ### v1.2.1 (2026-08)
 
