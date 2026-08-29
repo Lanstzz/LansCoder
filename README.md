@@ -192,11 +192,11 @@ await agent.prompt("你好")  # 需在 async 上下文中运行;完整可运行�
 ## 开发
 
 ```sh
-python -m venv .venv
-.venv/bin/python -m pip install -e packages/lanscoder-core
-.venv/bin/python -m pip install -e ".[dev]"
-.venv/bin/python -m pytest      
-.venv/bin/python -m ruff check lanscoder tests
+python -m venv venv
+venv/bin/python -m pip install -e packages/lanscoder-core
+venv/bin/python -m pip install -e ".[dev]"
+venv/bin/python -m pytest      
+venv/bin/python -m ruff check lanscoder tests
 ```
 
 贡献指南见 [docs/development.md](docs/development.md)。
