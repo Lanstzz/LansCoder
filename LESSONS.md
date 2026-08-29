@@ -107,3 +107,11 @@ venv/bin/harbor run -p ~/.cache/harbor/tasks/packages/swe-bench/<task> \
 - 适配器 `LansCoderHarborAgent` 新增 `--ak context_window=200000 --ak compaction_strategy=no_compact|l1_l2|l1_l2_l3`(透传到 `lanscoder --benchmark --context-window/--compaction-strategy`)。
 - **badcase 回看重放包** = 每个 trial 的 `result.json`(verifier reward)+ `agent/lanscoder.txt`(最终文本)+ `agent/lanscoder-session.jsonl`(工具调用/CompactionEvent);fail 的 trial 保留整套,作为优化 badcase。
 - pass/fail 严格二元(不细分);每策略重复取均值暂不做(经济紧张),保留 CLI 配置位。
+
+## 2026-08-29 — 长时间任务挂后台 + 网络代理(协作规则)
+
+1. **访问网络一律先 export 代理**:`export all_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 https_proxy=http://127.0.0.1:7890`。
+   实测:django 基础镜像拉取**没带代理**卡了 25+ 分钟;requests 镜像**带代理**秒过。docker pull/harbor run/curl 等一律带。
+2. **长时间任务(拉大镜像、跑 LLM 批量、harbor run 等)一律挂后台跑**,立刻返回给用户:
+   `nohup <cmd> > /tmp/<task>.log 2>&1 &` 记下 PID,进度/报错看日志文件,不阻塞对话,用户随时可问进度或插其他问题。
+3. 后台任务完成或异常要主动汇报一次,并把产物路径/结论给用户。
