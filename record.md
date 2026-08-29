@@ -22,3 +22,17 @@
 
 - 每个新发现:加一行到上表(位置/影响/建议方向)。
 - 修复时:在对应行标注 `→ 已修复(TASK-xxx)`,不删除,保留历史。
+
+---
+
+## TASK-004 评估观察(2026-08-29,Phase 1)
+
+> LoCoBench-Agent 1 个 easy 场景冒烟(`php_api_rest_easy_078_architectural_understanding_easy_01`,
+> 19K context,deepseek-v4-flash,3 turns)后的测量观察;均为**测量侧**发现,修复另开任务。
+
+| # | 观察 | 证据 | 影响 / 建议 |
+|---|------|------|-------------|
+| O1 | harness `context_tokens` 启发式 `len(split())*1.3` 与 provider 真实 usage 偏差大 | 单 turn 启发式 vs provider input 34K–46K(含 LansCoder 系统提示/工具 schema/历史) | 与 P2 同源:分析时必须按口径分开,禁止混用;L1/L2/L3 压缩效果曲线应使用 provider 真实 usage 或 tiktoken 统一计量 |
+| O2 | LansCoder 内部工具 `read_memory` 混入工具调用统计 | turn 1 工具列表含 `read_memory` | harness `tool_usage_log` 会把它算进 agent 工具使用;分析时需过滤非 LoCoBench 工具或标注 |
+| O3 | easy(19K context)场景不触发压缩 | 3 turns 0 个 CompactionEvent(1M 窗口) | 符合预期;压缩行为验证必须用 hard/expert(200K–1M)场景(Phase 3 冒烟验证) |
+| O4 | 回合预算由 `--max-turns` 决定,harness 阶段循环在 success 不满足时会跑满 | 首次 10 turns ≈ 30+ 次串行 LLM 调用,~10 分钟 | 冒烟/预算控制固定 `--max-turns`;批量跑时按场景难度设上限 |
