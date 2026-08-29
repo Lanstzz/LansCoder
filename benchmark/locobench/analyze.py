@@ -116,6 +116,7 @@ def analyze_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     return {
         "scenario_id": scenario.get("scenario_id"),
         "session_id": scenario.get("session_id"),
+        "compaction_strategy": scenario.get("compaction_strategy"),
         "turns": len(turns),
         "provider_usage": provider_usage(scenario),
         "harness_heuristic": harness_heuristic(scenario),

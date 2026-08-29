@@ -37,3 +37,6 @@
 | O3 | easy(19K context)场景不触发压缩 | 3 turns 0 个 CompactionEvent(1M 窗口) | 符合预期;压缩行为验证必须用 hard/expert(200K–1M)场景(Phase 3 冒烟验证) |
 | O4 | 回合预算由 `--max-turns` 决定,harness 阶段循环在 success 不满足时会跑满 | 首次 10 turns ≈ 30+ 次串行 LLM 调用,~10 分钟 | 冒烟/预算控制固定 `--max-turns`;批量跑时按场景难度设上限 |
 | O5 | 同一回合三套 token 口径差距大(easy 场景量化) | Phase 2 复跑(easy,19K 场景):末回合 harness 启发式 ~7.4K vs lanscoder chars/4 ~40K vs provider 真实 usage 45K/回合(累计 127K) | 与 P2/O1 同源:分析/画曲线必须按口径分开(transcript/analysis 已分开标注);压缩效果曲线建议用 provider 真实 usage 或 tiktoken 统一计量 |
+| O6 | 原生窗口下 hard/expert 不触发压缩;降到 200K 窗口后稳定触发 | Phase 3 冒烟:hard/expert 场景自身 `context_window_tokens`=1M/1.5M 时,初始上下文 chars/4 最大仅 ~319K vs 高水位 ~851K+(ratio≈0.38);W=200K(高水位 ~163K)时 12 次压缩全部触发(before 167–181K) | 量化 P2:chars/4 估算需比真实 token 口径小 ~5–7.5x 的窗口才能命中水位;A/B 对比必须固定窗口并标注口径 |
+| O7 | 代码理解类任务上 L1+L2 单独即可压到达标,L3 与硬截断 0 次 | Phase 3 hard/expert 各 6 次压缩全部 `stopped_at=l2`(L3_events=0, hard_truncate=0);L2 归档占位贡献 85–95% token 节省(l2 saved 40K–139K/次),L1 路由压缩仅 0–28K/次 | 对 code-comprehension 类,L3 摘要不是瓶颈;L3 价值需在更长会话/非代码任务上验证(Phase 4 A/B 可对比) |
+| O8 | provider 真实 usage 远大于 lanscoder chars/4 与 harness 启发式(三口径再量化) | Phase 3:provider input 862K(hard)/713K(expert) tokens vs lanscoder chars/4 末值 167K/126K vs harness 启发式 ~2.9K | 与 P2/O1/O5 同源:harness 启发式只统计 assistant 文本,不反映工具结果上下文;分析必须用 provider usage 或 tiktoken |
