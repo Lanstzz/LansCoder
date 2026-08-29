@@ -2,7 +2,7 @@
 
 - ID: `TASK-002`
 - Title: `SDK 硬化:L1 session-free(P2)、LlmTransport 传输协议(P3)、契约与文档(P1)`
-- Status: `planning`
+- Status: `handoff`
 - Owner: `Lanster`
 - Next owner: `Lanster`
 
@@ -50,22 +50,24 @@
 - 2026-08-28/29 SDK 讨论拍板 D1-D8(记录于本 TASK 与 `docs/superpowers/specs/2026-08-29-sdk-hardening-design.md`)。
 - Task 0 spec PR #5 已合入 main(`2586642`)。
 - P0:用户提交 `3fab751` 后,已 cherry-pick 到基于 main 的干净分支 `codex/p0-drop-app-runtime-shim`(commit `603d806`,15 文件,+14/-54,539 tests passed、ruff clean);由本 PR(#6)合入。
+- P0 验证(2026-08-29,分支 `codex/p0-drop-app-runtime-shim`,commit `603d806`+`ed271af`):`pytest` = 1665 passed + 1 skipped;`ruff check lanscoder tests` 全绿;`node .ai-team/check.mjs --base origin/main` = valid(2 commits,20 文件,+553/-81;private sessions 5/closed 3,token coverage 3/5);PR #6 = OPEN / MERGEABLE / CLEAN。
 
 ## Pending
 
 - [x] 评审并合并本 spec PR(Task 0,#5)。
-- [ ] P0 PR(#6,`codex/p0-drop-app-runtime-shim`)合入 main。
+- [ ] P0 PR(#6,`codex/p0-drop-app-runtime-shim`)合入 main(PR 已 OPEN / MERGEABLE / CLEAN,待 review 合并)。
 - [ ] Step 1(P2):`InMemorySessionStore` + L1 内存会话 + 流式三态。
 - [ ] Step 2(P3+D2):`LlmTransport` Protocol + handle 去 `agent`。
 - [ ] Step 3(P1):`py.typed` + 契约测试 + SDK 文档/示例 + `__version__`。
 
 ## Next step
 
-P0 PR(#6)合并后进入 Step 1(P2)实现(每 Step 独立 PR,TDD 先行)。
+合并 PR #6(已 OPEN / MERGEABLE / CLEAN)→ 进入 Step 1(P2)实现(每 Step 独立 PR,TDD 先行)。
 
 ## Verification
 
-- [ ] 全量 `pytest` 绿(基线 1689 passed)。
+- P0 分支实测(2026-08-29):`pytest` = 1665 passed + 1 skipped;`ruff check lanscoder tests` 通过;`node .ai-team/check.mjs --base origin/main` = valid。
+- [ ] 全量 `pytest` 绿(基线 1689 passed,spec 时点计数;P0 分支实测 1665 passed + 1 skipped)。
 - [ ] `node .ai-team/check.mjs --base origin/main` 通过。
 - [ ] `ruff check lanscoder tests` 通过。
 - [ ] SC-1..SC-8 以真实命令退出码记录。
@@ -74,4 +76,4 @@ P0 PR(#6)合并后进入 Step 1(P2)实现(每 Step 独立 PR,TDD 先行)。
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: TASK-002 启动;D1-D8 已拍板;Task 0 spec(#5)已合入 main;P0 由本 PR(#6,干净分支 `codex/p0-drop-app-runtime-shim`)合入;P0 合入后进入 Step 1(P2)实现。
+- Summary: TASK-002 启动;D1-D8 已拍板;Task 0 spec(#5)已合入 main;P0 实现与验证完成(`603d806`+`ed271af`,pytest 1665 passed + 1 skipped、ruff 全绿、check.mjs valid);PR #6 OPEN / MERGEABLE / CLEAN,待 review 合并;合并后进入 Step 1(P2)实现。
