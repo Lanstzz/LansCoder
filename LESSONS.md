@@ -46,3 +46,64 @@ TASK-004 直接采纳了 LoCoBench-Agent(Salesforce AI Research,arXiv 2511.13998
 - **沉没成本要果断抛弃**:LoCoBench 已投入(数据 4.6GB、多轮 LLM、打分链路),但确认数据不可信后,决定整体弃用、换基准,
   不因"已经花了这么多"而继续往错误方向投入。判断标准永远是"还能不能产出可信结论",而不是"已投入多少"。
 - 已做的工具链(压缩策略开关、CompactionEvent 采集、A/B 打分框架)是通用资产,换基准后可复用;但**不能**给不可信基准背书。
+
+## 2026-08-29 — Harbor + SWE-bench 最小冒烟 SOP(沉淀,避免下个 agent 重踩)
+
+### 核心教训
+
+1. **跑 LLM 之前先想清楚"数据怎么拿回来"**:上次 swe-min 冒烟只拿到最终文本,拿不到工具调用/token/CompactionEvent,
+   等于一半白跑。**凡是评估压缩/上下文,必须确认 session(含 CompactionEvent)能落盘并被抓取**,再开跑。
+2. **环境问题按 SOP 逐步排查,不要反复试错**:平台/镜像/汇总表/日志抓取四类坑都有定论,照做即可。
+
+### SOP(已验证的最小链路)
+
+```sh
+# 0) 前置检查
+docker version                          # Docker daemon 在跑
+docker run --rm --platform linux/amd64 alpine uname -m   # 应输出 x86_64(Rosetta 可用)
+
+# 1) 装 Harbor(仓库 venv)
+venv/bin/python -m pip install 'harbor==0.18.0'
+
+# 2) 数据:查缓存,没有再下载
+ls ~/.cache/harbor/tasks/packages/swe-bench/        # 500 个已缓存 task
+# venv/bin/harbor dataset download swe-bench/swe-bench-verified --cache
+
+# 3) 平台 + 基础镜像(两个坑一起治)
+export DOCKER_DEFAULT_PLATFORM=linux/amd64          # swebench 镜像 amd64-only
+docker pull swebench/sweb.eval.x86_64.<task>:latest # 先本地化,规避 daocloud mirror auth EOF
+
+# 4) 单 task 最小冒烟(必带 --agent-include-logs 抓 session)
+export PYTHONPATH="$PWD"
+export LANSCODER_API_KEY=...                        # 从 ~/.config/lanscoder/config.toml 读取
+venv/bin/harbor run -p ~/.cache/harbor/tasks/packages/swe-bench/<task> \
+  -a benchmark.harbor.lanscoder_agent:LansCoderHarborAgent -m deepseek/deepseek-v4-flash \
+  -n 1 -k 1 --ak max_tool_rounds=120 \
+  --agent-include-logs '*.jsonl' \
+  --agent-setup-timeout-multiplier 3 \
+  --ae LANSCODER_PROVIDER_NAME=deepseek --ae LANSCODER_MODEL=deepseek-v4-flash \
+  --ae LANSCODER_BASE_URL=https://api.deepseek.com --ae "LANSCODER_API_KEY=\${LANSCODER_API_KEY}" \
+  --ae LANSCODER_DISABLE_GLOBAL_SKILLS=1 \
+  --mounts '[{"type":"bind","source":"'$HOME'/.cache/lanscoder-harbor","target":"/opt/lanscoder-cache"}]' \
+  -o benchmark/runs/harbor/<run> -y
+
+# 5) 读结果(汇总表有 bug,别等它)
+#    reward: jobs/<ts>/<trial>/result.json -> verifier_result.rewards.reward(1.0 = 通过)
+#    agent 最终文本: agent/lanscoder.txt
+#    session(工具/压缩数据): agent/lanscoder-session.jsonl(需 --agent-include-logs '*.jsonl')
+```
+
+### 四类坑(定论)
+
+| 坑 | 现象 | 解法 |
+|---|---|---|
+| 平台 | `no match for platform in manifest` | Apple Silicon 需 `DOCKER_DEFAULT_PLATFORM=linux/amd64`(Rosetta) |
+| 镜像源 | `failed to fetch anonymous token ... EOF` | daemon 配了 daocloud mirror 偶发故障;先 `docker pull` 本地化再跑 |
+| 汇总表 | `ValueError: too many values to unpack`(task 名含 `__`) | Harbor 0.18.0 与最新版同款 bug(`_format_group_title` 按 `__` split,期望 2/3 段;eval key `agent__model__psf__requests-1142` 有 4 段);**升级不解决**,直接读 result.json;可给上游提 issue |
+| 日志抓取 | 只拿到 lanscoder.txt,没有 session | 适配器已导出 `lanscoder-session.jsonl`;运行加 `--agent-include-logs '*.jsonl'` |
+
+### 压缩 A/B 的参数注入(本次新增)
+
+- 适配器 `LansCoderHarborAgent` 新增 `--ak context_window=200000 --ak compaction_strategy=no_compact|l1_l2|l1_l2_l3`(透传到 `lanscoder --benchmark --context-window/--compaction-strategy`)。
+- **badcase 回看重放包** = 每个 trial 的 `result.json`(verifier reward)+ `agent/lanscoder.txt`(最终文本)+ `agent/lanscoder-session.jsonl`(工具调用/CompactionEvent);fail 的 trial 保留整套,作为优化 badcase。
+- pass/fail 严格二元(不细分);每策略重复取均值暂不做(经济紧张),保留 CLI 配置位。

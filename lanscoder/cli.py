@@ -28,6 +28,8 @@ class CliConfig:
     model_spec: str | None = None
     max_tool_rounds: int | None = None
     reasoning_effort: str | None = None
+    context_window: int | None = None
+    compaction_strategy: str | None = None
     benchmark: bool = False
     resume_session: bool = False
 
@@ -82,6 +84,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--auto-approve", action="store_true", help="Automatically answer permission confirmations with allow_once.")
     parser.add_argument("--max-tool-rounds", type=_positive_int, default=None, help="Override per-turn tool round limit.")
     parser.add_argument("--reasoning-effort", default=None, help="Provider-specific reasoning effort passed in the model request.")
+    parser.add_argument("--context-window", type=_positive_int, default=None, help="Override the provider context window (tokens).")
+    parser.add_argument(
+        "--compaction-strategy",
+        choices=["no_compact", "l1_l2", "l1_l2_l3"],
+        default=None,
+        help="Context compaction strategy (default: provider/L3 full behavior).",
+    )
     parser.add_argument(
         "--benchmark",
         action="store_true",
@@ -118,6 +127,8 @@ def main(
             model_spec=args.model,
             max_tool_rounds=args.max_tool_rounds,
             reasoning_effort=args.reasoning_effort,
+            context_window=args.context_window,
+            compaction_strategy=args.compaction_strategy,
             benchmark=args.benchmark,
             resume_session=args.resume_session,
         )
@@ -138,6 +149,8 @@ def main(
             model_spec=args.model,
             max_tool_rounds=args.max_tool_rounds,
             reasoning_effort=args.reasoning_effort,
+            context_window=args.context_window,
+            compaction_strategy=args.compaction_strategy,
             benchmark=args.benchmark,
             resume_session=args.resume_session,
         )
@@ -163,6 +176,8 @@ def main(
         model_spec=args.model,
         max_tool_rounds=args.max_tool_rounds,
         reasoning_effort=args.reasoning_effort,
+        context_window=args.context_window,
+        compaction_strategy=args.compaction_strategy,
         benchmark=args.benchmark,
         resume_session=args.resume_session,
     )
@@ -206,6 +221,8 @@ def create_cli_app(config: CliConfig):
         session_id=config.session_id,
         model_spec=config.model_spec,
         resume_session=config.resume_session,
+        context_window=config.context_window,
+        compaction_strategy=config.compaction_strategy,
     )
     if config.max_tool_rounds is not None:
         app.chat_runner.limits = AgentLoopLimits.default().with_max_tool_rounds(config.max_tool_rounds)

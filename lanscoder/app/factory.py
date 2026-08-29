@@ -117,6 +117,8 @@ def create_lanscoder_app(
     mcp_manager_factory: Callable[[tuple], McpManagerLike] | None = None,
     model_spec: str | None = None,
     compact_config: ContextCompactionConfig | None = None,
+    context_window: int | None = None,
+    compaction_strategy: str | None = None,
 ) -> LansCoderApp:
     """应用工厂:解析配置、装配全部组件并返回可运行的 LansCoderApp。"""
 
@@ -168,7 +170,12 @@ def create_lanscoder_app(
         resume=resume_session,
         limits=AgentLoopLimits.default(),
         request_options=_main_request_options(selected_profile),
-        context_window=selected_profile.context_window if selected_profile is not None else None,
+        context_window=(
+            context_window
+            if context_window is not None
+            else (selected_profile.context_window if selected_profile is not None else None)
+        ),
+        compaction_strategy=compaction_strategy or "l1_l2_l3",
         background_manager=background_manager,
     )
     chat_runner = handle.runner

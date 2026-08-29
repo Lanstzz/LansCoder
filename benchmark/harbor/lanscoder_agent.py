@@ -44,6 +44,8 @@ class LansCoderHarborAgent(BaseInstalledAgent):
         *args,
         max_tool_rounds: int | str = 90,
         reasoning_effort: str | None = None,
+        context_window: int | str | None = None,
+        compaction_strategy: str | None = None,
         source_dir: str | Path | None = None,
         package: str | None = None,
         **kwargs,
@@ -51,6 +53,10 @@ class LansCoderHarborAgent(BaseInstalledAgent):
         super().__init__(*args, **kwargs)
         self._max_tool_rounds = _positive_int(max_tool_rounds, "max_tool_rounds")
         self._reasoning_effort = _optional_nonblank(reasoning_effort, "reasoning_effort")
+        self._context_window = _positive_int(context_window, "context_window") if context_window is not None else None
+        if compaction_strategy not in (None, "no_compact", "l1_l2", "l1_l2_l3"):
+            raise ValueError(f"compaction_strategy must be one of no_compact/l1_l2/l1_l2_l3, got {compaction_strategy!r}")
+        self._compaction_strategy = compaction_strategy
         self._source_dir = Path(source_dir).expanduser().resolve() if source_dir is not None else _default_source_dir()
         self._package = package
 
@@ -169,6 +175,8 @@ class LansCoderHarborAgent(BaseInstalledAgent):
         session_path = f"{_SESSION_ROOT}/sessions/{safe_session_id}.jsonl"
 
         effort = f"--reasoning-effort {shlex.quote(self._reasoning_effort)} " if self._reasoning_effort else ""
+        context_window = f"--context-window {int(self._context_window)} " if self._context_window is not None else ""
+        compaction = f"--compaction-strategy {shlex.quote(self._compaction_strategy)} " if self._compaction_strategy else ""
         resume = "--resume-session " if resume_session else ""
         return (
             "set -o pipefail; "
@@ -182,6 +190,8 @@ class LansCoderHarborAgent(BaseInstalledAgent):
             f"{resume}"
             f"--max-tool-rounds {self._max_tool_rounds} "
             f"{effort}"
+            f"{context_window}"
+            f"{compaction}"
             f"--message {shlex.quote(instruction)} "
             "2>&1 | tee /logs/agent/lanscoder.txt; "
             'LANSCODER_EXIT="${PIPESTATUS[0]}"; '

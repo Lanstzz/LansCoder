@@ -681,3 +681,31 @@ def test_app_on_unmount_flush_failure_still_closes_mcp(tmp_path, monkeypatch) ->
     with pytest.raises(RuntimeError, match="store write failed"):
         app.on_unmount()
     assert manager.close_calls == 1
+
+
+def test_factory_threads_context_window_and_compaction_strategy(tmp_path: Path) -> None:
+    from lanscoder.context.manager import CompactionStrategy
+
+    app = create_lanscoder_app(
+        project_root=tmp_path,
+        provider=FakeProvider([]),
+        session_id="sess_ctx",
+        context_window=200_000,
+        compaction_strategy="no_compact",
+    )
+
+    assert app.chat_runner.context_window == 200_000
+    assert app.chat_runner.context_manager.strategy == CompactionStrategy.NO_COMPACT
+
+
+def test_factory_defaults_preserve_profile_window_and_full_strategy(tmp_path: Path) -> None:
+    from lanscoder.context.manager import CompactionStrategy
+
+    app = create_lanscoder_app(
+        project_root=tmp_path,
+        provider=FakeProvider([]),
+        session_id="sess_default",
+    )
+
+    assert app.chat_runner.context_window is None  # 未显式覆盖:由 profile 决定
+    assert app.chat_runner.context_manager.strategy == CompactionStrategy.L1_L2_L3

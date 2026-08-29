@@ -296,3 +296,35 @@ def test_harbor_python_bootstrap_retries_flaky_package_and_network_steps(tmp_pat
     assert "retry yum install -y python3 python3-pip" in command
     assert "retry sh -c 'curl -LsSf https://astral.sh/uv/install.sh" in command
     assert 'retry "$AGENT_ROOT/bin/uv" python install 3.11' in command
+
+
+def test_harbor_agent_passes_context_window_and_compaction_strategy(tmp_path: Path) -> None:
+    agent = LansCoderHarborAgent(
+        logs_dir=tmp_path,
+        context_window="200000",
+        compaction_strategy="no_compact",
+    )
+
+    command = agent._run_command("Fix the task.", session_id="task")
+
+    assert "--context-window 200000" in command
+    assert "--compaction-strategy no_compact" in command
+
+
+def test_harbor_agent_omits_context_knobs_when_unset(tmp_path: Path) -> None:
+    agent = LansCoderHarborAgent(logs_dir=tmp_path)
+
+    command = agent._run_command("Fix the task.", session_id="task")
+
+    assert "--context-window" not in command
+    assert "--compaction-strategy" not in command
+
+
+def test_harbor_agent_rejects_invalid_compaction_strategy(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="compaction_strategy"):
+        LansCoderHarborAgent(logs_dir=tmp_path, compaction_strategy="bogus")
+
+
+def test_harbor_agent_rejects_invalid_context_window(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="context_window"):
+        LansCoderHarborAgent(logs_dir=tmp_path, context_window=0)
