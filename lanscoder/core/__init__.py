@@ -24,6 +24,7 @@ from lanscoder.core.events import (
 )
 from lanscoder.core.messages import LoopConfig, LoopContext, LoopMessage, convert_to_llm
 from lanscoder.core.session import AgentSessionHandle, create_agent_session
+from lanscoder.core.transport import LlmTransport
 
 __all__ = [
     "Agent",
@@ -33,6 +34,7 @@ __all__ = [
     "AgentStartEvent",
     "LoopConfig",
     "LoopContext",
+    "LlmTransport",
     "LoopMessage",
     "MessageEndEvent",
     "MessageStartEvent",
