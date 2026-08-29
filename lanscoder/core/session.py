@@ -24,18 +24,15 @@ from lanscoder.tools.builtin import create_builtin_registry
 from lanscoder.tools.types import Tool
 from lanscoder.utils.sandbox_access import SandboxAccess
 
-from lanscoder.core.agent import Agent
-from lanscoder.core.messages import LoopConfig, LoopContext
 from lanscoder.core.runtime import AgentChatRunner, CurrentSessionState
 
 
 @dataclass(slots=True)
 class AgentSessionHandle:
-    """L3 返回的聚合对象(O3): session + runner + L2 agent 视图。"""
+    """L3 返回的聚合对象(D2): session + runner,L2 Agent 保持独立(session-free)。"""
 
     session: AgentSession
     runner: AgentChatRunner
-    agent: Agent
 
 
 def create_agent_session(
@@ -103,19 +100,4 @@ def create_agent_session(
         context_window=context_window,
         background_manager=background_manager,
     )
-    agent = Agent(
-        context=LoopContext(
-            system_prompt=session.agents_md,
-            messages=[],
-            tools=resolved_tools,
-        ),
-        config=LoopConfig(
-            provider=provider,
-            session_id=session.session_id,
-            request_options=request_options,
-            context_window=context_window,
-            limits=limits,
-            background_manager=background_manager,
-        ),
-    )
-    return AgentSessionHandle(session=session, runner=runner, agent=agent)
+    return AgentSessionHandle(session=session, runner=runner)

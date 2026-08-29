@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.loop_limits import AgentLoopLimits
-from lanscoder.providers.base import ChatProvider
+from lanscoder.core.transport import LlmTransport
 from lanscoder.providers.types import ChatMessage, MainRequestOptions, ToolCall
 from lanscoder.tools.types import Tool
 
@@ -69,7 +69,7 @@ class LoopContext:
 class LoopConfig:
     """L1 运行配置:provider 显式注入(替代 pi 的 stream_fn 传输抽象,D6)。"""
 
-    provider: ChatProvider
+    provider: LlmTransport  # D3: 传输窄协议化,复用 providers 类型
     session_id: str = ""
     use_streaming: bool | None = None  # D4: None=按 capabilities.supports_streaming 自动;True/False=强制
     request_options: MainRequestOptions | None = None

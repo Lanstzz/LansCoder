@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from lanscoder.core import AgentSessionHandle, create_agent_session
+from lanscoder.core import AgentSessionHandle, LoopConfig, LoopContext, create_agent_session
 from lanscoder.core.agent import Agent
 from lanscoder.core.runtime import AgentChatRunner
 from lanscoder.providers.base import ChatProvider
@@ -40,7 +40,7 @@ async def test_create_agent_session_assembles_handle(tmp_path) -> None:
     assert isinstance(handle, AgentSessionHandle)
     assert handle.session.session_id
     assert isinstance(handle.runner, AgentChatRunner)
-    assert isinstance(handle.agent, Agent)
+    assert not hasattr(handle, "agent")  # D2: handle 只留 session + runner
 
 
 @pytest.mark.anyio
@@ -55,14 +55,19 @@ async def test_create_agent_session_builds_builtin_tools(tmp_path) -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_handle_agent_prompt_runs_headless(tmp_path) -> None:
+async def test_l2_agent_prompt_runs_headless_without_handle(tmp_path) -> None:
+    """SC-5: handle 去掉 agent 后,L2 Agent 独立可用(session-free,不经 L3 handle)。"""
+
     provider = FakeProvider(
-        responses=[ChatResponse(provider="fake", model="m", content="hello from L3")]
+        responses=[ChatResponse(provider="fake", model="m", content="hello from L2")]
     )
-    handle = create_agent_session(provider=provider, project_root=tmp_path)
+    agent = Agent(
+        context=LoopContext(system_prompt="", messages=[], tools=[]),
+        config=LoopConfig(provider=provider, session_id="l2-headless"),
+    )
     seen: list[str] = []
-    handle.agent.subscribe(lambda event: seen.append(event.type))
-    await handle.agent.prompt("hello")
+    agent.subscribe(lambda event: seen.append(event.type))
+    await agent.prompt("hello")
     assert seen[0] == "agent_start"
     assert seen[-1] == "agent_end"
 
