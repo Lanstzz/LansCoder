@@ -227,7 +227,9 @@ def test_agent_events_are_frozen_slots_dataclasses() -> None:
         cls = getattr(core, name)
         assert dataclasses.is_dataclass(cls)
         assert cls.__dataclass_params__.frozen is True
-        assert cls.__dataclass_params__.slots is True
+        # slots=True 自 3.10 可用,但 ``__dataclass_params__.slots`` 属性 3.13+ 才有;
+        # 用 ``__slots__`` 的存在性做跨 3.11/3.12/3.13 一致的断言。
+        assert hasattr(cls, "__slots__")
 
 
 def test_agent_event_union_pinned() -> None:
