@@ -173,5 +173,6 @@ Textual 构建的终端 UI。它**不包含业务逻辑**：用户输入在这�
 | 33 个工具如何组织、权限如何裁决 | [02-能力层](02-capability.md) |
 | 模型适配与上下文压缩管线 | [03-模型与上下文](03-model-context.md) |
 | 会话持久化与 MCP/记忆/技能等扩展点 | [04-会话与扩展点](04-session-ext.md) |
+| `lanscoder.core` SDK 契约、版本策略与 headless 示例 | [03-sdk](03-sdk.md) |
 
 下一篇：[01-编排层](01-orchestration.md)

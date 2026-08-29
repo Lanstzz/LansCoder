@@ -7,6 +7,7 @@
 约束: core 永不 import app。
 """
 
+from lanscoder.core._version import __version__
 from lanscoder.core.agent import Agent
 from lanscoder.core.agent_loop import agent_loop
 from lanscoder.core.events import (
@@ -27,6 +28,7 @@ from lanscoder.core.session import AgentSessionHandle, create_agent_session
 from lanscoder.core.transport import LlmTransport
 
 __all__ = [
+    "__version__",
     "Agent",
     "AgentEndEvent",
     "AgentEvent",
