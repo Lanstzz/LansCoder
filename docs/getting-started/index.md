@@ -43,8 +43,8 @@ lanscoder config init
 ### 方式三：源码安装（开发）
 
 ```sh
-python -m venv .venv
-.venv/bin/python -m pip install -e ".[dev]"
+python -m venv venv
+venv/bin/python -m pip install -e ".[dev]"
 ```
 
 源码安装会同时拉入开发依赖（pytest、trio、ruff、black），适合需要阅读或修改代码的场景。

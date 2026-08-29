@@ -18,7 +18,7 @@ adapter. For each task it stages only `pyproject.toml`, `README.md`, and
 `lanscoder/`, creates an isolated agent virtual environment, and runs one
 non-interactive `lanscoder --benchmark` turn in Harbor's task directory.
 
-The adapter does not copy `.git`, `.venv`, local sessions, `.env`, or other
+The adapter does not copy `.git`, `venv`, local sessions, `.env`, or other
 workspace files. It receives the task instruction but does not inspect verifier
 files or inject hidden-test information into the prompt.
 
@@ -34,7 +34,7 @@ not receive a repair turn.
 For a long-running local suite, classify infrastructure failures separately from `reward=0`: network/provider errors, Docker environment failures, timeouts, and a verifier that fails before writing `reward.txt` do not carry the same interpretation as an implementation failing its tests. The run report documents examples and recovery commands.
 
 ```sh
-PYTHONPATH="$PWD" .venv/bin/harbor run \
+PYTHONPATH="$PWD" venv/bin/harbor run \
   -p .local/harbor-datasets/aider-polyglot \
   -a benchmark.harbor.lanscoder_agent:LansCoderHarborAgent \
   --plugin benchmark.harbor.aider_feedback_plugin:AiderFeedbackPlugin \
@@ -51,13 +51,13 @@ protocol does not explicitly allow test-feedback repair rounds.
 Install Harbor in LansCoder's development environment:
 
 ```sh
-.venv/bin/python -m pip install 'harbor==0.18.0'
+venv/bin/python -m pip install 'harbor==0.18.0'
 ```
 
 Verify the CLI and Docker daemon before running a task:
 
 ```sh
-.venv/bin/harbor --version
+venv/bin/harbor --version
 docker version
 ```
 
@@ -68,7 +68,7 @@ Download a dataset into Harbor's local cache when you want to inspect its task
 names and environment definitions:
 
 ```sh
-.venv/bin/harbor dataset download DATASET_NAME --cache
+venv/bin/harbor dataset download DATASET_NAME --cache
 ```
 
 The dataset name, task filter, image architecture, and resource requirements are
@@ -82,7 +82,7 @@ the repository. Replace the dataset, task, provider, model, and endpoint with
 your own values:
 
 ```sh
-zsh -lic 'export PYTHONPATH="$PWD"; .venv/bin/harbor run \
+zsh -lic 'export PYTHONPATH="$PWD"; venv/bin/harbor run \
   -d DATASET_NAME \
   -i TASK_NAME \
   -a benchmark.harbor.lanscoder_agent:LansCoderHarborAgent \
@@ -115,7 +115,7 @@ trials and concurrent containers:
 
 ```sh
 mkdir -p "$HOME/.cache/lanscoder-harbor"
-.venv/bin/harbor run \
+venv/bin/harbor run \
   ... \
   --mounts '[{"type":"bind","source":"'"$HOME"'/.cache/lanscoder-harbor","target":"/opt/lanscoder-cache"}]' \
   ...
@@ -135,7 +135,7 @@ logs, rewards, and timing under the selected jobs directory. Inspect a completed
 local run with:
 
 ```sh
-.venv/bin/harbor view benchmark/runs/harbor/smoke
+venv/bin/harbor view benchmark/runs/harbor/smoke
 ```
 
 A successful dataset download or container start is not a passing result. Use
