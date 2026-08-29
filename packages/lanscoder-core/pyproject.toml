@@ -26,4 +26,4 @@ where = ["../.."]
 include = ["lanscoder*"]
 
 [tool.setuptools.package-data]
-lanscoder = ["py.typed", "context/prompts/*.md"]
+lanscoder = ["py.typed", "context/prompts/*.md", "app/*.tcss"]
