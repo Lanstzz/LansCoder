@@ -62,17 +62,21 @@
   - 开发/CI 双 editable:`pip install -e packages/lanscoder-core` + `pip install -e ".[dev]"`(README、ci.yml、publish-pypi.yml)。
   - 新增 `tests/test_dist_metadata.py`(8 项元数据契约:版本单一来源、root 无包、core 最小集/extras/package-data);修订 `test_cleanup_contracts.py::test_pyproject_is_the_single_production_dependency_manifest`(mcp 移入 core extra)。
   - spec 追加 §8 D7 修订记录。
+- 2026-08-29 Step 3(CI 双 dist 发布流程)完成,PR #14(`codex/task-003-step3`):
+  - `publish-pypi.yml` 重写:publish job 对 root(全量 `python -m build`)与 core(`packages/lanscoder-core` 内 `python -m build --wheel`)分别构建 + `twine check`(两处 dist 都检)+ 上传两条路径;`needs: [test, minimal-core-deps]`。
+  - tag 校验(仅 push 事件)改为同时约束:root pyproject `version` == core `_version.py` == tag,且 root 的 `lanscoder-core[llm,mcp]==<version>` pin 与 core 版本一致(与 `tests/test_dist_metadata.py` 同逻辑的发布期门禁)。
+  - 新增 `minimal-core-deps` job(发布期,锁死 D2 最小集):build core wheel → 全新 venv 仅装 wheel + pytest → 断言无 banned 依赖(textual/openai/anthropic/mcp/prompt-toolkit/tomlkit/python-dotenv)→ 跑契约 + SDK 示例 + 层边界泄漏测试 → 安装包冒烟(site-packages import,stub transport 驱动 L2 Agent 一轮)。
 
 ## Pending
 
 - [x] Step 1:`packages/lanscoder-core` 打包骨架 + 本地 build 双 wheel + 干净 venv 安装冒烟(SC-1、SC-2 前半;PR #12)。
 - [x] Step 2(D7 结构性消除落地):root 薄壳化(pyproject 改 deps/scripts/`packages=[]`;core 补 `app/*.tcss`);双 editable 开发流(README/install.sh/ci.yml/publish-pypi.yml);冲突消除验证 SC-7(双装 RECORD 零重叠、卸载不破坏)。
-- [ ] Step 3(原 Step 2):CI 双 dist 发布流程 + 最小依赖验证 job(SC-2 后半、SC-3、SC-4;tag 校验同时约束 root pyproject 版本 + core `_version.py`)。
+- [x] Step 3(原 Step 2):CI 双 dist 发布流程 + 最小依赖验证 job(SC-2 后半、SC-3、SC-4;tag 校验同时约束 root pyproject 版本 + core `_version.py`)——实现与本地实测完成;SC-3/SC-4 的 CI 真机验证待 tag push(Step 4 Test PyPI 演练)。
 - [ ] Step 4(原 Step 3):CHANGELOG + 安装/发布文档 + Test PyPI 演练(SC-5、SC-6)。
 
 ## Next step
 
-Step 3(独立 PR):CI 双 dist 发布流程——`publish-pypi.yml` 对 root(全量 `python -m build`)与 core(`python -m build --wheel`)分别构建 + `twine check` + 上传;tag 校验同时约束 root pyproject 版本与 core `_version.py`;新增最小依赖验证 job(仅装 core wheel 依赖)跑契约 + 示例冒烟 + 泄漏检查(SC-2 后半、SC-3、SC-4)。
+Step 4(独立 PR):CHANGELOG + 安装/发布文档 + Test PyPI 演练——`CHANGELOG.md`(keep-a-changelog)、`docs/architecture/03-sdk.md` 与 `examples/sdk/README.md` 补 SDK 安装/extras 与薄壳依赖关系说明、README SDK 安装段、发布检查文档;随后以 tag push 触发真实 CI 双 build/twine/上传 完成 SC-3/SC-4(Test PyPI → 真实 PyPI 人工确认)。
 
 ## Verification
 
@@ -92,8 +96,15 @@ Step 3(独立 PR):CI 双 dist 发布流程——`publish-pypi.yml` 对 root(全�
   - D7c 开发流:项目 venv 双 editable 安装 `pip check` → No broken requirements;全量 `pytest` 1722 passed、`ruff check .` 通过、`check.mjs` valid。
   - 注:本机 macOS 沙箱会给 `.pth` 打 `UF_HIDDEN` 标志导致 site.py 跳过 editable `.pth`(环境怪癖,Linux CI 无此行为);wheel 级验证不受影响。
 
+- [x] Step 3(2026-08-29 实测,exit 0;SC-2 后半 + SC-3 本地构建):
+  - 双 build:root `python -m build` → `lanscoder-1.2.1.tar.gz` + `lanscoder-1.2.1-py3-none-any.whl`;core `packages/lanscoder-core: python -m build --wheel` → `lanscoder_core-1.2.1-py3-none-any.whl`;两 wheel METADATA Version 均 1.2.1 == `_version.py`;core METADATA 必装仅 `anyio`/`portalocker`/`PyYAML` + extras `[llm]/[mcp]`;root METADATA 依赖 `lanscoder-core[llm,mcp]==1.2.1` + TUI 侧 4 项。
+  - `twine check`:`lanscoder-1.2.1-py3-none-any.whl` / `lanscoder-1.2.1.tar.gz` / `lanscoder_core-1.2.1-py3-none-any.whl` 全部 PASSED。
+  - tag 校验逻辑(与 workflow 同代码):`tag=v1.2.1 == root 1.2.1 == core 1.2.1 == pin lanscoder-core[llm,mcp]==1.2.1` 通过;错误 tag(v1.2.0)被拒绝。
+  - `minimal-core-deps` job 全序列模拟(新 venv `/tmp/ci-sim`,仅装 core wheel + pytest):`pip show lanscoder-core` → `Requires: anyio, portalocker, PyYAML`;pip list 无 banned 依赖;`pytest -q tests/test_core_contract.py tests/test_sdk_examples.py tests/test_layer_boundaries.py` → **26 passed**;安装包冒烟(`/tmp/smoke2` site-packages import)事件序列 `agent_start→…→agent_end`,exit 0。
+  - 注:SC-3/SC-4 的 CI 真机双 build/twine/上传 需 tag push 触发(发布期),Test PyPI 演练在 Step 4;本地已逐命令复现 workflow。
+
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: TASK-003 进行中(active);Step 1(PR #12)core 子项目骨架完成;Step 2(PR #13)D7 结构性消除落地:`LansCoder` 薄壳化 + core 补 `app/*.tcss` + 双 editable 开发流 + SC-7 实测通过(两 wheel RECORD 零交集、卸载不破坏);下一步 Step 3(CI 双 dist 发布流程 + 最小依赖 job),随后 Step 4 文档。
+- Summary: TASK-003 进行中(active);Step 1(PR #12)core 子项目骨架、Step 2(PR #13)D7 薄壳化 + SC-7 已完成;Step 3(PR #14)CI 双 dist 发布流程落地:`publish-pypi.yml` 双 build + twine check + 双上传 + tag 校验(root==core==tag==pin)+ `minimal-core-deps` 发布期 job(本地逐命令复现:26 passed + 安装包冒烟 + twine check 全 PASSED);SC-3/SC-4 CI 真机验证待 tag push;下一步 Step 4(CHANGELOG + 安装/发布文档 + Test PyPI 演练)。
