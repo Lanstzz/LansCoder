@@ -142,7 +142,16 @@ class LansCoderHarborAgent(BaseInstalledAgent):
         return _REMOTE_SOURCE_DIR
 
     def _stage_local_source(self) -> Path:
-        """Create the minimal host-side package tree copied into a task image."""
+        """Create the minimal host-side package tree copied into a task image.
+
+        The repo root ``lanscoder/`` is the SDK source (published as
+        ``lanscoder-core``); the repo's thin-shell ``pyproject.toml`` has
+        ``packages = []``, so installing it directly would install nothing and
+        the task image would fall back to PyPI ``lanscoder-core`` (stale CLI).
+        Instead we write a staged ``lanscoder-core`` pyproject that packages the
+        working-tree ``lanscoder/``, so the container always exercises the exact
+        checkout under development.
+        """
 
         source = self._source_dir
         if source is None:
@@ -157,7 +166,7 @@ class LansCoderHarborAgent(BaseInstalledAgent):
         if staged.exists():
             shutil.rmtree(staged)
         staged.mkdir(parents=True)
-        shutil.copy2(source / "pyproject.toml", staged / "pyproject.toml")
+        staged.joinpath("pyproject.toml").write_text(_staged_pyproject(source), encoding="utf-8")
         shutil.copy2(source / "README.md", staged / "README.md")
         shutil.copytree(package_dir, staged / "lanscoder", ignore=_ignore_source_artifacts)
         return staged
@@ -361,6 +370,65 @@ open(path, "w", encoding="utf-8").write(config)
 def _default_source_dir() -> Path | None:
     root = Path(__file__).resolve().parents[2]
     return root if (root / "pyproject.toml").is_file() else None
+
+
+def _staged_pyproject(source: Path) -> str:
+    """Build a ``lanscoder-core`` pyproject that packages the working-tree ``lanscoder/``."""
+
+    version = _staged_version(source)
+    return (
+        "[build-system]\n"
+        'requires = ["setuptools>=68", "wheel"]\n'
+        'build-backend = "setuptools.build_meta"\n'
+        "\n"
+        "[project]\n"
+        'name = "lanscoder-core"\n'
+        f'version = "{version}"\n'
+        'requires-python = ">=3.11"\n'
+        "dependencies = [\n"
+        '    "anyio",\n'
+        '    "portalocker",\n'
+        '    "PyYAML",\n'
+        '    "openai",\n'
+        '    "anthropic",\n'
+        '    "mcp>=1.28.1,<2",\n'
+        # 工作区 lanscoder 的 cli -> app -> tui 导入链需要 thin-shell/app 依赖
+        '    "textual",\n'
+        '    "prompt_toolkit",\n'
+        '    "tomlkit",\n'
+        '    "python-dotenv",\n'
+        "]\n"
+        "\n"
+        "[tool.setuptools.packages.find]\n"
+        'where = ["."]\n'
+        'include = ["lanscoder*"]\n'
+        "\n"
+        "[tool.setuptools.package-data]\n"
+        'lanscoder = ["py.typed", "context/prompts/*.md", "app/*.tcss"]\n'
+    )
+
+
+def _staged_version(source: Path) -> str:
+    """Read ``__version__`` from the working tree, falling back to a dev marker."""
+
+    import ast
+
+    version_file = source / "lanscoder" / "core" / "_version.py"
+    try:
+        tree = ast.parse(version_file.read_text(encoding="utf-8"))
+    except OSError:
+        return "0.0.0.dev"
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets
+        ):
+            try:
+                value = ast.literal_eval(node.value)
+            except (ValueError, SyntaxError):
+                break
+            if isinstance(value, str) and value:
+                return value
+    return "0.0.0.dev"
 
 
 def _ignore_source_artifacts(_directory: str, names: list[str]) -> set[str]:
