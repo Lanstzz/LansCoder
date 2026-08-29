@@ -42,6 +42,7 @@
 - **D5(已定,用户)** 纯测量;暴露的短板(如 P2 token 计量失真)记入 `record.md`,修复另开任务。
 - **D6(已定,调研)** 接入形态 = `LansCoderAgent(BaseAgent)` 进程内,复用 `create_agent_session`;LoCoBench 的 `AgentFactory._create_custom_agent` 是 stub、CLI `--agent-type` 不含 custom → 自写 driver 直接实例化 harness 类。
 - **D7(已定,调研)** 评估时 harness 跑 `--context-management none`,由 LansCoder `ContextWindowManager` 独占上下文管理(A/B 因果干净)。
+- **D8(已定,用户 2026-08-29,Phase 3.5)** "不跑偏/结果正确"打分 = A+B+C 加权:权重 **A 0.3 / B 0.5 / C 0.2**(可 CLI 覆盖);C 只取 **LCBA-Comp**(Eff 单独报告不并入);B 层 judge 换供应商 **DashScope 模型 `qwen3.7-plus`**(与 agent deepseek-v4-flash 不同模型,避免自评);A 层用 **ground_truth 反引号标识符** 确定性提取;立即对现有 3 个 run(easy-2/hard-1/expert-1)出分。
 
 ## Completed
 
@@ -57,12 +58,13 @@
 
 - **Phase 2 ✅(2026-08-29)**:driver 压缩策略开关 + CompactionEvent 采集 + 三口径对齐已就绪(见 Completed)。
 - **Phase 3 ✅(2026-08-29)**:hard + expert 各 1 个冒烟完成(SC-2,见 Completed):压缩在 200K 窗口稳定触发,CompactionEvent 采集端到端验证。
+- **Phase 3.5(进行中)**:A+B+C 加权"不跑偏/结果正确"打分——`scoring.py`(A 反引号命中 + C=LCBA-Comp + 加权)与 `judge.py`(B=dashscope qwen3.7-plus,结构化 JSON 盲评)已就绪,A+C 已对 3 run 出分;**B 层阻塞于 DashScope 账户欠费(Arrearage)**,等用户充值或改 judge 通道后补 B 与加权总分。
 - **Phase 4(下一步)**:策略 A/B(no-compact / L1+L2 / L1+L2+L3)+ 分析脚本(上下文规模-指标曲线、压缩行为统计);注意 Phase 3 发现——原生 1M/1.5M 窗口下 chars/4 不触发(见 record.md O6),A/B 需固定窗口(建议 200K)并标注口径。
 - **Phase 5**:`benchmark/locobench/README.md` 复现文档完善;更新 `record.md`(补 Phase 1 评估观察);全量门禁(SC-6)。
 
 ## Next step
 
-**Phase 3 已通过**(2026-08-29):hard + expert 各 1 个冒烟完成(SC-2)——200K 窗口下压缩稳定触发(12 次,全部 stopped_at=l2,L3/硬截断 0),CompactionEvent 采集端到端验证通过;原生 1M/1.5M 窗口 chars/4 不触发(record.md O6)。下一步 **Phase 4**:策略 A/B(no-compact / l1_l2 / l1_l2_l3)在同一 hard/expert 场景子集上对比,固定 200K 窗口 + minimal 初始上下文,跑 `--compaction-strategy` 三组,用 `analyze.py` 产出上下文规模-指标曲线与压缩行为对比。
+**Phase 3 已通过**;**Phase 3.5 进行中**(2026-08-29):`scoring.py`(A+C+加权)+ `judge.py`(B=dashscope qwen3.7-plus)已实现并有单测;A+C 已对 easy-2/hard-1/expert-1 出分(A 命中率 0.714/0.133/0.0——agent 转述而非精确标识符,证实需 B 层语义判断);**B 层阻塞**:DashScope 返回 Arrearage(欠费),等用户充值或指定备用 judge 模型后补齐 B + 加权总分。之后进入 **Phase 4** 三组策略 A/B。
 
 ## Verification
 
