@@ -1,72 +1,78 @@
 # Current Task
 
 - ID: `TASK-004`
-- Title: `接入 LOCA-bench:上下文系统可复现评估基准`
-- Status: `planning`
+- Title: `接入 LoCoBench-Agent:上下文系统可复现评估基准`
+- Status: `active`
 - Owner: `Lanster`
 - Next owner: `Lanster`
 
 ## Goal
 
-把 LOCA-bench(HKUST NLP,2026,arXiv 2602.07962)接入 LansCoder,作为上下文管理系统的**可复现量化评估基准**:复用 LOCA 的 task-configs(环境长度 8K→128K/256K 可控增长)+ mock MCP 服务器 + eval 计分,让 LOCA 的 agentic 任务跑在 **LansCoder 真实 loop**(`--benchmark` + MCP 客户端)上,产出"**上下文增长 vs 准确率 / token 成本 / 压缩行为**"的对比,并与 LOCA 内置 react 基线(及可选 Claude Code 官方基线)对照。
+把 LoCoBench-Agent(Salesforce AI Research,arXiv 2511.13998)接入 LansCoder,作为上下文管理系统的**可复现量化评估基准**(纯测量,不改 `lanscoder/` 核心语义)。
 
-- **评估对象**:`lanscoder/context/` 的 ContextWindowManager 三层压缩(L1 路由压缩 / L2 归档占位 / L3 LLM 摘要)与触发/回退/熔断机制。
-- **接入形态**:LansCoder 侧新增 `benchmark/loca/` driver,复用 LOCA-bench 的 task-configs + mock MCP 服务器 + eval;不 fork 外部仓库(固定 commit 引用,类比 Harbor)。
-- **对照项**:no-compact / L1+L2 / L1+L2+L3 / LOCA `--context-reset` / LOCA react 基线。
+- **数据**:复用 LoCoBench-Agent 的 8,000 交互场景(10K–1M tokens、10 语言、8 任务类别、四档难度),按 `--scenario-count/--difficulty/--category` 抽子集。
+- **接入形态**:LansCoder 以自定义 `LansCoderAgent(BaseAgent)` **进程内**接入(`create_agent_session` + LoCoBench 工具映射),被测对象 = `ContextWindowManager` 三层压缩(L1 路由压缩 / L2 归档占位 / L3 LLM 摘要)。
+- **测量方式**:harness 跑 `--context-management none`(不干预 agent 历史),由 LansCoder 的上下文系统独占管理;对比 `no-compact / L1+L2 / L1+L2+L3` 三组,产出"上下文规模 vs 准确率/效率指标 + `CompactionEvent` 压缩行为(before/after tokens、L1/L2/L3 hit rate、硬截断率)"。
+- **短板记录**:评估暴露的已知短板(如 P2 token 计量 `chars/4` 对代码/中文失真)不在此任务修复,记入 `record.md`,修复另开任务。
 
 ## Acceptance scenarios
 
-- [ ] **SC-1 (最小闭环)**: Given LOCA 8K 档单任务 + 便宜模型,When 由 LansCoder(`--benchmark` + MCP 指向 mock 服务器)执行,Then LOCA eval 正常出分(非基础设施失败)。
-- [ ] **SC-2 (基线可复现)**: Given 同档位 + 同模型,When 运行 LOCA 内置 react 基线,Then 能复现官方基线形态(acc/steps/token 输出齐全)。
-- [ ] **SC-3 (可复现命令)**: Given 已装 LOCA-bench(固定 commit),When 运行 `python -m benchmark.loca run ...`,Then 产出 `results.json` + trajectory + `token_stats.json`(LOCA 格式)且退出码 0。
-- [ ] **SC-4 (压缩 A/B)**: Given 至少一组任务子集 + 档位,When 对比 no-compact 与 L1+L2(+L3),Then 产出"上下文增长-准确率 / token 成本 / 压缩行为(hit rate、before/after、硬截断率)"对比图。
-- [ ] **SC-5 (门禁)**: When 运行 `pytest` + `ruff check .` + `node .ai-team/check.mjs --base origin/main`,Then 全绿(新增 benchmark/loca 不碰 `lanscoder/` 核心语义)。
+- [x] **SC-1 (最小闭环)**: Given LoCoBench 数据就绪,When 用 **1 个 easy 场景**由 `LansCoderAgent` 执行,Then 跑通并产出 `AgentEvaluationResults`(非基础设施失败)。
+- [ ] **SC-2 (hard/expert 冒烟)**: Given SC-1 通过,When 各跑 **1 个 hard + 1 个 expert** 场景,Then 均完成并出分,记录压缩是否触发及触发水位。
+- [ ] **SC-3 (策略 A/B)**: Given 同一场景子集,When 对比 `no-compact / L1+L2 / L1+L2+L3`,Then 产出对比(准确率/效率指标 + CompactionEvent 压缩行为统计)。
+- [ ] **SC-4 (可复现命令)**: Given 环境与数据就绪,When 运行 `benchmark/locobench/` 的 driver 命令,Then 可复现产出 results + conversation transcript + per-turn token/context 统计。
+- [ ] **SC-5 (短板记录)**: Given 评估完成,When 审阅暴露的上下文系统问题,Then 记入 `record.md`(标注不修复、待另开任务)。
+- [ ] **SC-6 (门禁)**: When 运行 `pytest` + `ruff check .` + `node .ai-team/check.mjs --base origin/main`,Then 全绿(新增 benchmark/locobench 不碰 `lanscoder/` 核心)。
 
 ## Invariants
 
-- 不 fork / 不修改 LOCA-bench 源码;外部工具固定 commit 引用,clone 到工具目录(不进仓库),类比 Harbor(`harbor==0.18.0`)。
-- `benchmark/loca/` 只做 driver + 分析脚本,**不改 `lanscoder/` 核心行为**(上下文系统语义零改动;本任务只做"测量",不做"优化")。
-- 不提交 API key、mock 数据、私有会话;结果只保留聚合统计与图。
-- 预算可控:任务子集(4–6 个)× 档位(8K/32K/64K 起步)× 策略 × 单一便宜模型(deepseek-chat 优先);全矩阵仅预算允许时扩展。
-- token 口径差异(LOCA 用 GPT-4 tokenizer 量环境长度,`lanscoder` 用 chars/4 估算)必须在分析中标注,不可混用。
-- 沿用"仓库只维护 benchmark 适配器"原则:LOCA-bench 是本仓库继 Harbor 之后唯一新增的 benchmark 集成。
+- 不 fork / 不修改 LoCoBench-Agent 源码;外部工具固定 commit 引用,clone 到工具目录(不进仓库),类比 Harbor。
+- `benchmark/locobench/` 只做 driver + 分析脚本,**不改 `lanscoder/` 核心行为**(本任务纯测量)。
+- 不提交 API key、大体积数据(data.zip / 场景缓存);结果只保留聚合统计与图。
+- 预算可控(用户已定):第一波 **1 个 easy** 验证链路,通过后 **1 个 hard + 1 个 expert** 冒烟;模型 deepseek-chat 优先;暂不加官方基线。
+- token 口径必须分开标注:harness `context_tokens`(启发式 `len.split()*1.3`)/ provider 真实 usage / lanscoder `chars/4` 估算,不可混用。
+- 沿用"仓库只维护 benchmark 适配器"原则:LoCoBench-Agent 是本仓库继 Harbor 之后唯一新增的 benchmark 集成。
 
 ## Decisions
 
-- **D1(已定,用户)** 选定 **LOCA-bench** 作为上下文系统评估基准(对比候选:SWE-bench Verified 认知度最高但对上下文 claim 不可归因;RULER/LongBench v2 为模型级;Factory probe 方法论为自建 harness)。理由:唯一把"上下文增长"做成独立变量的 agent 级基准,因果可归因 + 自带 Claude Code 基线。
-- **D2(已定,调研)** 接入形态 = **LansCoder 侧 driver 复用 LOCA 的 task-configs + mock MCP 服务器 + eval**,对标 LOCA 现有 `run-claude-agent`(外部 agent 接入路径);不新增 LOCA 内嵌策略(避免侵入外部仓库)。
-- **D3(已定,调研)** LansCoder 侧接入点成立:`lanscoder/cli.py` 已有 `--benchmark` 非交互模式(bypass 权限、关预写审查、可设工具轮上限,`run_benchmark_turn`);`lanscoder/mcp/` 已有完整 MCP 客户端(stdio + streamable_http,`mcp__<server>__<tool>`)。兜底方案:LOCA `run-claude-api` 形态——LansCoder 直连 OpenAI 兼容端点,绕过 MCP 层。
-- **D4(草案,待 Phase 0/1 验证)** LOCA 上下文增长靠 agent 经工具输出逐步累积;需验证 LansCoder 压缩在真实任务中确实触发(触发水位高 90% / 低 72%),否则改用更大档位(64K+)或注入环境预载。
-- **D5(草案,待 Phase 2)** `benchmark/loca/` 的压缩 A/B 通过现有装配参数暴露(不新增核心 API),并收集 `CompactionEvent`(before/after tokens、L1/L2/L3 hit rate、硬截断率)与 LOCA `token_stats.json` 关联。
+- **D1(已定,用户)** 只写 **LoCoBench-Agent**;LOCA-bench 弃用(候选对比结论保留在对话/调研记录,不写入任务)。
+- **D2(已定,用户)** 分波验证:第一波 1 个 easy;跑通后各 1 个 hard + 1 个 expert。
+- **D3(已定,用户)** 策略 A/B = `no-compact / L1+L2 / L1+L2+L3` 三组。
+- **D4(已定,用户)** 暂不加官方 OpenAI/Anthropic 基线对照。
+- **D5(已定,用户)** 纯测量;暴露的短板(如 P2 token 计量失真)记入 `record.md`,修复另开任务。
+- **D6(已定,调研)** 接入形态 = `LansCoderAgent(BaseAgent)` 进程内,复用 `create_agent_session`;LoCoBench 的 `AgentFactory._create_custom_agent` 是 stub、CLI `--agent-type` 不含 custom → 自写 driver 直接实例化 harness 类。
+- **D7(已定,调研)** 评估时 harness 跑 `--context-management none`,由 LansCoder `ContextWindowManager` 独占上下文管理(A/B 因果干净)。
 
 ## Completed
 
-- [x] 调研 `lanscoder/context/` 全模块(manager/compaction/archive/llm_compact/token_budget/tool_lifecycle/runtime_state 等),产出竞品对比结论:压缩管线健壮(L1/L2/L3 + 生命周期失效 + 序列完整性与护栏),短板为 token 计量(chars/4,中文失真)、无 prompt caching、无 repo map、每次请求全量重放 O(n²)(2026-08-29,对话记录,未落代码)。
-- [x] 调研 benchmark 生态:Factory probe 方法论 + hermes-compression-eval(压缩保真)、CompInt(约束完整性)、LOCA-bench(agent 级上下文增长)、RULER/LongBench v2/LongMemEval/LOCOMO(长上下文)、SWE-bench Verified(通用货币);选定 LOCA-bench 为单跑推荐(2026-08-29)。
-- [x] 确认 LansCoder 侧接入点:`--benchmark` 非交互模式(cli.py `run_benchmark_turn`)+ MCP 客户端(`lanscoder/mcp/`,stdio/streamable_http);Harbor 适配器(`benchmark/harbor/lanscoder_agent.py`)已有 `lanscoder --benchmark --project .` 调用先例(2026-08-29)。
+- [x] LoCoBench-Agent 源码调研(2026-08-29):`BaseAgent` 接口与自定义路径(`base_agent.py` / `custom_agent.py` / `agent_factory.py` CUSTOM=stub);8,000 场景结构(data.zip → `convert-scenarios` → 缓存 → `evaluate --mode agent`,`--scenario-count/--difficulty/--category` 子集);per-turn token/context 统计(`conversation_history[].context_tokens` 启发式 + `AgentResponse.tokens_used` 真实 usage + harness `ContextState.total_tokens`/`compression_history` tiktoken);harness context management(`none/basic/adaptive`,默认 adaptive,触发 0.4/0.6);`RobustAgentEvaluator` + `AgentSession` 主路径;`run_llm_evaluation` 为 random 占位符(只用 agent 模式)。
+- [x] 决策确认(2026-08-29,用户 Q1–Q5):LoCoBench 主选 / 分波验证 / 三组 A/B / 不加官方基线 / 短板记 record.md 不修。
+- [x] **Phase 1 数据与环境(2026-08-29)**:LoCoBench-Agent clone 到 `/tmp/LoCoBench-Agent`(commit `2ab9218`,工具目录不入仓库);venv 装依赖(requirements 去 lighteval/boto3 + tiktoken + psutil + gdown);`data.zip` 1.27GB 经代理 gdown 下载并解压(4.6GB,1000 项目 / 8000 场景 / 8000 已转换 agent 场景);`convert-scenarios --limit 5` 验证通过(全 8000 走缓存,0 失败)。
+- [x] **Phase 1 最小闭环跑通(2026-08-29)**:`benchmark/locobench/` 初版 driver 就绪(`lanscoder_agent.py` / `tool_mapping.py` / `driver.py` / `README.md`)。1 个 easy 场景(`php_api_rest_easy_078_architectural_understanding_easy_01`,19K context)由 `LansCoderAgent` + deepseek-v4-flash 执行 **3 turns**,产出 `AgentEvaluationResults`:**overall 0.704 / LCBA-Comp 0.74 / LCBA-Eff 0.65**,session_status=completed,0 error,59 条工具调用(6 类 LoCoBench 工具 + LansCoder `read_memory`),provider 真实 usage 共 131,327 tokens,**未触发压缩**(19K 场景 vs 1M 窗口,符合预期)。产物在 `benchmark/runs/locobench/smoke-easy-1/`(gitignored)。
+- [x] **Phase 1 坑(已修/已记录)**:① harness 场景文件必须嵌套在 `initial_context.project_files`,否则工具工作区为空;② LansCoder 内部 loop 工具调用需从 session store 事件采集(`ChatResponse.tool_calls` 只含末条消息);③ `FinishReason` 是字符串 Literal 不是 enum(首次跑 `'str' object has no attribute 'value'` 中断,已修);④ `--max-turns N` 才是预算上限(阶段循环 success 不满足会跑满回合);⑤ 工具名带 `_copy_<id>` 副本后缀需归一化。
 
 ## Pending
 
-- **Phase 0(下一步)**:clone LOCA-bench 到 /tmp(需联网+审批),通读 `run-claude-agent` 接入模板、mock MCP 服务器启动方式、eval 计分、`token_stats.json` 口径;确认 LansCoder `--benchmark` 的 MCP 注入与压缩开关路径;产出集成点清单 + 可行性结论。
-- **Phase 1**:8K 档单任务最小闭环(LOCA react 基线 + LansCoder 各跑一遍),验证压缩确实介入。
-- **Phase 2**:`benchmark/loca/` driver 自动化(config 解析 / mock server 生命周期 / 会话装配 / CompactionEvent 收集 / results 对齐)。
-- **Phase 3**:实验矩阵(子集 × 8K/32K/64K × 策略)+ 分析脚本(曲线图)。
-- **Phase 4**:`benchmark/loca/README.md` 复现文档;全量门禁。
+- **Phase 2(下一步)**:完善 `benchmark/locobench/` driver:① 给 `create_agent_session` 暴露压缩策略开关(no-compact / L1+L2 / L1+L2+L3,现为默认全量),② 验证 `CompactionEvent` 在 hard/expert 场景真实采集(before/after tokens、L1/L2/L3 hit rate、硬截断率),③ 结果对齐(harness 启发式 context_tokens / provider usage / lanscoder chars/4 分开输出)。
+- **Phase 3**:hard + expert 各 1 个冒烟,记录压缩触发情况与水位。
+- **Phase 4**:策略 A/B(no-compact / L1+L2 / L1+L2+L3)+ 分析脚本(上下文规模-指标曲线、压缩行为统计)。
+- **Phase 5**:`benchmark/locobench/README.md` 复现文档完善;更新 `record.md`(补 Phase 1 评估观察);全量门禁(SC-6)。
 
 ## Next step
 
-Phase 0:在 /tmp clone LOCA-bench(固定 commit),通读关键代码并确认 LansCoder 侧 MCP 注入与压缩开关;产出集成点清单 + 可行性结论,更新本任务状态为 `active` 后开始 Phase 1。
+**Phase 1 已通过**(数据就绪 + 1 个 easy 跑通出分)。下一步 **Phase 2**:完善 `benchmark/locobench/` driver——给 LansCoder 压缩策略加 A/B 开关(no-compact / L1+L2 / L1+L2+L3),并把 CompactionEvent 采集对齐到 hard/expert 场景(验证 before/after tokens、L1/L2/L3 hit rate、硬截断率),随后进入 Phase 3 hard+expert 各 1 个冒烟。
 
 ## Verification
 
 - [ ] `node .ai-team/check.mjs --base origin/main` → valid
 - [ ] `node .ai-team/session.mjs validate` → valid(private sessions 已启用)
-- [ ] `pytest` 全量绿(新增 benchmark/loca 不改核心,现有测试保持绿)
-- [ ] `ruff check .` → All checks passed
-- [ ] 任一 LOCA 任务 `eval.json` 出分且非基础设施失败(SC-1)
+- [x] SC-1:1 个 easy 场景跑通并出分(overall 0.704 / comp 0.74 / eff 0.65,3 turns,0 error)
+- [ ] SC-2:hard + expert 各 1 个跑通
+- [ ] SC-3:三组策略对比产出
+- [ ] `pytest` / `ruff check .` 不受影响(不改核心)
 
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: TASK-004 **planning**——选定 LOCA-bench 作为上下文系统评估基准,接入形态为 LansCoder 侧 driver 复用 LOCA 的 task-configs + mock MCP 服务器 + eval;验收 5 条(最小闭环/基线可复现/可复现命令/压缩 A/B/门禁)。下一步 Phase 0:clone LOCA-bench 通读代码并验证接入点。
+- Summary: TASK-004 **active**——LoCoBench-Agent 接入(纯测量,不改核心),决策 Q1–Q5 已定。**Phase 1 完成**(2026-08-29):数据 4.6GB 就绪、convert-scenarios 验证通过、`benchmark/locobench/` 初版 driver 跑通 1 个 easy 场景(SC-1 ✅,overall 0.704,3 turns,0 error)。下一步 **Phase 2**:压缩策略 A/B 开关 + CompactionEvent 采集对齐,再进 hard/expert 冒烟。
