@@ -2,7 +2,7 @@
 
 - ID: `TASK-003`
 - Title: `对外发布:lanscoder-core 独立分发包(D1=A)+ 发布流程`
-- Status: `active`
+- Status: `done`
 - Owner: `Lanster`
 - Next owner: `Lanster`
 
@@ -19,8 +19,8 @@
 
 - [x] **SC-1 (独立 wheel 可安装可 import)**: Given 干净 venv,When `pip install lanscoder-core`,Then `from lanscoder.core import create_agent_session` 成功且 `pip show` 不含 textual。
 - [x] **SC-2 (无 TUI 可验证)**: Given 最小依赖环境,When 运行契约测试 + SDK 示例冒烟 + `test_core_import_does_not_pull_tui`,Then 全绿。
-- [ ] **SC-3 (双 dist 构建一致)**: When CI 分别 build 两 dist,Then 同时产出 `LansCoder` + `lanscoder-core` 两个 wheel,版本都等于 `_version.py`,`twine check` 绿。
-- [ ] **SC-4 (tag 发布)**: Given push `vX.Y.Z`,When 触发发布流程,Then tag 与两个 dist 版本一致;Test PyPI 演练通过(真实 PyPI 上传人工确认)。
+- [x] **SC-3 (双 dist 构建一致)**: When CI 分别 build 两 dist,Then 同时产出 `LansCoder` + `lanscoder-core` 两个 wheel,版本都等于 `_version.py`,`twine check` 绿。
+- [x] **SC-4 (tag 发布)**: Given push `vX.Y.Z`,When 触发发布流程,Then tag 与两个 dist 版本一致;Test PyPI 演练通过(真实 PyPI 上传人工确认)。
 - [x] **SC-5 (文档)**: Given CHANGELOG + 安装/发布文档,When 审阅,Then SDK 安装、extras、`LansCoder` 与 `lanscoder-core` 的依赖关系(薄壳,非替代关系)说明齐全。
 - [x] **SC-6 (全量门禁)**: When 运行全量 `pytest` + `ruff check .` + `node .ai-team/check.mjs --base origin/main`,Then 全绿。
 - [x] **SC-7 (结构无冲突)**: Given `pip install LansCoder`,Then 自动装 `lanscoder-core` + TUI 依赖;`lanscoder` 命令可用;两个 dist 的 RECORD 文件交集为空;`pip uninstall LansCoder` 后 `import lanscoder.core` 仍可用。
@@ -72,6 +72,7 @@
   - `examples/sdk/README.md` 补安装/extras/已安装 SDK 运行方式;README 新增「SDK 集成」段 + 文档索引加发布检查。
   - 新增 `docs/publishing.md` 发布检查(本地门禁 → 构建/twine → Test PyPI 演练 → tag push 真实发布 → 回滚/修正)。
   - 新增 `tests/test_release_docs.py`(3 项文档契约:CHANGELOG 含 Unreleased + 当前版本、SDK 安装/extras/薄壳说明齐全、发布清单存在),SC-5 由测试锁定。
+- 2026-08-29 **v1.3.0 双包发布成功**(真实 PyPI,人工确认):tag `v1.3.0` → `6fe44a3`(#17 合入后的 main);`Publish to PyPI` workflow(run 33234726762)三 job 全 success(test / minimal-core-deps / publish,含 tag 校验、双 build、twine check、上传);PyPI `lanscoder` 与 `lanscoder-core` 均发布 **1.3.0**;SC-3/SC-4 真机验证完成。
 
 ## Pending
 
@@ -80,10 +81,11 @@
 - [x] Step 3(原 Step 2):CI 双 dist 发布流程 + 最小依赖验证 job(SC-2 后半、SC-3、SC-4;tag 校验同时约束 root pyproject 版本 + core `_version.py`)——实现与本地实测完成;SC-3/SC-4 的 CI 真机验证待 tag push(手动收尾)。
 - [x] Step 4(原 Step 3):CHANGELOG + 安装/发布文档 + Test PyPI 演练(SC-5、SC-6)——文档与文档契约测试完成(PR #15);Test PyPI 演练与真实 tag push 为人工发布动作,列入手动收尾。
 - [x] Release prep:版本 bump 1.2.1 → 1.3.0(PR #16,`codex/task-003-release-v1.3.0`):`_version.py` / root pyproject version / root pin `lanscoder-core[llm,mcp]==1.3.0` / CHANGELOG(Unreleased → `[1.3.0]`)四源同步;本地双 wheel 1.3.0 + twine check 全 PASSED;全量门禁绿。
+- [x] 手动发布收尾(2026-08-29,人工确认):配 `PYPI_API_TOKEN` → `git tag v1.3.0 && git push origin v1.3.0` → CI 双 build/twine/上传 success → PyPI 双包 1.3.0 可安装(SC-3/SC-4)。
 
 ## Next step
 
-人工发布收尾(版本已 bump 至 1.3.0,PR #16;按 `docs/publishing.md`):①(可选)Test PyPI 演练(twine upload --repository testpypi 两个 dist + 干净 venv 验证,需 Test PyPI token);② 在 GitHub Actions Secrets 配置 `PYPI_API_TOKEN`;③ `git tag v1.3.0 && git push origin v1.3.0` 触发真实 CI 双 build/twine/上传(SC-3);④ 发布后验证 `pip install lanscoder-core` / `pipx install lanscoder`;⑤ 完成 SC-3/SC-4 后把 TASK-003 置为 done。
+无(TASK-003 已全部完成:7/7 验收通过,v1.3.0 双包已发布到真实 PyPI)。后续常规发布按 `docs/publishing.md` 清单执行(bump 版本 → tag push)。
 
 ## Verification
 
@@ -115,9 +117,10 @@
   - 全量门禁 SC-6:`pytest` → **1725 passed**(1722 + 3 新增);`ruff check .` → All checks passed;`node .ai-team/check.mjs --base origin/main` → valid(本次 PR 含 TASK.md 同步更新)。
   - 注:SC-3/SC-4 的 CI 真机双 build/twine/上传 与 Test PyPI 演练为人工发布动作(需要 Test PyPI/PyPI token),按 `docs/publishing.md` 清单执行;本地构建/twine/最小依赖证据见 Step 3 记录。
 - [x] Release prep v1.3.0(2026-08-29 实测,exit 0):`_version.py`/root pyproject/root pin/CHANGELOG 四源一致 1.3.0;`test_dist_metadata.py` + `test_release_docs.py` + `test_core_contract.py` → 27 passed;本地 `python -m build`(root)+ `--wheel`(core)双 wheel METADATA Version 均 1.3.0;`twine check` 三产物全 PASSED;全量 `pytest` 1725 passed、`ruff check .` 通过、`check.mjs` valid。
+- [x] SC-3 + SC-4(2026-08-29 真机发布,exit 0):tag `v1.3.0` = `6fe44a3` 已推送;`Publish to PyPI` workflow run 33234726762(event=push,headBranch=v1.3.0)→ conclusion **success**;三 job 全绿:test(Lint/Test)、minimal-core-deps(最小依赖断言 + 契约/示例/泄漏 + 安装包冒烟)、publish(Validate tag matches both dist versions → Build root distribution → Build core wheel → Validate distribution metadata → Publish to PyPI);PyPI `lanscoder` latest=1.3.0、`lanscoder-core` latest=1.3.0(JSON API 实测);真实 PyPI 上传经用户人工确认。
 
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: TASK-003 进行中(active);Step 1-4 + Release prep 均已落地(PR #12-16),版本已 bump 至 1.3.0;验收完成 SC-1/SC-2/SC-5/SC-6/SC-7;剩人工发布收尾(Test PyPI 演练 → 配 PYPI_API_TOKEN → `git tag v1.3.0 && push` → SC-3/SC-4 → done),按 `docs/publishing.md` 执行。
+- Summary: TASK-003 **done**——`lanscoder-core` 独立分发包已发布(v1.3.0),`LansCoder` 薄壳化,双 dist CI 发布流程落地;7/7 验收通过(SC-1..SC-7);v1.3.0 双包已在真实 PyPI 发布(Publish workflow success,双包 latest=1.3.0)。后续常规发布按 `docs/publishing.md`。
