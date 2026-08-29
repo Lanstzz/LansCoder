@@ -16,7 +16,6 @@ from lanscoder.app.model_state import ModelSelectionState, ModelStateStore
 from lanscoder.app.permission_commands import PermissionCommandHandler
 from lanscoder.app.recall_commands import RecallCommandHandler
 from lanscoder.app.router import CompositeCommandHandler
-from lanscoder.app.runtime import AgentChatRunner
 from lanscoder.app.session_commands import SessionCommandHandler
 from lanscoder.app.skill_commands import SkillCommandHandler
 from lanscoder.app.tui import LansCoderApp, LansCoderTuiConfig
@@ -24,6 +23,7 @@ from lanscoder.config.models import ModelCatalog, ModelProfile
 from lanscoder.config.settings import AppConfig, load_config
 from lanscoder.context.provider_summarizer import ProviderLlmCompactSummarizer
 from lanscoder.context.triggers import ContextCompactionConfig
+from lanscoder.core.runtime import AgentChatRunner
 from lanscoder.core.session import create_agent_session
 from lanscoder.mcp.adapter import adapt_mcp_tool
 from lanscoder.mcp.config import load_mcp_configs

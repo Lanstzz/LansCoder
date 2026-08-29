@@ -2,7 +2,7 @@ from pathlib import Path
 
 from lanscoder.app.commands import ContextCommandHandler
 from lanscoder.app.router import CompositeCommandHandler
-from lanscoder.app.runtime import CurrentSessionState
+from lanscoder.core.runtime import CurrentSessionState
 from lanscoder.app.session_commands import SessionCommandHandler
 from lanscoder.agent.session import AgentSession
 from lanscoder.context.events import SessionEvent

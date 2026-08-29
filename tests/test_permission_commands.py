@@ -1,6 +1,6 @@
 from lanscoder.agent.session import AgentSession
 from lanscoder.app.permission_commands import PermissionCommandHandler
-from lanscoder.app.runtime import CurrentSessionState
+from lanscoder.core.runtime import CurrentSessionState
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.permissions.types import PermissionMode
 from lanscoder.providers.types import ToolCall

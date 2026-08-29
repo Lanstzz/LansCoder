@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from lanscoder.app.runtime import AgentChatRunner, create_agent_loop, register_loop_tools
+from lanscoder.core.runtime import AgentChatRunner, create_agent_loop, register_loop_tools
 from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.guardrails import TurnGuardrails
 from lanscoder.agent.loop import AgentLoop

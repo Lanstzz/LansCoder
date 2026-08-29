@@ -6,7 +6,7 @@
 
 import pytest
 
-from lanscoder.app.runtime import create_agent_loop
+from lanscoder.core.runtime import create_agent_loop
 
 
 @pytest.fixture

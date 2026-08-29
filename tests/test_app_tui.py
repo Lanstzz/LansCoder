@@ -20,7 +20,7 @@ from lanscoder.app.commands import CommandResult
 from lanscoder.app.commands import ContextCommandHandler
 from lanscoder.permissions.user_input import UserInputOption, UserInputRequest
 from lanscoder.app.router import CompositeCommandHandler
-from lanscoder.app.runtime import CurrentSessionState
+from lanscoder.core.runtime import CurrentSessionState
 from lanscoder.app.session_commands import SessionCommandHandler
 from lanscoder.app.slash_suggest import SlashSuggest
 from lanscoder.app.tui import (

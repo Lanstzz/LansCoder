@@ -10,7 +10,7 @@ from lanscoder.agent.session import AgentSession
 from lanscoder.app.factory import create_lanscoder_app
 from lanscoder.app.model_state import ModelStateStore
 from lanscoder.app.router import CompositeCommandHandler
-from lanscoder.app.runtime import AgentChatRunner, CurrentSessionState, create_agent_loop
+from lanscoder.core.runtime import AgentChatRunner, CurrentSessionState, create_agent_loop
 from lanscoder.config.settings import AppConfig
 from lanscoder.utils.cancellation import CancellationToken
 from lanscoder.context.store import JsonlSessionStore
