@@ -71,6 +71,7 @@ class LoopConfig:
 
     provider: ChatProvider
     session_id: str = ""
+    use_streaming: bool | None = None  # D4: None=按 capabilities.supports_streaming 自动;True/False=强制
     request_options: MainRequestOptions | None = None
     context_window: int | None = None
     limits: AgentLoopLimits | None = None
