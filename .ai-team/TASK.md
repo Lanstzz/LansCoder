@@ -42,7 +42,7 @@
 - **D5(已定,用户)** 纯测量;暴露的短板(如 P2 token 计量失真)记入 `record.md`,修复另开任务。
 - **D6(已定,调研)** 接入形态 = `LansCoderAgent(BaseAgent)` 进程内,复用 `create_agent_session`;LoCoBench 的 `AgentFactory._create_custom_agent` 是 stub、CLI `--agent-type` 不含 custom → 自写 driver 直接实例化 harness 类。
 - **D7(已定,调研)** 评估时 harness 跑 `--context-management none`,由 LansCoder `ContextWindowManager` 独占上下文管理(A/B 因果干净)。
-- **D8(已定,用户 2026-08-29,Phase 3.5)** "不跑偏/结果正确"打分 = A+B+C 加权:权重 **A 0.3 / B 0.5 / C 0.2**(可 CLI 覆盖);C 只取 **LCBA-Comp**(Eff 单独报告不并入);B 层 judge 换供应商 **DashScope 模型 `qwen3.7-plus`**(与 agent deepseek-v4-flash 不同模型,避免自评);A 层用 **ground_truth 反引号标识符** 确定性提取;立即对现有 3 个 run(easy-2/hard-1/expert-1)出分。
+- **D8(已定,用户 2026-08-29,Phase 3.5)** "不跑偏/结果正确"打分 = A+B+C 加权;C 只取 **LCBA-Comp**(Eff 单独报告不并入);B 层 judge 换供应商 **DashScope 模型 `qwen3.7-plus`**(与 agent deepseek-v4-flash 不同模型,避免自评);A 层用 **ground_truth 反引号标识符** 确定性提取;立即对现有 3 个 run(easy-2/hard-1/expert-1)出分。**权重初版 A 0.3/B 0.5/C 0.2 → 修订 A 0.1/B 0.6/C 0.3**(A+C 实测 A 命中率 0.714/0.133/0.0,参考性低,下调 A 提 B/C;可 CLI 覆盖)。
 
 ## Completed
 
