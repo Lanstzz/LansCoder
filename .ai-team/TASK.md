@@ -59,7 +59,7 @@
 
 - **Phase 2 ✅(2026-08-29)**:driver 压缩策略开关 + CompactionEvent 采集 + 三口径对齐已就绪(见 Completed)。
 - **Phase 3 ✅(2026-08-29)**:hard + expert 各 1 个冒烟完成(SC-2,见 Completed):压缩在 200K 窗口稳定触发,CompactionEvent 采集端到端验证。
-- **Phase 3.5(进行中)**:A+B+C 加权"不跑偏/结果正确"打分——`scoring.py`(A 反引号命中 + C=LCBA-Comp + 加权)与 `judge.py`(B=dashscope qwen3.7-plus,结构化 JSON 盲评)已就绪。**B 层已用 deepseek-v4-flash 临时占位跑通 3 run**(见 Completed,仅验证链路);**正式 B 仍阻塞于 DashScope 账户欠费(Arrearage)**,充值后换 `qwen3.7-plus` 重出正式 B 与总分。
+- **Phase 3.5(进行中)**:A+B+C 加权"不跑偏/结果正确"打分——`scoring.py`(A 反引号命中 + C=LCBA-Comp + 加权)与 `judge.py`(B=dashscope qwen3.7-plus,结构化 JSON 盲评)已就绪。**B 层已用 deepseek-v4-flash 临时占位跑通 3 run**(仅验证链路);**正式 B 仍阻塞于 DashScope 账户欠费(Arrearage)**。**新发现(record.md O10)**:LoCoBench 场景 ground_truth 与提供的项目文件不一致(expert 13/17 缺失、hard 11/21、easy 7/13;expert 的 `EventStandardizerV3`/`PIPELINE_ROUTING` 全数据集无源文件)——**expert 的 B correctness=0 度量的是数据 bug 而非 agent**;B 层 judge 需知情"代码可能与 ground_truth 不一致"或先做一致性校验,不符场景标注 B 不可比。
 - **Phase 4(下一步)**:策略 A/B(no-compact / L1+L2 / L1+L2+L3)+ 分析脚本(上下文规模-指标曲线、压缩行为统计);注意 Phase 3 发现——原生 1M/1.5M 窗口下 chars/4 不触发(见 record.md O6),A/B 需固定窗口(建议 200K)并标注口径。
 - **Phase 5**:`benchmark/locobench/README.md` 复现文档完善;更新 `record.md`(补 Phase 1 评估观察);全量门禁(SC-6)。
 
