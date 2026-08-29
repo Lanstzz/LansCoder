@@ -1,73 +1,77 @@
 # Current Task
 
-- ID: `TASK-001`
-- Title: `三层解耦 API:core 承载 L1/L2/L3,装配根上提`
-- Status: `done`
+- ID: `TASK-002`
+- Title: `SDK 硬化:L1 session-free(P2)、LlmTransport 传输协议(P3)、契约与文档(P1)`
+- Status: `planning`
 - Owner: `Lanster`
 - Next owner: `Lanster`
 
 ## Goal
 
-让 LansCoder 具备 pi agent 那样的三层解耦 API,三层都能在完全不 import / 初始化 TUI 的情况下使用:
+让 `lanscoder.core` 成为稳定、可对外发布的 SDK 面(参考 pi 的发布形态,范围 P0-P3,不做 P4):
 
-- **L1 `agent_loop`**: 裸循环,无状态,`AsyncIterator[AgentEvent]`,不碰 session / 持久化 / TUI,事件流往外推。
-- **L2 `Agent`**: 有状态 wrapper,`subscribe / prompt / steer / follow_up / abort`,内部驱动 L1。
-- **L3 `create_agent_session`**: 完整 coding agent(持久化 + 内置工具 + provider + 权限),TUI 只是订阅者之一。
+- **P2 L1 真 session-free**: `agent_loop` 不再写盘(temp 目录 → `InMemorySessionStore`),保留工具多轮往返,不承担权限/守卫;流式自动探测 + `use_streaming` 覆盖。
+- **P3 传输窄协议化**: `LlmTransport` Protocol(复用 providers 类型),`LoopConfig.provider` 类型改为它;`AgentSessionHandle` 去掉 `agent`,只留 `session + runner`。
+- **P1 契约固化**: `py.typed` + 契约测试 + SDK 文档/headless 示例 + API 版本策略,把最终形态钉死。
+- P0(删 `app/runtime.py` shim)已由用户提交 `3fab751`,待合入 main。
 
 ## Acceptance scenarios
 
-- [x] **SC-1 (Step 1 零行为变化)**: Given 装配根从 `app/runtime.py` 原样搬到 `lanscoder/core/runtime.py` 且 `app/runtime.py` 变为 re-export shim,When 运行全量测试与依赖方向/层边界测试,Then 全部绿、行为零变化。证据: `pytest` 1666 passed、`ruff` all checks passed。
-- [x] **SC-2 (Step 2 只加不改)**: Given 新增 `create_agent_session`(headless 唯一装配源:provider + session + 工具 + context 管理器 + runner)及 L1/L2 公共 API,When 运行新增测试与全量回归,Then 旧行为不变、新测试绿。证据: `pytest` 1689 passed(新增 23 用例)、`ruff` all checks passed。
-- [x] **SC-3 (Step 3 factory 消费 core)**: Given `app/factory.py` 改为消费 `create_agent_session`(模型选择逻辑如 ModelStateStore 保留在 factory,传入选好的 provider),When 运行 factory 测试与 TUI 回归,Then 行为保持、测试绿。证据: `pytest` 1689 passed、`ruff` all checks passed、`node .ai-team/check.mjs --base origin/main` valid。
-- [x] **SC-4 (依赖方向)**: Given `lanscoder/core` 存在,When 运行 AST 依赖方向扫描与 fresh-interpreter 泄漏检查,Then `core` 永不 import `app`、`agent` 永不 import `core`,且 `tests/test_dependency_directions.py` 与 `tests/test_layer_boundaries.py` 已把 core 纳入约束。证据: 新增 6 个用例全绿(`test_core_runtime_shim.py` 3 + layer boundaries 3 + dependency directions 2)。
-- [x] **SC-5 (无 TUI 可用)**: Given 只 import `lanscoder.core` 的 L1/L2/L3,When 在不初始化 Textual TUI 的环境运行最小 headless smoke test,Then 三层均可正常创建与驱动。证据: fresh-interpreter 泄漏检查(`import lanscoder.core` 不拉入 app)+ `test_core_agent_loop` / `test_core_agent` / `test_core_session` 全 headless 跑通。
+- [ ] **SC-1 (P2 不落盘)**: Given `agent_loop` 改用内存会话,When 运行 L1 且断言无临时目录/文件残留,Then 不落盘、事件序列不变。证据: 新增测试 + 既有 core L1 测试回归。
+- [ ] **SC-2 (P2 流式三态)**: Given `LoopConfig.use_streaming` 三态,When 分别运行 L1,Then None=按 `capabilities.supports_streaming` 自动、True=强制流式(有 `MessageUpdateEvent`)、False=强制非流式(只有 `MessageEndEvent`)。
+- [ ] **SC-3 (P2 行为边界)**: Given L1 保留工具多轮往返且 `permission_manager=None`,When 运行工具事件测试,Then 无回归。
+- [ ] **SC-4 (P3 传输协议)**: Given `LlmTransport` Protocol,When 用非 `ChatProvider` 的 duck-typed transport 驱动 L1,Then 可跑通;且 `ChatProvider` 结构性满足 Protocol。
+- [ ] **SC-5 (P3 handle 瘦身)**: Given `AgentSessionHandle` 去掉 `agent`,When 运行全量回归,Then 绿;L2 `Agent` 独立可用。
+- [ ] **SC-6 (P1 契约)**: Given `py.typed` + 契约测试,When 运行,Then `core.__all__` 与签名钉死、泄漏检查仍绿。
+- [ ] **SC-7 (P1 文档/示例)**: Given SDK 文档 + headless 示例(L3 + 自定义工具 + set_permission_mode + tool_event_handler 审计 + resume),When 在无 TUI 环境运行,Then 可跑通。
+- [ ] **SC-8 (P1 门禁)**: When 运行全量 `pytest` + `node .ai-team/check.mjs --base origin/main` + `ruff check lanscoder tests`,Then 全绿。
 
 ## Invariants
 
 - `core` 永不 import `app`;`agent` 永不 import `core`;不产生新环。
-- 终态依赖方向:`providers ← context ← agent ← core ← app ← cli/tests`,新增边仅 `app → core`。
-- 保留现有行为,除非本任务显式改变;`agent/` 会话绑定引擎语义不改。
-- 已有两条"下层引用上层"的惰性边(session 服务 → agent.session、context/store → session.index)本次不动。
-- 测试与 CI 决定可观察行为;AI 自报不算验收。
+- 不重写 `agent/` 会话绑定引擎(`AgentLoop` / `AgentSession`)的回合语义;P2 仅新增 `InMemorySessionStore`,不改引擎。
+- 不改动 providers / context / permissions / tools 的既有职责(仅新增 store 子类与 `core/transport.py`)。
+- 不改变 TUI 行为。
+- 本任务按 spec 评审通过后实现;Task 0(spec + TASK)只写文档,不动代码。
 
 ## Decisions
 
-- **D1** 独立包 `lanscoder/core/` 承载三层 API;`lanscoder/agent/` 保持现状(会话绑定引擎,服务 L3 内部)。
-- **D2** L1 消息模型走 pi 式路线 B:core 自建轻量消息类型 + `convert_to_llm` 桥接到 provider 的 `ChatMessage`。命名用 `LoopMessage`(候选 `CoreMessage`,见 spec §开放决策)。
-- **D3** L1/L2 事件集照搬 pi 的 10 种 `AgentEvent`;`message_update.assistant_message_event` 复用 provider 的 `ChatStreamEvent`。L3 事件词汇与 L1/L2 不同是 pi 原生设计。
-- **D4** 工作流:需求 → spec → TDD → 实现;需求未完全明确前不实现。
-- **D5** Q4 拍板:装配根上提到 `lanscoder/core/`,`core` 成为唯一装配源,`app/factory.py` 改为消费 core 装配(选项 b),分三步走,每步测试兜底。
+- **D1** P2 选方案 A:复用 `agent/` 引擎 + 内存会话,不重写裸循环(推翻原方案 B;不造第二个循环引擎)。
+- **D2** `AgentSessionHandle` 去掉 `agent`,只留 `session + runner`;L2 `Agent` 保持独立(session-free)。
+- **D3** P3 保守版 `LlmTransport` Protocol(复用 `providers.types` 类型),`LoopConfig.provider` 字段名不变、类型改为它;不引入 `stream_fn` 主 API。
+- **D4** L1 流式:自动探测(`capabilities.supports_streaming`)+ 可选 `use_streaming: bool | None` 覆盖。
+- **D5** L1 行为边界:保留工具多轮往返(复用 `ToolExecutor`);不承担权限/守卫/compaction;保留循环级 `limits/context_window/request_options`。
+- **D6** P0 立即提交(用户已提交 `3fab751`,待合入 main)。
+- **D7** P1 内容:`py.typed` + 契约测试 + SDK 文档/headless 示例(按 L3 + 每任务短会话驱动形态写)+ API 版本策略;顺序 P0→P2→P3→P1。
+- **D8** P4 独立分发包不做;`lanscoder.core` 文档化为 SDK 入口。
 
 ## Completed
 
-- 需求与决策已定稿(决策记录:仓库根 `handoff.md`;spec:`docs/superpowers/specs/2026-08-27-core-three-layer-decoupling-design.md`)。
-- 本任务已编码进 `.ai-team/TASK.md`;repo-task-sync skill 已注册到 `~/.codex/skills`;仓库补齐 `AGENTS.md` 与真实 `PROJECT.md`。
-- 依赖方向结论已核实(handoff「依赖方向结论」节)。
-- **Step 1 完成**: 装配根(`register_loop_tools` / `create_agent_loop` / `CurrentSessionState` / `AgentChatRunner`)原样迁至 `lanscoder/core/runtime.py`(新增 `__all__`),`lanscoder/app/runtime.py` 变 re-export shim;依赖方向/层边界测试纳入 core;新增 shim 防漂移测试。
-- **Step 2 完成**: 新增 `lanscoder/core/{events,messages,agent_loop,agent,session}.py` + 更新 `__init__.py`——L1 `agent_loop`(AsyncIterator[AgentEvent],O1=方案 A 临时会话适配)、L2 `Agent`(subscribe/prompt/steer/follow_up/abort)、L3 `create_agent_session`(headless 装配源,返回 `AgentSessionHandle(session, runner, agent)`)。
-- **Step 3 完成**: `app/factory.py` 改为消费 `create_agent_session` 获取 `AgentSessionHandle`,在 handle 之上挂 TUI 专属接线(streaming 开关、MCP 热更新 `tools_provider`、`compact_config`、`RuntimeModelSwitcher` 共享 `compact_summarizer`);模型选择(`ModelStateStore` / model catalog / `_initial_model_profile`)保留在 factory,选好的 provider 传入 core;`core`/`agent` 依赖约束与行为保持,全量回归绿。
+- 2026-08-28/29 SDK 讨论拍板 D1-D8(记录于本 TASK 与 `docs/superpowers/specs/2026-08-29-sdk-hardening-design.md`)。
+- P0 已由用户提交: `3fab751`(删 `app/runtime.py` shim,统一 `core.runtime` 导入)— 待合入 main。
+- 本 spec(Task 0)为当前 PR 内容。
 
 ## Pending
 
-- [x] 评审并合并 Task 0 PR(#1)与 Step 1 PR(#2)。
-- [x] Step 1:装配根搬迁到 `lanscoder/core/runtime.py`,`app/runtime.py` 变 re-export shim,依赖/层边界测试纳入 core。
-- [x] Step 2:新增 `create_agent_session` + L1/L2 公共 API + 新测试。
-- [x] Step 3:`app/factory.py` 改为消费 core 装配,行为保持,全量回归绿。
-- [ ] 评审并合并本 Step 3 PR(factory 消费 core + TASK.md + session 日志)。
+- [ ] 评审并合并本 spec PR(Task 0)。
+- [ ] P0 PR(`3fab751`)合入 main。
+- [ ] Step 1(P2):`InMemorySessionStore` + L1 内存会话 + 流式三态。
+- [ ] Step 2(P3+D2):`LlmTransport` Protocol + handle 去 `agent`。
+- [ ] Step 3(P1):`py.typed` + 契约测试 + SDK 文档/示例 + `__version__`。
 
 ## Next step
 
-评审并合并本 Step 3 PR;合并后 TASK-001 的 SC-1..SC-5 与全部验证项完成,任务闭环。
+评审并合并本 spec PR;随后进入 Step 1(P2)实现(每 Step 独立 PR,TDD 先行)。
 
 ## Verification
 
-- [x] `pytest` 全量绿: 1689 passed(Step 3,2026-08-27;Step 2 为 1689,Step 1 为 1666)。
-- [x] `node .ai-team/check.mjs --base origin/main` 通过(Step 3 分支:valid)。
-- [x] `ruff check lanscoder tests` 通过。
-- [x] SC-1 / SC-2 / SC-3 / SC-4 / SC-5 均以真实命令退出码记录。
+- [ ] 全量 `pytest` 绿(基线 1689 passed)。
+- [ ] `node .ai-team/check.mjs --base origin/main` 通过。
+- [ ] `ruff check lanscoder tests` 通过。
+- [ ] SC-1..SC-8 以真实命令退出码记录。
 
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: Task 0(需求+spec)、Step 1(装配根搬迁)、Step 2(L1/L2/L3 公共 API)、Step 3(factory 消费 core)均已完成;SC-1..SC-5 全绿,TASK-001 转 `done`。下一步: 评审合并本 Step 3 PR。
+- Summary: TASK-001 闭环后启动 TASK-002(SDK 硬化,P0-P3);D1-D8 已拍板(含推翻 P2 原方案 B 改选 A、handle 去 agent、保守 LlmTransport);P0 已提交 `3fab751` 待合入 main;当前为 Task 0(spec + TASK,纯文档),spec 评审通过后按 Step 1→2→3 实现。
