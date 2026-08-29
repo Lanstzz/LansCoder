@@ -161,20 +161,27 @@ def call_judge(
     *,
     temperature: float = 0.0,
     timeout: float = 300.0,
+    json_mode: bool = True,
 ) -> dict[str, Any]:
-    """调用 OpenAI-compatible 端点(dashscope /compatible-mode/v1),返回解析后的 JSON。"""
+    """调用 OpenAI-compatible 端点(dashscope /compatible-mode/v1),返回解析后的 JSON。
+
+    ``json_mode=True`` 时带 ``response_format: json_object``;个别供应商/模型
+    不支持时可关掉(输出仍由 ``parse_judge_json`` 兜底提取 JSON)。
+    """
 
     import httpx
 
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
     response = httpx.post(
         f"{base_url.rstrip('/')}/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "response_format": {"type": "json_object"},
-        },
+        json=payload,
         timeout=timeout,
     )
     response.raise_for_status()
@@ -190,6 +197,7 @@ def judge_run(
     base_url: str = DEFAULT_BASE_URL,
     api_key: str | None = None,
     temperature: float = 0.0,
+    json_mode: bool = True,
 ) -> dict[str, Any]:
     result, scenario = load_run(run_dir)
     scenario_meta = load_scenario_meta(locobench_root, str(scenario.get("scenario_id") or ""))
@@ -199,13 +207,14 @@ def judge_run(
     resolved_key = api_key or os.environ.get("QWEN_API_KEY") or os.environ.get("DASHSCOPE_API_KEY")
     if not resolved_key:
         raise RuntimeError("缺少 judge API key:设置 QWEN_API_KEY 或 DASHSCOPE_API_KEY")
-    data = call_judge(base_url, resolved_key, model, messages, temperature=temperature)
+    data = call_judge(base_url, resolved_key, model, messages, temperature=temperature, json_mode=json_mode)
     return {
         "run": str(run_dir),
         "scenario_id": scenario.get("scenario_id"),
         "model": model,
         "base_url": base_url,
         "temperature": temperature,
+        "json_mode": json_mode,
         **normalize_judge_output(data, n_criteria),
     }
 
@@ -218,6 +227,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="OpenAI-compatible base url")
     parser.add_argument("--api-key-env", default="QWEN_API_KEY", help="API key 环境变量名")
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--json-mode", dest="json_mode", action=argparse.BooleanOptionalAction, default=True, help="带 response_format=json_object(默认开;个别模型不支持时用 --no-json-mode)")
     parser.add_argument("--output", help="scorecard-b.json 输出路径(缺省打印)")
     return parser.parse_args(argv)
 
@@ -232,6 +242,7 @@ def main(argv: list[str] | None = None) -> int:
         base_url=args.base_url,
         api_key=api_key,
         temperature=args.temperature,
+        json_mode=args.json_mode,
     )
     if args.output:
         out = Path(args.output)

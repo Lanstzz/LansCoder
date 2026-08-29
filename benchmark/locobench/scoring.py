@@ -11,7 +11,7 @@
 - **C harness 既有分**:只取 ``LCBA-Comp``(理解/正确性方向);``LCBA-Eff``
   单独报告不并入。
 
-加权默认 ``A 0.1 / B 0.6 / C 0.3``(可 CLI 覆盖);B 缺失时 A/C 重新归一。
+加权默认 ``A 0.05 / B 0.65 / C 0.30``(可 CLI 覆盖);B 缺失时 A/C 重新归一。
 """
 
 from __future__ import annotations
@@ -24,7 +24,8 @@ from pathlib import Path
 from typing import Any
 
 # D8 修订(2026-08-29):A 命中率参考性低(A 0.714/0.133/0.0),下调 A、上调 B/C。
-DEFAULT_WEIGHTS: dict[str, float] = {"a": 0.1, "b": 0.6, "c": 0.3}
+#   初版 0.3/0.5/0.2 → 0.1/0.6/0.3 → 0.05/0.65/0.30(A 仅作客观 sanity,B 语义主分)。
+DEFAULT_WEIGHTS: dict[str, float] = {"a": 0.05, "b": 0.65, "c": 0.30}
 
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
 
@@ -132,7 +133,7 @@ def combine(
     b: dict[str, Any] | None,
     weights: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    """加权总分:0.1*A_correctness + 0.6*B_quality + 0.3*C_comp。
+    """加权总分:0.05*A_correctness + 0.65*B_quality + 0.30*C_comp。
 
     B 缺失时(仅 A+C)按 A/C 权重重新归一,并在结果里标注。
     """
@@ -214,7 +215,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--run", required=True, help="run 目录(benchmark/runs/locobench/<run>)")
     parser.add_argument("--locobench-root", required=True, help="LoCoBench-Agent clone 目录")
     parser.add_argument("--judge-result", help="judge.py 产出的 B 层 JSON(scorecard-b.json)")
-    parser.add_argument("--weights", nargs=3, type=float, default=None, metavar=("WA", "WB", "WC"), help="A/B/C 权重(默认 0.1 0.6 0.3)")
+    parser.add_argument("--weights", nargs=3, type=float, default=None, metavar=("WA", "WB", "WC"), help="A/B/C 权重(默认 0.05 0.65 0.30)")
     parser.add_argument("--output", help="scorecard.json 输出路径(缺省打印)")
     return parser.parse_args(argv)
 

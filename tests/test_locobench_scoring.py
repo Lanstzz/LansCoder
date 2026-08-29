@@ -72,8 +72,8 @@ def test_combine_three_tiers_weighted() -> None:
     assert final["a"] == 0.8
     assert final["b"] == 0.6
     assert final["c"] == 0.7
-    assert final["total"] == round(0.1 * 0.8 + 0.6 * 0.6 + 0.3 * 0.7, 4)
-    assert final["weights_used"] == {"a": 0.1, "b": 0.6, "c": 0.3}
+    assert final["total"] == round(0.05 * 0.8 + 0.65 * 0.6 + 0.30 * 0.7, 4)
+    assert final["weights_used"] == {"a": 0.05, "b": 0.65, "c": 0.30}
 
 
 def test_combine_without_b_normalizes_ac() -> None:
@@ -81,5 +81,5 @@ def test_combine_without_b_normalizes_ac() -> None:
     c = {"lcba_comprehension": 0.7}
     final = combine(a, c, None)
     assert final["b"] is None
-    assert final["total"] == round((0.1 * 0.8 + 0.3 * 0.7) / 0.4, 4)
+    assert final["total"] == round((0.05 * 0.8 + 0.30 * 0.7) / 0.35, 4)
     assert final["note"].startswith("B(judge)未提供")
