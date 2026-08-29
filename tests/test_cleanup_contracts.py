@@ -31,11 +31,22 @@ def test_app_config_does_not_cache_a_parallel_provider_selection() -> None:
 
 
 def test_pyproject_is_the_single_production_dependency_manifest() -> None:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    dependencies = project["project"]["dependencies"]
+    """D7 修订:生产依赖清单由 root(薄壳,TUI 侧)+ core(最小集 + extras)共同构成。
+
+    ``mcp`` 由 ``lanscoder-core`` 的 ``[mcp]`` extra 提供,root 不再直接声明;
+    root 通过 ``lanscoder-core[llm,mcp]==<version>`` 拉取 SDK 及模型/MCP 依赖。
+    """
+
+    root_project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = root_project["project"]["dependencies"]
 
     assert "pydantic" not in dependencies
-    assert "mcp>=1.28.1,<2" in dependencies
+    assert "mcp>=1.28.1,<2" not in dependencies
+    assert any(d.startswith("lanscoder-core") for d in dependencies)
+    core_project = tomllib.loads(
+        (ROOT / "packages" / "lanscoder-core" / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert core_project["project"]["optional-dependencies"]["mcp"] == ["mcp>=1.28.1,<2"]
     assert not (ROOT / "requirements.txt").exists()
 
 

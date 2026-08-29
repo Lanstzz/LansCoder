@@ -161,6 +161,7 @@ lanscoder
 
 ```sh
 python -m venv .venv
+.venv/bin/python -m pip install -e packages/lanscoder-core
 .venv/bin/python -m pip install -e ".[dev]"
 .venv/bin/python -m pytest      
 .venv/bin/python -m ruff check lanscoder tests

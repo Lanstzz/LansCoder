@@ -101,3 +101,34 @@ TASK-002 已把 `lanscoder.core` 钉死为稳定 SDK 面:契约测试锁定 `__a
 - [ ] SC-4 tag 发布 + Test PyPI 演练通过
 - [ ] SC-5 CHANGELOG + 安装/发布文档齐全
 - [ ] SC-6 全量 `pytest` / `ruff check .` / `node .ai-team/check.mjs --base origin/main` 绿
+
+## 8. D7 修订(2026-08-29,结构性消除,用户拍板)
+
+### 背景(实测证据)
+
+Step 1 双装实验(`/tmp/lanscoder-dual` venv)确证:两个 dist 约 215 个 `lanscoder/` 文件重叠;
+pip 安装第二个 dist **零警告**、`pip check` 报 `No broken requirements`;`pip uninstall LansCoder`
+会删除共享 `lanscoder/` 文件,`lanscoder-core` 仍注册但 `import lanscoder.core` → `ModuleNotFoundError`。
+"文档 + Conflicts 元数据 + import 守卫"均只能缓解;**文件只有一份**才是真解。
+
+### 决策
+
+- **D7(已定)** `lanscoder-core` 是 `lanscoder/` 导入树**唯一持有者**;`LansCoder` 改**薄壳**:
+  - `dependencies = ["lanscoder-core[llm,mcp]==<version>", "textual", "prompt_toolkit", "tomlkit", "python-dotenv"]`;
+  - `[tool.setuptools] packages = []`(wheel 不含任何 `lanscoder/` 文件);
+  - 保留 `[project.scripts] lanscoder = "lanscoder.cli:main"`(模块由 core 提供)。
+  - 冲突从根上消除:两 dist 文件零重叠;`pip install LansCoder` 自动拉 core;卸载任一不影响另一。
+- **D7a(已定)** root 薄壳 `version` 与 `lanscoder-core==` pin 硬编码,一致性由两层门禁强制:
+  `tests/test_dist_metadata.py`(本地,漂移即红)+ Step 2/3 tag 校验(发布期)。
+- **D7b(已定)** core package-data 增加 `app/*.tcss`(`lanscoder/app/tui.py` 的 `CSS_PATH`,
+  是 TUI 唯一包内数据文件;core 是文件唯一持有者故必须带上)。
+- **D7c(已定)** 开发/CI 安装流改双 editable:`pip install -e packages/lanscoder-core` +
+  `pip install -e ".[dev]"`(README、ci.yml、publish-pypi.yml 同步;install.sh 走 pipx 装发布版,不改)。
+
+### 影响
+
+- 关系由"替代关系(不得同时安装)"改为"依赖关系(`LansCoder` → `lanscoder-core`)"。
+- core wheel 内含 `lanscoder.app` 等 TUI 模块(惰性,顶层 import textual 但无人 import),
+  层边界泄漏测试继续锁定 `import lanscoder.core` 不拉 app/textual;`app/*.tcss` 随之进入 core wheel。
+- 新增验收 **SC-7**:`pip install LansCoder` 自动装 core + TUI 依赖;`lanscoder` 命令可用;
+  两 dist RECORD 文件交集为空;`pip uninstall LansCoder` 后 `import lanscoder.core` 仍可用。
