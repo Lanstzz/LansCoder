@@ -2,9 +2,9 @@
 
 - ID: `TASK-002`
 - Title: `SDK 硬化:L1 session-free(P2)、LlmTransport 传输协议(P3)、契约与文档(P1)`
-- Status: `handoff`
+- Status: `done`
 - Owner: `Lanster`
-- Next owner: `Lanster`
+- Next owner: `-`
 
 ## Goal
 
@@ -59,6 +59,7 @@
 - Step 2(P3+D2)验证(2026-08-29):新增 `tests/test_core_transport.py`(SC-4 duck-typed 驱动 L1 + 结构性满足 ×2);`test_core_session.py` 去 `handle.agent` 断言并改写 L2 独立可用测试;`pytest` = 1674 passed + 1 skipped;`ruff check lanscoder tests` 全绿;`node .ai-team/check.mjs --base origin/main` = valid(待 TASK 同步后复跑)。
 - Step 2(P3+D2)已合入 main:PR #8 merge commit `d60f76c`(2026-08-29)。
 - Step 3(P1)实现(分支 `codex/task-002-step3-p1`,基于真实 main):新增 `lanscoder/py.typed`(PEP 561 marker)、`lanscoder/core/_version.py`(`__version__ = "1.2.1"` 单一事实来源)、`core/__init__.py` 导出 `__version__` 并加入 `__all__`;新增 `tests/test_core_contract.py`(`__all__` 精确钉死 21 名 + 关键签名/字段结构快照 + `__version__` 跟随 pyproject `[project].version` + `py.typed` 存在 + 10 事件 frozen/slots + `AgentEvent` union);`tests/test_layer_boundaries.py` 新增 `test_core_import_does_not_pull_tui`(fresh-interpreter 泄漏检查,`lanscoder.core` 不拖 `textual`);SDK 文档 `docs/architecture/03-sdk.md` + `docs/architecture/index.md` 链接;可运行示例 `examples/sdk/`(`README.md` + `stub_provider.py` + `minimal_llm_transport.py` + `headless_l3_session.py`);`tests/test_sdk_examples.py` 子进程冒烟测试锁定示例。
+- TASK-002 已合入 main:PR #9 merge commit `b8f1263`(2026-08-29);CI 全绿(test 3.11 / 3.12 / repo-task-sync 均 SUCCESS);TASK 置 `done`。
 - Step 3(P1)验证(2026-08-29,分支 `codex/task-002-step3-p1`):两个示例子进程实跑 exit 0(L3 示例输出 `[audit] tool_event kind=started/finished` 与 `[L3] resumed session`,消息 roles 含 user/assistant/tool/assistant);新增 19 个测试(契约 16 + 示例冒烟 2 + TUI 泄漏 1);`pytest` = 1714 passed;`ruff check lanscoder tests` 全绿(`examples/sdk` 亦全绿);`node .ai-team/check.mjs --base origin/main` = valid;`node .ai-team/session.mjs validate` = valid。
 
 ## Pending
@@ -68,11 +69,11 @@
 - [x] Step 1(P2):`InMemorySessionStore` + L1 内存会话 + 流式三态(SC-1..SC-3 通过)。
 - [x] Step 2(P3+D2):`LlmTransport` Protocol + handle 去 `agent`(SC-4..SC-5 通过)。
 - [x] Step 3(P1):`py.typed` + 契约测试 + SDK 文档/示例 + `__version__`(SC-6..SC-7 通过)。
-- [ ] 评审并合入本 PR(#9,`codex/task-002-step3-p1`);合并后 TASK-002 全 SC-1..SC-8 闭环,置 `done`。
+- [x] 评审并合入本 PR(#9,`codex/task-002-step3-p1`):merge commit `b8f1263`(2026-08-29),CI 全绿;TASK-002 全 SC-1..SC-8 闭环。
 
 ## Next step
 
-Step 3(P1)已实现并验证(本 PR #9,SC-6..SC-8 全绿);评审并合入 PR #9 后 TASK-002 收尾置 `done`。后续若做独立分发包(P4,D8 已排除)另立任务。
+TASK-002 已闭环(`done`)。后续候选(另立任务):P4 独立分发包(D8 已排除)、SDK 发布流程接入(版本 bump + changelog)。
 
 ## Verification
 
@@ -89,4 +90,4 @@ Step 3(P1)已实现并验证(本 PR #9,SC-6..SC-8 全绿);评审并合入 PR #9 
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: TASK-002 启动;D1-D8 已拍板;Task 0 spec(#5)已合入 main;P0 已合入 main(`5f47888`);Step 1(P2)已合入 main(`1e4ea27`,SC-1..SC-3);Step 2(P3+D2)已合入 main(`d60f76c`,SC-4..SC-5);Step 3(P1)实现与验证完成(`codex/task-002-step3-p1`:py.typed + `__version__` 版本策略 + 契约测试 + `docs/architecture/03-sdk.md` + `examples/sdk/` headless 示例,pytest 1714 passed、ruff 全绿、check.mjs valid、session validate valid,SC-6..SC-8 通过);本 PR(#9)合入后 TASK-002 全 SC 闭环置 `done`。
+- Summary: TASK-002 已完成并合入 main:Task 0 spec(#5)、P0(PR #6 `5f47888`)、Step 1 P2(PR #7 `1e4ea27`,SC-1..SC-3)、Step 2 P3+D2(PR #8 `d60f76c`,SC-4..SC-5)、Step 3 P1(PR #9 `b8f1263`,SC-6..SC-8);全量门禁绿(pytest 1714 passed、ruff 全绿、check.mjs valid、CI 3.11/3.12 SUCCESS);Status 置 `done`。
