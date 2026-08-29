@@ -1,93 +1,67 @@
 # Current Task
 
-- ID: `TASK-002`
-- Title: `SDK 硬化:L1 session-free(P2)、LlmTransport 传输协议(P3)、契约与文档(P1)`
-- Status: `done`
+- ID: `TASK-003`
+- Title: `对外发布:lanscoder-core 独立分发包(D1=A)+ 发布流程`
+- Status: `planning`
 - Owner: `Lanster`
-- Next owner: `-`
+- Next owner: `Lanster`
 
 ## Goal
 
-让 `lanscoder.core` 成为稳定、可对外发布的 SDK 面(参考 pi 的发布形态,范围 P0-P3,不做 P4):
+把 `lanscoder.core` 发布为独立分发包 `lanscoder-core`(P4 落地):SDK 用户 `pip install lanscoder-core` 后 `from lanscoder.core import ...` 即用,最小依赖、无 TUI;同时补齐发布流程(CHANGELOG、双 dist CI、tag 发布)。
 
-- **P2 L1 真 session-free**: `agent_loop` 不再写盘(temp 目录 → `InMemorySessionStore`),保留工具多轮往返,不承担权限/守卫;流式自动探测 + `use_streaming` 覆盖。
-- **P3 传输窄协议化**: `LlmTransport` Protocol(复用 providers 类型),`LoopConfig.provider` 类型改为它;`AgentSessionHandle` 去掉 `agent`,只留 `session + runner`(已完成,PR #8)。
-- **P1 契约固化**: `py.typed` + 契约测试 + SDK 文档/headless 示例 + API 版本策略,把最终形态钉死。
-- P0(删 `app/runtime.py` shim):已由 PR #6 合入 main(`5f47888`,2026-08-29)。
+- **D1=A 独立分发包**:dist 名 `lanscoder-core`,import 名保持 `lanscoder`(dist 名与 import 名解耦)。
+- **依赖裁剪**:`lanscoder-core` 必装依赖仅 `anyio` / `portalocker` / `PyYAML`(实测足迹);`openai`/`anthropic`/`mcp` 走 extras;排除 `textual`/`prompt_toolkit`/`tomlkit`/`python-dotenv`。
+- **发布流程**:一个 tag 同时构建并发布 `LansCoder`(TUI 应用)+ `lanscoder-core`(SDK)两个 wheel;版本单一事实来源 `_version.py`。
 
 ## Acceptance scenarios
 
-- [x] **SC-1 (P2 不落盘)**: Given `agent_loop` 改用内存会话,When 运行 L1 且断言无临时目录/文件残留,Then 不落盘、事件序列不变。证据: 新增测试 + 既有 core L1 测试回归。
-- [x] **SC-2 (P2 流式三态)**: Given `LoopConfig.use_streaming` 三态,When 分别运行 L1,Then None=按 `capabilities.supports_streaming` 自动、True=强制流式(有 `MessageUpdateEvent`)、False=强制非流式(只有 `MessageEndEvent`)。
-- [x] **SC-3 (P2 行为边界)**: Given L1 保留工具多轮往返且 `permission_manager=None`,When 运行工具事件测试,Then 无回归。
-- [x] **SC-4 (P3 传输协议)**: Given `LlmTransport` Protocol,When 用非 `ChatProvider` 的 duck-typed transport 驱动 L1,Then 可跑通;且 `ChatProvider` 结构性满足 Protocol。
-- [x] **SC-5 (P3 handle 瘦身)**: Given `AgentSessionHandle` 去掉 `agent`,When 运行全量回归,Then 绿;L2 `Agent` 独立可用。
-- [x] **SC-6 (P1 契约)**: Given `py.typed` + 契约测试,When 运行,Then `core.__all__` 与签名钉死、泄漏检查仍绿。证据: `tests/test_core_contract.py`(16 项)+ `test_layer_boundaries.py` 新增 `test_core_import_does_not_pull_tui`;实测全绿。
-- [x] **SC-7 (P1 文档/示例)**: Given SDK 文档 + headless 示例(L3 + 自定义工具 + set_permission_mode + tool_event_handler 审计 + resume),When 在无 TUI 环境运行,Then 可跑通。证据: 两个示例子进程实跑 exit 0 + `tests/test_sdk_examples.py` 冒烟测试锁定。
-- [x] **SC-8 (P1 门禁)**: When 运行全量 `pytest` + `node .ai-team/check.mjs --base origin/main` + `ruff check lanscoder tests`,Then 全绿。证据: `pytest` = 1714 passed、ruff 全绿、check.mjs = valid。
+- [ ] **SC-1 (独立 wheel 可安装可 import)**: Given 干净 venv,When `pip install lanscoder-core`,Then `from lanscoder.core import create_agent_session` 成功且 `pip show` 不含 textual。
+- [ ] **SC-2 (无 TUI 可验证)**: Given 最小依赖环境,When 运行契约测试 + SDK 示例冒烟 + `test_core_import_does_not_pull_tui`,Then 全绿。
+- [ ] **SC-3 (双 dist 构建一致)**: When CI `python -m build`,Then 同时产出 `LansCoder` + `lanscoder-core` 两个 wheel,版本都等于 `_version.py`,`twine check` 绿。
+- [ ] **SC-4 (tag 发布)**: Given push `vX.Y.Z`,When 触发发布流程,Then tag 与两个 dist 版本一致;Test PyPI 演练通过(真实 PyPI 上传人工确认)。
+- [ ] **SC-5 (文档)**: Given CHANGELOG + 安装/发布文档,When 审阅,Then SDK 安装、extras、替代关系(不与 `LansCoder` 同时安装)说明齐全。
+- [ ] **SC-6 (全量门禁)**: When 运行全量 `pytest` + `ruff check .` + `node .ai-team/check.mjs --base origin/main`,Then 全绿。
 
 ## Invariants
 
 - `core` 永不 import `app`;`agent` 永不 import `core`;不产生新环。
-- 不重写 `agent/` 会话绑定引擎(`AgentLoop` / `AgentSession`)的回合语义;P2 仅新增 `InMemorySessionStore`,不改引擎。
-- 不改动 providers / context / permissions / tools 的既有职责(仅新增 store 子类与 `core/transport.py`)。
-- 不改变 TUI 行为。
-- 本任务按 spec 评审通过后实现;Task 0(spec + TASK)只写文档,不动代码。
+- 不改变 `lanscoder.core` 既有 API 与 `__all__`(契约测试继续钉死;本任务零 core 代码语义改动)。
+- 不改变 TUI 行为;主包 `LansCoder` 发布形态不变。
+- `lanscoder-core` 与 `LansCoder` 同 import 树(`lanscoder`),为替代关系,不得同时安装。
+- 版本单一事实来源 `lanscoder/core/_version.py`;双 dist 版本必须一致。
 
 ## Decisions
 
-- **D1** P2 选方案 A:复用 `agent/` 引擎 + 内存会话,不重写裸循环(推翻原方案 B;不造第二个循环引擎)。
-- **D2** `AgentSessionHandle` 去掉 `agent`,只留 `session + runner`;L2 `Agent` 保持独立(session-free)。
-- **D3** P3 保守版 `LlmTransport` Protocol(复用 `providers.types` 类型),`LoopConfig.provider` 字段名不变、类型改为它;不引入 `stream_fn` 主 API。
-- **D4** L1 流式:自动探测(`capabilities.supports_streaming`)+ 可选 `use_streaming: bool | None` 覆盖。
-- **D5** L1 行为边界:保留工具多轮往返(复用 `ToolExecutor`);不承担权限/守卫/compaction;保留循环级 `limits/context_window/request_options`。
-- **D6** P0 立即提交(用户提交 `3fab751`;cherry-pick 到干净分支 `603d806`,PR #6 合入后闭环)。
-- **D7** P1 内容:`py.typed` + 契约测试 + SDK 文档/headless 示例(按 L3 + 每任务短会话驱动形态写)+ API 版本策略;顺序 P0→P2→P3→P1。
-- **D8** P4 独立分发包不做;`lanscoder.core` 文档化为 SDK 入口。
+- **D1(已定,用户)** 独立分发包 `lanscoder-core`;import 名保持 `lanscoder`。
+- **D2(本 spec 推荐,待评审)** 依赖裁剪:必装 `anyio` / `portalocker` / `PyYAML`;extras `[llm]` = openai + anthropic、`[mcp]` = mcp;排除 `textual`/`prompt_toolkit`/`tomlkit`/`python-dotenv`;只裁剪依赖,不裁剪模块树(同一 `lanscoder` 包)。
+- **D3(本 spec 推荐,待评审)** 单一版本号,双 dist 同步(`_version.py` 唯一来源;一个 tag 发两包;core 稳定到可独立节拍时再拆)。
+- **D4(已定,用户)** 验收形态取第一个:`pip install lanscoder-core` 后即用 + 无 TUI 可验证 + 契约/示例/CI 全绿。
+- **D5(本 spec 推荐,待评审)** 双 dist 构建:独立子项目 `packages/lanscoder-core/pyproject.toml`(`package-dir` 指回仓库根);CI 对两个 dist 分别 build + twine check + upload。
 
 ## Completed
 
-- 2026-08-28/29 SDK 讨论拍板 D1-D8(记录于本 TASK 与 `docs/superpowers/specs/2026-08-29-sdk-hardening-design.md`)。
-- Task 0 spec PR #5 已合入 main(`2586642`)。
-- P0:用户提交 `3fab751` 后,已 cherry-pick 到基于 main 的干净分支 `codex/p0-drop-app-runtime-shim`(commit `603d806`,15 文件,+14/-54,539 tests passed、ruff clean);由本 PR(#6)合入。
-- P0 验证(2026-08-29,分支 `codex/p0-drop-app-runtime-shim`,commit `603d806`+`ed271af`):`pytest` = 1665 passed + 1 skipped;`ruff check lanscoder tests` 全绿;`node .ai-team/check.mjs --base origin/main` = valid(2 commits,20 文件,+553/-81;private sessions 5/closed 3,token coverage 3/5);PR #6 = OPEN / MERGEABLE / CLEAN。
-- P0 已合入 main:PR #6 merge commit `5f47888`(2026-08-29)。
-- Step 1(P2)实现(分支 `codex/task-002-step1-p2`):新增 `InMemorySessionStore`(`lanscoder/context/store.py`,不建目录、不写盘,复用基类 `_apply_event` 重建);`lanscoder/core/agent_loop.py` 临时目录 → 内存会话 + `use_streaming` 三态(None=自动探测 `capabilities.supports_streaming`、True=强制流式、False=强制非流式);`lanscoder/core/messages.py` `LoopConfig` 新增 `use_streaming: bool | None = None`;零引擎改动。
-- Step 1(P2)验证(2026-08-29):新增 7 个测试(SC-1 不落盘 ×2、SC-2 流式三态 ×4、SC-3 工具多轮往返 ×1);`pytest` = 1672 passed + 1 skipped;`ruff check lanscoder tests` 全绿;`node .ai-team/check.mjs --base origin/main` = valid。
-- Step 1(P2)已合入 main:PR #7 merge commit `1e4ea27`(2026-08-29)。
-- Step 2(P3+D2)实现(分支 `codex/task-002-step2-p3`):新增 `lanscoder/core/transport.py` `LlmTransport` Protocol(`@runtime_checkable`,2 方法 + 3 属性,复用 `providers.types` 叶子类型);`core/__init__.py` 导出;`LoopConfig.provider` 类型 `ChatProvider` → `LlmTransport`(字段名不变);`AgentSessionHandle` 去掉 `agent`(只留 `session + runner`),`create_agent_session` 不再构造 L2 `Agent`;`agent/` 引擎零改动。
-- Step 2(P3+D2)验证(2026-08-29):新增 `tests/test_core_transport.py`(SC-4 duck-typed 驱动 L1 + 结构性满足 ×2);`test_core_session.py` 去 `handle.agent` 断言并改写 L2 独立可用测试;`pytest` = 1674 passed + 1 skipped;`ruff check lanscoder tests` 全绿;`node .ai-team/check.mjs --base origin/main` = valid(待 TASK 同步后复跑)。
-- Step 2(P3+D2)已合入 main:PR #8 merge commit `d60f76c`(2026-08-29)。
-- Step 3(P1)实现(分支 `codex/task-002-step3-p1`,基于真实 main):新增 `lanscoder/py.typed`(PEP 561 marker)、`lanscoder/core/_version.py`(`__version__ = "1.2.1"` 单一事实来源)、`core/__init__.py` 导出 `__version__` 并加入 `__all__`;新增 `tests/test_core_contract.py`(`__all__` 精确钉死 21 名 + 关键签名/字段结构快照 + `__version__` 跟随 pyproject `[project].version` + `py.typed` 存在 + 10 事件 frozen/slots + `AgentEvent` union);`tests/test_layer_boundaries.py` 新增 `test_core_import_does_not_pull_tui`(fresh-interpreter 泄漏检查,`lanscoder.core` 不拖 `textual`);SDK 文档 `docs/architecture/03-sdk.md` + `docs/architecture/index.md` 链接;可运行示例 `examples/sdk/`(`README.md` + `stub_provider.py` + `minimal_llm_transport.py` + `headless_l3_session.py`);`tests/test_sdk_examples.py` 子进程冒烟测试锁定示例。
-- TASK-002 已合入 main:PR #9 merge commit `b8f1263`(2026-08-29);CI 全绿(test 3.11 / 3.12 / repo-task-sync 均 SUCCESS);TASK 置 `done`。
-- Step 3(P1)验证(2026-08-29,分支 `codex/task-002-step3-p1`):两个示例子进程实跑 exit 0(L3 示例输出 `[audit] tool_event kind=started/finished` 与 `[L3] resumed session`,消息 roles 含 user/assistant/tool/assistant);新增 19 个测试(契约 16 + 示例冒烟 2 + TUI 泄漏 1);`pytest` = 1714 passed;`ruff check lanscoder tests` 全绿(`examples/sdk` 亦全绿);`node .ai-team/check.mjs --base origin/main` = valid;`node .ai-team/session.mjs validate` = valid。
+- 2026-08-29 发布规划讨论拍板 D1/D4(记录于本 TASK 与 `docs/superpowers/specs/2026-08-29-sdk-external-release-design.md`)。
+- 依赖审计(2026-08-29 实测):`import lanscoder.core` 与默认 L3 装配+一次回合,第三方足迹仅 `anyio`/`portalocker`/`PyYAML`;`providers/base.py` 与 `tools/builtin.py` 惰性 import openai/anthropic/mcp;`memory/models.py` 硬 import yaml。
 
 ## Pending
 
-- [x] 评审并合并本 spec PR(Task 0,#5)。
-- [x] P0 PR(#6,`codex/p0-drop-app-runtime-shim`)合入 main(`5f47888`)。
-- [x] Step 1(P2):`InMemorySessionStore` + L1 内存会话 + 流式三态(SC-1..SC-3 通过)。
-- [x] Step 2(P3+D2):`LlmTransport` Protocol + handle 去 `agent`(SC-4..SC-5 通过)。
-- [x] Step 3(P1):`py.typed` + 契约测试 + SDK 文档/示例 + `__version__`(SC-6..SC-7 通过)。
-- [x] 评审并合入本 PR(#9,`codex/task-002-step3-p1`):merge commit `b8f1263`(2026-08-29),CI 全绿;TASK-002 全 SC-1..SC-8 闭环。
+- [ ] Task 0(spec + TASK,本 PR):只写文档,不动代码;评审通过后 `planning → active`。
+- [ ] Step 1:`packages/lanscoder-core` 打包骨架 + 本地 build 双 wheel + 干净 venv 安装冒烟(SC-1、SC-2 前半)。
+- [ ] Step 2:CI 双 dist 发布流程 + 最小依赖验证 job(SC-2 后半、SC-3、SC-4)。
+- [ ] Step 3:CHANGELOG + 安装/发布文档 + Test PyPI 演练(SC-5、SC-6)。
 
 ## Next step
 
-TASK-002 已闭环(`done`)。后续候选(另立任务):P4 独立分发包(D8 已排除)、SDK 发布流程接入(版本 bump + changelog)。
+评审并合并本 Task 0 spec PR;通过后 Status `planning → active`,进入 Step 1(打包骨架,每 Step 独立 PR)。
 
 ## Verification
 
-- P0 分支实测(2026-08-29):`pytest` = 1665 passed + 1 skipped;`ruff check lanscoder tests` 通过;`node .ai-team/check.mjs --base origin/main` = valid。
-- Step 1 分支实测(2026-08-29):`pytest` = 1672 passed + 1 skipped(含新增 7 个 L1 测试);`ruff check lanscoder tests` 通过;`node .ai-team/check.mjs --base origin/main` = valid。
-- Step 2 分支实测(2026-08-29):`pytest` = 1674 passed + 1 skipped(含新增 2 个传输测试);`ruff check lanscoder tests` 通过;`node .ai-team/check.mjs --base origin/main` = valid。
-- Step 3 分支实测(2026-08-29):`pytest` = 1714 passed(含新增契约 16 + 示例冒烟 2 + TUI 泄漏 1);`ruff check lanscoder tests` 通过(`examples/sdk` 亦通过);`node .ai-team/check.mjs --base origin/main` = valid;`node .ai-team/session.mjs validate` = valid。
-- [x] 全量 `pytest` 绿(Step 3 分支实测 1714 passed,真实退出码 0)。
-- [x] `node .ai-team/check.mjs --base origin/main` 通过(valid)。
-- [x] `ruff check lanscoder tests` 通过(exit 0)。
-- [x] SC-1..SC-8 以真实命令退出码记录(SC-6..SC-8 本 Step 勾选,SC-1..SC-5 前序 Step 已按真实退出码勾选)。
+- planning 阶段只写文档,无代码验证;依赖审计证据见 spec §3(2026-08-29 实测命令)。
+- [ ] SC-1..SC-6 以真实命令退出码记录(实现 Step 中逐项勾选)。
 
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: TASK-002 已完成并合入 main:Task 0 spec(#5)、P0(PR #6 `5f47888`)、Step 1 P2(PR #7 `1e4ea27`,SC-1..SC-3)、Step 2 P3+D2(PR #8 `d60f76c`,SC-4..SC-5)、Step 3 P1(PR #9 `b8f1263`,SC-6..SC-8);全量门禁绿(pytest 1714 passed、ruff 全绿、check.mjs valid、CI 3.11/3.12 SUCCESS);Status 置 `done`。
+- Summary: TASK-003 启动(planning);D1=独立分发包、D4=第一个验收形态已定;D2(依赖裁剪)/D3(单一版本号)/D5(子项目双 dist)为本 spec 推荐项;依赖审计已完成(core 足迹仅 anyio/portalocker/PyYAML);Task 0 只写文档,评审通过后进入 Step 1。
