@@ -172,10 +172,10 @@ Full documentation lives in [docs/](docs/):
 ## Development
 
 ```sh
-python -m venv .venv
-.venv/bin/python -m pip install -e ".[dev]"
-.venv/bin/python -m pytest
-.venv/bin/python -m ruff check lanscoder tests
+python -m venv venv
+venv/bin/python -m pip install -e ".[dev]"
+venv/bin/python -m pytest
+venv/bin/python -m ruff check lanscoder tests
 ```
 
 See [docs/development.md](docs/development.md) for contribution guidelines.
