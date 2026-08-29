@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-29
+
 ### Added
 
 - **独立 SDK 分发包 `lanscoder-core`**：`pip install lanscoder-core` 即得 headless SDK
