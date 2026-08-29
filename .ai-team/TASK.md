@@ -8,7 +8,7 @@
 
 ## Goal
 
-把 LoCoBench-Agent(Salesforce AI Research,arXiv 2511.13998)接入 LansCoder,作为上下文管理系统的**可复现量化评估基准**(纯测量,不改 `lanscoder/` 核心语义)。
+为 LansCoder 上下文管理系统(L1/L2/L3 压缩)建立**可复现量化评估基准**(纯测量,不改 `lanscoder/` 核心语义)。**2026-08-29 决策(D9):弃用 LoCoBench-Agent**——其数据 ground_truth 与代码严重不一致(见 record.md O10、LESSONS.md),star 仅 22、社区冷清,投入产出不可信。改为**先经权威性/社区/数据质量调研、用户批准后再接入的新基准**(候选见 Pending)。
 
 - **数据**:复用 LoCoBench-Agent 的 8,000 交互场景(10K–1M tokens、10 语言、8 任务类别、四档难度),按 `--scenario-count/--difficulty/--category` 抽子集。
 - **接入形态**:LansCoder 以自定义 `LansCoderAgent(BaseAgent)` **进程内**接入(`create_agent_session` + LoCoBench 工具映射),被测对象 = `ContextWindowManager` 三层压缩(L1 路由压缩 / L2 归档占位 / L3 LLM 摘要)。
@@ -42,12 +42,14 @@
 - **D5(已定,用户)** 纯测量;暴露的短板(如 P2 token 计量失真)记入 `record.md`,修复另开任务。
 - **D6(已定,调研)** 接入形态 = `LansCoderAgent(BaseAgent)` 进程内,复用 `create_agent_session`;LoCoBench 的 `AgentFactory._create_custom_agent` 是 stub、CLI `--agent-type` 不含 custom → 自写 driver 直接实例化 harness 类。
 - **D7(已定,调研)** 评估时 harness 跑 `--context-management none`,由 LansCoder `ContextWindowManager` 独占上下文管理(A/B 因果干净)。
+- **D9(已定,用户 2026-08-29)** **弃用 LoCoBench-Agent**(沉没成本抛弃;GIGO)。评估基准须**先调研**(权威性/star/社区/数据一致性)并**经用户明确批准**再接入;跑 LLM 从最小 task 单轮开始;测试前先冒烟。教训入 `LESSONS.md`。
 - **D8(已定,用户 2026-08-29,Phase 3.5)** "不跑偏/结果正确"打分 = A+B+C 加权;C 只取 **LCBA-Comp**(Eff 单独报告不并入);B 层 judge 换供应商 **DashScope 模型 `qwen3.7-plus`**(与 agent deepseek-v4-flash 不同模型,避免自评);A 层用 **ground_truth 反引号标识符** 确定性提取;立即对现有 3 个 run(easy-2/hard-1/expert-1)出分。**权重:A 0.05 / B 0.65 / C 0.30**(初版 0.3/0.5/0.2 → 0.1/0.6/0.3 → 终版;A+C 实测 A 命中率 0.714/0.133/0.0,参考性低,下调 A 仅作客观 sanity、B 语义主分;可 CLI 覆盖)。
 
 ## Completed
 
 - [x] LoCoBench-Agent 源码调研(2026-08-29):`BaseAgent` 接口与自定义路径(`base_agent.py` / `custom_agent.py` / `agent_factory.py` CUSTOM=stub);8,000 场景结构(data.zip → `convert-scenarios` → 缓存 → `evaluate --mode agent`,`--scenario-count/--difficulty/--category` 子集);per-turn token/context 统计(`conversation_history[].context_tokens` 启发式 + `AgentResponse.tokens_used` 真实 usage + harness `ContextState.total_tokens`/`compression_history` tiktoken);harness context management(`none/basic/adaptive`,默认 adaptive,触发 0.4/0.6);`RobustAgentEvaluator` + `AgentSession` 主路径;`run_llm_evaluation` 为 random 占位符(只用 agent 模式)。
 - [x] 决策确认(2026-08-29,用户 Q1–Q5):LoCoBench 主选 / 分波验证 / 三组 A/B / 不加官方基线 / 短板记 record.md 不修。
+- [x] **LoCoBench 阶段整体废弃(2026-08-29,D9)**:Phase 1–3.5 的产出作为"流程/工具链演练"保留(压缩策略开关、CompactionEvent 采集、A+B+C 打分框架可复用),但其评估结论**不作能力分依据**(数据不可信,GIGO)。换基准后重做数据接入与评估。
 - [x] **Phase 1 数据与环境(2026-08-29)**:LoCoBench-Agent clone 到 `/tmp/LoCoBench-Agent`(commit `2ab9218`,工具目录不入仓库);venv 装依赖(requirements 去 lighteval/boto3 + tiktoken + psutil + gdown);`data.zip` 1.27GB 经代理 gdown 下载并解压(4.6GB,1000 项目 / 8000 场景 / 8000 已转换 agent 场景);`convert-scenarios --limit 5` 验证通过(全 8000 走缓存,0 失败)。
 - [x] **Phase 1 最小闭环跑通(2026-08-29)**:`benchmark/locobench/` 初版 driver 就绪(`lanscoder_agent.py` / `tool_mapping.py` / `driver.py` / `README.md`)。1 个 easy 场景(`php_api_rest_easy_078_architectural_understanding_easy_01`,19K context)由 `LansCoderAgent` + deepseek-v4-flash 执行 **3 turns**,产出 `AgentEvaluationResults`:**overall 0.704 / LCBA-Comp 0.74 / LCBA-Eff 0.65**,session_status=completed,0 error,59 条工具调用(6 类 LoCoBench 工具 + LansCoder `read_memory`),provider 真实 usage 共 131,327 tokens,**未触发压缩**(19K 场景 vs 1M 窗口,符合预期)。产物在 `benchmark/runs/locobench/smoke-easy-1/`(gitignored)。
 - [x] **Phase 1 坑(已修/已记录)**:① harness 场景文件必须嵌套在 `initial_context.project_files`,否则工具工作区为空;② LansCoder 内部 loop 工具调用需从 session store 事件采集(`ChatResponse.tool_calls` 只含末条消息);③ `FinishReason` 是字符串 Literal 不是 enum(首次跑 `'str' object has no attribute 'value'` 中断,已修);④ `--max-turns N` 才是预算上限(阶段循环 success 不满足会跑满回合);⑤ 工具名带 `_copy_<id>` 副本后缀需归一化。
@@ -57,14 +59,13 @@
 
 ## Pending
 
-- **Phase 2 ✅(2026-08-29)**:driver 压缩策略开关 + CompactionEvent 采集 + 三口径对齐已就绪(见 Completed)。
-- **Phase 3 ✅(2026-08-29)**:hard + expert 各 1 个冒烟完成(SC-2,见 Completed):压缩在 200K 窗口稳定触发,CompactionEvent 采集端到端验证。
-- **Phase 3.5(进行中)**:A+B+C 加权"不跑偏/结果正确"打分——`scoring.py`(A 反引号命中 + C=LCBA-Comp + 加权)与 `judge.py`(B=dashscope qwen3.7-plus,结构化 JSON 盲评)已就绪。**B 层已用 deepseek-v4-flash 临时占位跑通 3 run**(仅验证链路);**正式 B 仍阻塞于 DashScope 账户欠费(Arrearage)**。**新发现(record.md O10)**:LoCoBench 场景 ground_truth 与提供的项目文件不一致(expert 13/17 缺失、hard 11/21、easy 7/13;expert 的 `EventStandardizerV3`/`PIPELINE_ROUTING` 全数据集无源文件)——**expert 的 B correctness=0 度量的是数据 bug 而非 agent**;B 层 judge 需知情"代码可能与 ground_truth 不一致"或先做一致性校验,不符场景标注 B 不可比。
+
 - **Phase 4(下一步)**:策略 A/B(no-compact / L1+L2 / L1+L2+L3)+ 分析脚本(上下文规模-指标曲线、压缩行为统计);注意 Phase 3 发现——原生 1M/1.5M 窗口下 chars/4 不触发(见 record.md O6),A/B 需固定窗口(建议 200K)并标注口径。
 - **Phase 5**:`benchmark/locobench/README.md` 复现文档完善;更新 `record.md`(补 Phase 1 评估观察);全量门禁(SC-6)。
 
 ## Next step
 
+**LoCoBench 已弃用(D9)。下一步:基准选型结论已出(推荐 `swe-bench/swe-bench-verified` 子集,经 Harbor 接入),等用户明确批准 → 复用 `benchmark/harbor/` 适配器跑最小单轮冒烟 → 小批量 → 三组压缩策略 A/B。**
 **Phase 3 已通过**;**Phase 3.5 进行中**(2026-08-29):A/B/C 打分链路已跑通(权重 0.05/0.65/0.30),B 层已用 deepseek-v4-flash **临时占位**跑通 3 run(临时口径总分 easy 0.5447 / hard 0.5185 / expert 0.4181;expert judge correctness=0,harness 关键词分 0.744 掩盖了根因错误→ O9)。**下一步**:等 DashScope 充值后换 `qwen3.7-plus` 重出正式 B 与总分(当前 B 为占位,不可作正式结论),随后进入 **Phase 4** 三组策略 A/B。
 
 ## Verification
