@@ -12,7 +12,37 @@
 - 公开面 = `lanscoder.core.__all__`(20 个名字),由 `tests/test_core_contract.py` 精确钉死:任何增删都必须
   同步改契约测试,防止无意的 API 漂移。
 
-## 2. API 版本策略
+## 2. 安装与分发包
+
+`lanscoder.core` 以独立分发包 **`lanscoder-core`** 发布(dist 名 ≠ import 名，import 保持 `lanscoder`)。
+
+### 2.1 SDK 安装(headless，无 TUI)
+
+```sh
+pip install lanscoder-core          # 必装依赖:anyio / portalocker / PyYAML
+pip install "lanscoder-core[llm]"   # + openai / anthropic(真实模型适配器)
+pip install "lanscoder-core[mcp]"   # + mcp(外部 MCP 工具服务器)
+```
+
+- 安装后即可 `from lanscoder.core import create_agent_session`(L1/L2/L3 全可用)，不安装、不 import Textual。
+- 真实模型与 MCP 均为惰性接入:只跑 headless 回合(duck-typed `LlmTransport`)时 `[llm]`/`[mcp]` 都不需要。
+- 最小依赖集由 `publish-pypi.yml` 的 `minimal-core-deps` job 在发布期锁定(契约 + SDK 示例 + 层边界泄漏 +
+  安装包冒烟)；对应验收 SC-1 / SC-2。
+
+### 2.2 `LansCoder` 与 `lanscoder-core` 的关系(薄壳，非替代)
+
+- `LansCoder`(PyPI 上的 TUI 应用)是**薄壳**:wheel 不再自带 `lanscoder/` 源码树，
+  `dependencies = ["lanscoder-core[llm,mcp]", ...]` + TUI 侧依赖(textual / prompt_toolkit / tomlkit / python-dotenv)。
+- 二者是**依赖关系**:`LansCoder` 依赖 `lanscoder-core`，**不是**"二选一"的替代关系；`lanscoder/` 导入树由
+  `lanscoder-core` 唯一持有，两个 wheel 文件零重叠(D7 / SC-7)。
+- 选择:只做二次开发/集成 → 装 `lanscoder-core`；要完整 TUI 应用 → 装 `LansCoder`(自动带上 core)。
+
+### 2.3 版本
+
+- 单一事实来源 `lanscoder/core/_version.py`；root 薄壳版本与 `lanscoder-core==` pin 硬编码一致，
+  由 `tests/test_dist_metadata.py`(本地)与发布 tag 校验(CI)强制(D3 / D7a)；一个 tag 同时发布两个 dist。
+
+## 3. API 版本策略
 
 - `lanscoder.core.__version__` 暴露包版本(单一事实来源 `lanscoder/core/_version.py`),契约测试断言其与
   `pyproject.toml` 的 `[project].version` 一致。
@@ -21,7 +51,7 @@
 - 破坏性变更需要:同步更新契约测试 + 本文件 + `examples/sdk/`,并在 CHANGELOG 记录。
 - 类型支持:`lanscoder/py.typed`(PEP 561)标记包为内联类型,类型检查器可直接消费 `lanscoder.core` 的注解。
 
-## 3. 三层 API
+## 4. 三层 API
 
 ### 3.1 L1 `agent_loop`(无状态裸循环)
 
@@ -72,7 +102,7 @@ handle.runner.tool_event_handler = audit                       # 工具执行审
 - `tool_event_handler` 接收 `lanscoder.agent.loop.ToolExecutionEvent`(`kind ∈ started/finished/...`)。
 - 恢复:同一 `data_root` + 同一 `session_id` + `resume=True` 重开一个 handle,历史消息在。
 
-## 4. 传输协议 `LlmTransport`(D3)
+## 5. 传输协议 `LlmTransport`(D3)
 
 ```python
 @runtime_checkable
@@ -88,7 +118,7 @@ class LlmTransport(Protocol):
 - 外部框架自建模型层:实现 2 方法 + 3 属性即可,无需继承 providers ABC(见
   `examples/sdk/minimal_llm_transport.py`)。
 
-## 5. 可运行示例与门禁
+## 6. 可运行示例与门禁
 
 - 示例:`examples/sdk/`(README 见 `examples/sdk/README.md`);`tests/test_sdk_examples.py` 以子进程冒烟
   测试锁定"无 TUI 可运行"(SC-7)。
