@@ -27,8 +27,43 @@ jobs:
       - name: Test
         run: python -m pytest -q
 
+  minimal-core-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install build tools
+        run: python -m pip install --upgrade build
+      - name: Build core wheel
+        working-directory: packages/lanscoder-core
+        run: python -m build --wheel
+      - name: Create clean venv (core wheel + pytest only)
+        run: |
+          python -m venv /tmp/lanscoder-core-min
+          /tmp/lanscoder-core-min/bin/python -m pip install --upgrade pip
+          /tmp/lanscoder-core-min/bin/python -m pip install packages/lanscoder-core/dist/*.whl pytest
+      - name: Assert minimal installed deps (no TUI / llm / mcp)
+        run: |
+          /tmp/lanscoder-core-min/bin/python -m pip show lanscoder-core
+          if /tmp/lanscoder-core-min/bin/python -m pip list --format=freeze | grep -Ei '^(textual|openai|anthropic|mcp|prompt-toolkit|tomlkit|python-dotenv)='; then
+            echo "::error::minimal env pulled a banned dependency"
+            exit 1
+          fi
+      - name: Run contract + SDK examples + leak checks (minimal deps)
+        run: |
+          /tmp/lanscoder-core-min/bin/python -m pytest -q \
+            tests/test_core_contract.py tests/test_sdk_examples.py tests/test_layer_boundaries.py
+      - name: Installed-wheel smoke (site-packages import, L2 Agent round)
+        run: |
+          mkdir -p /tmp/smoke
+          cp examples/sdk/minimal_llm_transport.py /tmp/smoke/
+          cd /tmp/smoke
+          /tmp/lanscoder-core-min/bin/python minimal_llm_transport.py
+
   publish:
-    needs: [test]
+    needs: [test, minimal-core-deps]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,20 +72,45 @@ jobs:
           python-version: "3.12"
       - name: Install build tools
         run: python -m pip install --upgrade build twine
-      - name: Validate version tag
+      - name: Validate tag matches both dist versions
         if: github.event_name == 'push'
         run: |
-          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          if [ "${{ github.ref_name }}" != "v$version" ]; then
-            echo "::error::Tag ${{ github.ref_name }} does not match pyproject version v$version"
-            exit 1
-          fi
-      - name: Build distribution
+          python - <<'EOF'
+          import ast
+          import pathlib
+          import tomllib
+
+          root = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          root_version = root["project"]["version"]
+          tree = ast.parse(pathlib.Path("lanscoder/core/_version.py").read_text())
+          core_version = next(
+              ast.literal_eval(node.value)
+              for node in tree.body
+              if isinstance(node, ast.Assign)
+              and any(isinstance(t, ast.Name) and t.id == "__version__" for t in node.targets)
+          )
+          pins = [d for d in root["project"]["dependencies"] if d.startswith("lanscoder-core")]
+          expected_pin = f"lanscoder-core[llm,mcp]=={core_version}"
+          assert len(pins) == 1, pins
+          assert pins[0] == expected_pin, f"root pin {pins[0]} != {expected_pin}"
+          assert root_version == core_version, f"root {root_version} != core {core_version}"
+          tag = "${{ github.ref_name }}"
+          assert tag == f"v{root_version}", f"tag {tag} != v{root_version}"
+          print(f"OK: tag={tag} root={root_version} core={core_version} pin={pins[0]}")
+          EOF
+      - name: Build root distribution (LansCoder)
         run: python -m build
+      - name: Build core wheel (lanscoder-core)
+        working-directory: packages/lanscoder-core
+        run: python -m build --wheel
       - name: Validate distribution metadata
-        run: python -m twine check dist/*
+        run: |
+          python -m twine check dist/*
+          python -m twine check packages/lanscoder-core/dist/*
       - name: Publish to PyPI
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: python -m twine upload dist/*
+        run: |
+          python -m twine upload dist/*
+          python -m twine upload packages/lanscoder-core/dist/*
