@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lanscoder-core"
+description = "Headless SDK of LansCoder: L1 agent_loop, L2 Agent, L3 create_agent_session. No TUI."
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["version"]
+dependencies = [
+    "anyio",
+    "portalocker",
+    "PyYAML",
+]
+
+[project.optional-dependencies]
+llm = ["openai", "anthropic"]
+mcp = ["mcp>=1.28.1,<2"]
+
+[tool.setuptools]
+package-dir = {"" = "../.."}
+
+[tool.setuptools.packages.find]
+where = ["../.."]
+include = ["lanscoder*"]
+
+[tool.setuptools.package-data]
+lanscoder = ["py.typed", "context/prompts/*.md"]
