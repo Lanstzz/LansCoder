@@ -4,4 +4,4 @@
 ``pyproject.toml`` 的 ``[project].version`` 一致(跟随包版本)。
 """
 
-__version__ = "1.2.1"
+__version__ = "1.3.0"
