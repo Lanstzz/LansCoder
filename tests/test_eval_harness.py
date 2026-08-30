@@ -6,10 +6,11 @@ from pathlib import Path
 import pytest
 
 from eval_harness.replay.runner import run_offline_case_path
+from eval_harness.schema.models import load_case_manifest
 from eval_harness.trace.canonicalize import canonical_json, load_trace
-from eval_harness.trace.recorder import TraceRecorder
+from eval_harness.trace.recorder import TraceRecorder, trace_digest
 from eval_harness.trace.redaction import Redactor
-from eval_harness.verify.checks import compare_scorecards
+from eval_harness.verify.checks import compare_scorecards, verify_run
 
 
 CASE_PATH = Path(__file__).parents[1] / "eval_harness" / "cases" / "offline" / "write_greeting.json"
@@ -70,6 +71,101 @@ async def test_offline_case_produces_verified_trace_scorecard_and_artifact(tmp_p
     assert "Role and instruction priority" not in portable_trace
     assert "Create only genuinely new tasks" not in portable_trace
     assert "wrote greeting.txt" not in portable_trace
+    assert '"parameters":{"' not in portable_trace
+    assert '"parameters":"<TOOL_PARAMETERS_REDACTED>"' in portable_trace
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_trace_gate_requires_case_config_and_runtime_identity(tmp_path: Path) -> None:
+    result = await run_offline_case_path(CASE_PATH, tmp_path / "run")
+    _rewrite_trace(result.trace_path, lambda events: events[0]["data"].pop("config"))
+
+    verification = verify_run(load_case_manifest(CASE_PATH), result.trace_path, result.artifacts_path)
+
+    assert verification["trace"]["passed"] is False
+    assert "run_started is missing config identity" in verification["trace"]["errors"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_trace_gate_requires_provider_outcome_for_every_request(tmp_path: Path) -> None:
+    result = await run_offline_case_path(CASE_PATH, tmp_path / "run")
+    _rewrite_trace(
+        result.trace_path,
+        lambda events: events.pop(next(index for index, event in enumerate(events) if event["type"] == "provider_response")),
+    )
+
+    verification = verify_run(load_case_manifest(CASE_PATH), result.trace_path, result.artifacts_path)
+
+    assert verification["trace"]["passed"] is False
+    assert "provider request is missing a response or error" in verification["trace"]["errors"]
+    assert "provider interactions are unbalanced: 2 requests, 1 outcomes" in verification["trace"]["errors"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_trace_gate_requires_tool_start_and_end_to_match_provider_call(tmp_path: Path) -> None:
+    result = await run_offline_case_path(CASE_PATH, tmp_path / "run")
+
+    def orphan_tool_end(events: list[dict[str, object]]) -> None:
+        event = next(event for event in events if event["type"] == "tool_execution_end")
+        assert isinstance(event["data"], dict)
+        event["data"]["tool_call_id"] = "orphan"
+
+    _rewrite_trace(result.trace_path, orphan_tool_end)
+    verification = verify_run(load_case_manifest(CASE_PATH), result.trace_path, result.artifacts_path)
+
+    assert verification["trace"]["passed"] is False
+    assert "tool end has no start: orphan" in verification["trace"]["errors"]
+    assert "unsettled tool lifecycle: write_greeting" in verification["trace"]["errors"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_trace_gate_requires_delivery_to_match_terminal_message(tmp_path: Path) -> None:
+    result = await run_offline_case_path(CASE_PATH, tmp_path / "run")
+    _rewrite_trace(
+        result.trace_path,
+        lambda events: next(event for event in events if event["type"] == "final_delivery")["data"].update(
+            {"content": "tampered delivery"}
+        ),
+    )
+
+    verification = verify_run(load_case_manifest(CASE_PATH), result.trace_path, result.artifacts_path)
+
+    assert verification["trace"]["passed"] is False
+    assert "final_delivery does not match the terminal assistant message" in verification["trace"]["errors"]
+    assert verification["delivery"]["passed"] is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_trace_gate_rejects_tampered_integrity_footer(tmp_path: Path) -> None:
+    result = await run_offline_case_path(CASE_PATH, tmp_path / "run")
+
+    _rewrite_trace(
+        result.trace_path,
+        lambda events: events[-1]["data"].update({"digest": "0" * 64}),
+        refresh_integrity=False,
+    )
+    verification = verify_run(load_case_manifest(CASE_PATH), result.trace_path, result.artifacts_path)
+
+    assert verification["trace"]["passed"] is False
+    assert "trace integrity digest does not match the preceding events" in verification["trace"]["errors"]
+
+
+def _rewrite_trace(trace_path: Path, mutate: object, *, refresh_integrity: bool = True) -> None:
+    events = load_trace(trace_path)
+    assert callable(mutate)
+    mutate(events)
+    footer = events[-1]
+    assert footer["type"] == "trace_integrity"
+    assert isinstance(footer["data"], dict)
+    if refresh_integrity:
+        footer["data"]["event_count"] = len(events) - 1
+        footer["data"]["digest"] = trace_digest(events[:-1])
+    trace_path.write_text("\n".join(json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":")) for event in events) + "\n", encoding="utf-8")
 
 
 @pytest.mark.anyio

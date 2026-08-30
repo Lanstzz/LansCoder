@@ -94,7 +94,9 @@ def _request_payload(request: ChatRequest) -> dict[str, Any]:
                 "name": tool.name,
                 "description": "<TOOL_DESCRIPTION_REDACTED>",
                 "description_sha256": _fingerprint(tool.description),
-                "parameters": tool.parameters,
+                "parameters": "<TOOL_PARAMETERS_REDACTED>",
+                "parameters_sha256": _fingerprint(tool.parameters),
+                "parameter_keys": sorted(tool.parameters) if isinstance(tool.parameters, dict) else [],
             }
             for tool in request.tools
         ],
