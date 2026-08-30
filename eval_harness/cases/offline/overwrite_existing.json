@@ -10,5 +10,8 @@
     {"content": "Replaced version.txt with version 2.", "finish_reason": "stop", "tool_calls": []}
   ],
   "expected_artifacts": {"version.txt": "version 2\n"},
+  "expected_artifact_diff": {
+    "modified": ["version.txt"]
+  },
   "expected_delivery_contains": "Replaced version.txt"
 }

@@ -42,6 +42,9 @@ class CaseManifest:
     provider_tape: tuple[ProviderTapeResponse, ...]
     expected_artifacts: dict[str, str]
     expected_delivery_contains: str
+    expected_artifact_diff: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    forbidden_paths: tuple[str, ...] = ()
+    expected_delivery_completed: bool = True
     private_values: tuple[str, ...] = ()
     tool_faults: dict[str, str] = field(default_factory=dict)
     tool_result_sizes: dict[str, int] = field(default_factory=dict)
@@ -100,9 +103,28 @@ def load_case_manifest(
 
     expected_artifacts_raw = raw.get("expected_artifacts", {})
     if not isinstance(expected_artifacts_raw, dict) or not all(
-        isinstance(path, str) and isinstance(content, str) for path, content in expected_artifacts_raw.items()
+        isinstance(path, str) and _is_safe_relative_path(path) and isinstance(content, str)
+        for path, content in expected_artifacts_raw.items()
     ):
-        raise ManifestError("expected_artifacts must map relative paths to expected UTF-8 content")
+        raise ManifestError("expected_artifacts must map safe relative paths to expected UTF-8 content")
+    expected_artifact_diff_raw = raw.get("expected_artifact_diff", {})
+    if not isinstance(expected_artifact_diff_raw, dict) or set(expected_artifact_diff_raw) - {"created", "modified", "deleted"}:
+        raise ManifestError("expected_artifact_diff must contain only created, modified, and deleted lists")
+    if not all(
+        isinstance(field, str)
+        and isinstance(paths, list)
+        and all(isinstance(path, str) and _is_safe_relative_path(path) for path in paths)
+        for field, paths in expected_artifact_diff_raw.items()
+    ):
+        raise ManifestError("expected_artifact_diff values must be lists of safe relative paths")
+    forbidden_paths_raw = raw.get("forbidden_paths", [])
+    if not isinstance(forbidden_paths_raw, list) or not all(
+        isinstance(path, str) and _is_safe_relative_path(path) for path in forbidden_paths_raw
+    ):
+        raise ManifestError("forbidden_paths must be a list of safe relative paths")
+    expected_delivery_completed = raw.get("expected_delivery_completed", True)
+    if not isinstance(expected_delivery_completed, bool):
+        raise ManifestError("expected_delivery_completed must be a boolean")
 
     private_values_raw = raw.get("private_values", [])
     if not isinstance(private_values_raw, list) or not all(isinstance(value, str) and value for value in private_values_raw):
@@ -212,6 +234,9 @@ def load_case_manifest(
         provider_tape=tape,
         expected_artifacts=dict(expected_artifacts_raw),
         expected_delivery_contains=_required_string(raw, "expected_delivery_contains"),
+        expected_artifact_diff={field: tuple(paths) for field, paths in expected_artifact_diff_raw.items()},
+        forbidden_paths=tuple(forbidden_paths_raw),
+        expected_delivery_completed=expected_delivery_completed,
         private_values=tuple(private_values_raw),
         tool_faults=dict(tool_faults_raw),
         tool_result_sizes=dict(tool_result_sizes_raw),
@@ -268,3 +293,8 @@ def _required_int(value: dict[str, Any], name: str) -> int:
     if not isinstance(item, int):
         raise ManifestError(f"case manifest.{name} must be an integer")
     return item
+
+
+def _is_safe_relative_path(value: str) -> bool:
+    path = Path(value)
+    return bool(value) and not path.is_absolute() and ".." not in path.parts

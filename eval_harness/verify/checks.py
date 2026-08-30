@@ -149,6 +149,21 @@ def _artifact_gate(manifest: CaseManifest, artifacts_path: Path, trace: list[dic
         for path in artifact_event.get("files", {}) if isinstance(artifact_event.get("files"), dict) else {}:
             if Path(str(path)).is_absolute() or ".." in Path(str(path)).parts:
                 errors.append(f"artifact diff contains an unsafe path: {path}")
+        for field, expected_paths in manifest.expected_artifact_diff.items():
+            actual_paths = artifact_event.get(field)
+            if not isinstance(actual_paths, list):
+                errors.append(f"artifact diff field is not a list: {field}")
+            elif sorted(str(path) for path in actual_paths) != sorted(expected_paths):
+                errors.append(f"artifact diff {field} differs: expected {sorted(expected_paths)}, got {sorted(actual_paths)}")
+        changed_paths = {
+            str(path)
+            for field in ("created", "modified", "deleted")
+            for path in artifact_event.get(field, [])
+            if isinstance(artifact_event.get(field), list)
+        }
+        for forbidden_path in manifest.forbidden_paths:
+            if forbidden_path in changed_paths or (artifacts_path / forbidden_path).exists():
+                errors.append(f"forbidden artifact path was touched: {forbidden_path}")
     return _result(errors)
 
 
@@ -225,7 +240,13 @@ def _security_gate(manifest: CaseManifest, trace_path: Path) -> dict[str, object
 
 def _delivery_gate(manifest: CaseManifest, trace: list[dict[str, Any]]) -> dict[str, object]:
     delivery = next((event.get("data", {}) for event in reversed(trace) if event.get("type") == "final_delivery"), {})
-    content = delivery.get("content", "") if isinstance(delivery, dict) else ""
+    if not isinstance(delivery, dict):
+        return _failed("final delivery event is missing")
+    if delivery.get("completed") is not manifest.expected_delivery_completed:
+        return _failed(
+            f"final delivery completion differs: expected {manifest.expected_delivery_completed}, got {delivery.get('completed')}"
+        )
+    content = delivery.get("content", "")
     if manifest.expected_delivery_contains not in content:
         return _failed("final delivery does not contain the required completion text")
     return _result([])

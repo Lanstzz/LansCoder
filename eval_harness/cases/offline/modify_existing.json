@@ -10,5 +10,8 @@
     {"content": "Updated config.txt.", "finish_reason": "stop", "tool_calls": []}
   ],
   "expected_artifacts": {"config.txt": "enabled\n"},
+  "expected_artifact_diff": {
+    "modified": ["config.txt"]
+  },
   "expected_delivery_contains": "Updated config.txt"
 }

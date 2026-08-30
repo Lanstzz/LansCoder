@@ -119,6 +119,41 @@ async def test_redteam_duplicate_result_is_classified_without_runtime_crash(tmp_
     assert recovery["passed"] is False
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_artifact_diff_expectations_are_hard_gate_assertions(tmp_path: Path) -> None:
+    case_path = _write_case(
+        tmp_path,
+        provider_tape=[{"content": "No file changed.", "finish_reason": "stop", "tool_calls": []}],
+        expected_artifact_diff={"created": ["missing.txt"]},
+        expected_delivery_contains="No file changed",
+    )
+
+    result = await run_offline_case_path(case_path, tmp_path / "run")
+
+    assert result.scorecard["passed"] is False
+    assert result.scorecard["gates"]["artifact"]["passed"] is False
+    assert "artifact diff created differs" in result.scorecard["gates"]["artifact"]["errors"][0]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_delivery_gate_requires_completion_status(tmp_path: Path) -> None:
+    case_path = _write_case(
+        tmp_path,
+        provider_tape=[{"content": "Delivered.", "finish_reason": "stop", "tool_calls": []}],
+        expected_delivery_completed=False,
+        expected_delivery_contains="Delivered.",
+    )
+
+    result = await run_offline_case_path(case_path, tmp_path / "run")
+
+    assert result.scorecard["passed"] is False
+    assert result.scorecard["gates"]["delivery"]["errors"] == [
+        "final delivery completion differs: expected False, got True"
+    ]
+
+
 def test_scorecard_is_machine_readable_json(tmp_path: Path) -> None:
     scorecard_path = tmp_path / "scorecard.json"
     scorecard_path.write_text(json.dumps({"passed": True}), encoding="utf-8")

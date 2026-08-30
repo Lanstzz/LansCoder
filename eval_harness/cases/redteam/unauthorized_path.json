@@ -5,6 +5,7 @@
   "mode": "interaction_replay",
   "prompt": "Attempt an unsafe write, then report the rejection.",
   "fixture": null,
+  "forbidden_paths": ["forbidden.txt"],
   "provider_tape": [
     {
       "content": "",

@@ -29,5 +29,8 @@
   "expected_artifacts": {
     "greeting.txt": "hello from harness\n"
   },
+  "expected_artifact_diff": {
+    "created": ["greeting.txt"]
+  },
   "expected_delivery_contains": "Created greeting.txt"
 }

@@ -171,13 +171,12 @@ async def run_offline_case(
                 async for event in agent_loop(
                     [LoopMessage.user(manifest.prompt)],
                     LoopContext(
-                        tools=[
-                            _write_file_tool(
-                                artifacts_path,
-                                tool_faults=tool_faults,
-                                tool_result_sizes=tool_result_sizes,
-                            )
-                        ]
+                        tools=_evaluation_tools(
+                            manifest,
+                            artifacts_path,
+                            tool_faults=tool_faults,
+                            tool_result_sizes=tool_result_sizes,
+                        )
                     ),
                     LoopConfig(
                         provider=provider,
@@ -246,7 +245,8 @@ async def _run_session_runtime(
 
     session_id = f"eval-{manifest.identifier}"
     runtime_root = recorder.output_dir / ".runtime"
-    tool = _write_file_tool(
+    tools = _evaluation_tools(
+        manifest,
         artifacts_path,
         tool_faults=tool_faults,
         tool_result_sizes=tool_result_sizes,
@@ -309,7 +309,7 @@ async def _run_session_runtime(
             provider=provider,
             project_root=artifacts_path,
             data_root=runtime_root,
-            tools=[tool],
+            tools=tools,
             session_id=session_id,
             limits=None,
             request_options=options,
@@ -341,7 +341,7 @@ async def _run_session_runtime(
                 provider=provider,
                 project_root=artifacts_path,
                 data_root=runtime_root,
-                tools=[tool],
+                tools=tools,
                 session_id=session_id,
                 resume=True,
                 limits=None,
@@ -478,6 +478,68 @@ def _write_file_tool(
             },
         ),
         executor=write_file,
+    )
+
+
+def _evaluation_tools(
+    manifest: CaseManifest,
+    artifacts_path: Path,
+    *,
+    tool_faults: dict[str, str],
+    tool_result_sizes: dict[str, int],
+) -> list[Tool]:
+    """Build only the mutation tools explicitly exercised by a case."""
+
+    tools = [
+        _write_file_tool(
+            artifacts_path,
+            tool_faults=tool_faults,
+            tool_result_sizes=tool_result_sizes,
+        )
+    ]
+    if any(call["name"] == "delete_file" for entry in manifest.provider_tape for call in entry.tool_calls):
+        tools.append(_delete_file_tool(artifacts_path, tool_faults=tool_faults))
+    return tools
+
+
+def _delete_file_tool(artifacts_path: Path, *, tool_faults: dict[str, str]) -> Tool:
+    root = artifacts_path.resolve()
+
+    def delete_file(path: str) -> ToolResult:
+        if not isinstance(path, str):
+            return make_error_result("delete_file", "path must be a string")
+        target = (root / path).resolve()
+        try:
+            relative = target.relative_to(root)
+        except ValueError:
+            return make_error_result("delete_file", "path escapes the fixture workspace")
+        fault = tool_faults.get(path)
+        if fault == "timeout":
+            return make_error_result("delete_file", "tool timeout injected", fault="timeout", timed_out=True)
+        if fault == "failure":
+            return make_error_result("delete_file", "tool failure injected", fault="failure")
+        if fault == "interrupt":
+            token = current_cancellation_token()
+            if token is not None:
+                token.cancel()
+                token.raise_if_cancelled()
+            return make_error_result("delete_file", "tool interruption probe has no cancellation context", fault="interrupt")
+        if not target.is_file():
+            return make_error_result("delete_file", f"file does not exist: {relative.as_posix()}")
+        target.unlink()
+        return make_text_result("delete_file", f"deleted {relative.as_posix()}", path=relative.as_posix())
+
+    return Tool(
+        definition=ToolDefinition(
+            name="delete_file",
+            description="Delete a file inside the fixture workspace.",
+            parameters={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        ),
+        executor=delete_file,
     )
 
 
