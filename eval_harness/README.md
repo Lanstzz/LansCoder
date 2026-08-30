@@ -81,6 +81,35 @@ venv/bin/python -m eval_harness compare \
 
 `run` also accepts `--baseline` and embeds the comparison in its scorecard.
 
+## Historical session and Harbor replay
+
+Extract a historical LansCoder session, an eval `trace.jsonl`, or a Harbor job
+directory containing `lanscoder-session.jsonl`. The output manifest is portable
+and reviewable, but its prompt, provider bodies, and tool arguments are stable
+hash placeholders. Recoverable replay material is encrypted separately; keep
+that file outside the repository and never commit it.
+
+```sh
+export LANSCODER_EVAL_CAPSULE_PASSPHRASE='use-a-local-secret-manager'
+venv/bin/python -m eval_harness extract \
+  --source /path/to/lanscoder-session.jsonl \
+  --output /tmp/portable-case.json \
+  --capsule /tmp/portable-case.capsule \
+  --capsule-passphrase-env LANSCODER_EVAL_CAPSULE_PASSPHRASE
+
+venv/bin/python -m eval_harness run \
+  --case /tmp/portable-case.json \
+  --capsule /tmp/portable-case.capsule \
+  --capsule-passphrase-env LANSCODER_EVAL_CAPSULE_PASSPHRASE \
+  --output /tmp/lanscoder-eval-history
+```
+
+The capsule uses a random salt and nonce, PBKDF2-HMAC-SHA256 key derivation,
+and an authentication tag. A wrong passphrase or modified capsule is rejected
+before replay. `load_case_manifest()` can inspect a portable manifest without a
+passphrase; pass `capsule_path` and `capsule_passphrase` to hydrate it, while
+`run` requires those values for extracted cases.
+
 ## Case and trace boundary
 
 `cases/` contains portable JSON manifests and `fixtures/` contains small,
@@ -94,8 +123,9 @@ hash placeholders. System prompts, tool descriptions, tool arguments, and tool
 result bodies are represented only by redacted placeholders, field summaries,
 and fingerprints. Do not put real user input, API keys, private source, or
 unredacted tool output in a manifest, fixture, trace, or scorecard. The future
-history extractor will keep any original material only in a repository-external
-encrypted capsule.
+unredacted tool output in a manifest, fixture, trace, or scorecard. The history
+extractor keeps recoverable material only in a repository-external encrypted
+capsule.
 
 ## Harbor
 

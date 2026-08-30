@@ -13,8 +13,6 @@ htmlcov/
 .env
 .env.*
 .local/
-agent.md
-agents.md
 text/
 *.log
 dist/
@@ -29,8 +27,6 @@ runs/
 data/
 .tools/
 docs/promo/
-benchmark/runs/
-benchmark/topic_selfplay/runs/
 *.doc
 *.docx
 *.docm
@@ -41,4 +37,9 @@ lanscoder-course/
 handoff.md
 workspace/
 LESSONS.md
-agentops-health-check-2026-08-29
+agentops-health-check-2026-08-29.md
+record.md
+.ai-team/
+.claude/
+.codex/
+.superpowers/
