@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "id": "redteam-duplicate-tool-result",
+  "title": "Classify a duplicate tool result without crashing",
+  "mode": "interaction_replay",
+  "prompt": "Write the duplicate marker and report the duplicate result.",
+  "fixture": null,
+  "provider_tape": [
+    {
+      "content": "",
+      "finish_reason": "tool_calls",
+      "tool_calls": [
+        {"id": "duplicate_result", "name": "write_file", "arguments": {"path": "duplicate.txt", "content": "once\n"}}
+      ]
+    },
+    {
+      "content": "",
+      "finish_reason": "tool_calls",
+      "tool_calls": [
+        {"id": "duplicate_result", "name": "write_file", "arguments": {"path": "duplicate.txt", "content": "once\n"}}
+      ]
+    },
+    {"content": "Duplicate result was classified without a runtime crash.", "finish_reason": "stop", "tool_calls": []}
+  ],
+  "expected_artifacts": {"duplicate.txt": "once\n"},
+  "expected_delivery_contains": "Duplicate result was classified"
+}

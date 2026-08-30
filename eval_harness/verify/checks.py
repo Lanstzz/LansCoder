@@ -53,7 +53,15 @@ def build_scorecard(
                 and event["data"].get("is_error")
             ),
             "elapsed_ms": completed.get("elapsed_ms"),
-            "context_compactions": type_counts["context_compaction"],
+            "context_compactions": type_counts["context_compaction"] + type_counts["context_compaction_l3"],
+            "successful_compactions": sum(
+                1
+                for event in trace
+                if event.get("type") in {"context_compaction", "context_compaction_l3"}
+                and isinstance(event.get("data"), dict)
+                and event["data"].get("status") == "success"
+            ),
+            "session_resumes": type_counts["session_resumed"],
             "recovery_events": len(completed.get("recovery_events", [])) if isinstance(completed.get("recovery_events", []), list) else 0,
             "token_usage": None,
         },
@@ -150,6 +158,7 @@ def _recovery_gate(trace: list[dict[str, Any]]) -> dict[str, object]:
     provider_errors: list[str] = []
     tool_errors: list[str] = []
     interruptions: list[str] = []
+    duplicate_tool_ids: list[str] = []
     compactions = 0
     for event in trace:
         data = event.get("data", {})
@@ -160,6 +169,7 @@ def _recovery_gate(trace: list[dict[str, Any]]) -> dict[str, object]:
             if event.get("type") == "tool_execution_start":
                 if call_id in states:
                     errors.append(f"duplicate tool start: {call_id}")
+                    duplicate_tool_ids.append(call_id)
                 states[call_id] = "started"
             elif event.get("type") == "tool_execution_end":
                 if call_id not in states:
@@ -173,15 +183,17 @@ def _recovery_gate(trace: list[dict[str, Any]]) -> dict[str, object]:
             elif event.get("type") == "tool_execution_update" and data.get("lifecycle") == "interrupted":
                 if call_id not in states:
                     errors.append(f"interrupted tool has no start: {call_id}")
-                elif states[call_id] not in {"started", "ended_error"}:
+                elif states[call_id] not in {"started", "ended_error", "ended"}:
                     errors.append(f"tool interrupted after terminal state: {call_id}")
                 states[call_id] = "interrupted"
                 interruptions.append(call_id)
         if event.get("type") == "provider_error":
             provider_errors.append(str(data.get("kind", "unknown")))
-        if event.get("type") == "context_compaction":
+        if event.get("type") in {"context_compaction", "context_compaction_l3"}:
             compactions += 1
-            if not isinstance(data.get("before_tokens"), int) or not isinstance(data.get("after_tokens"), int):
+            if event.get("type") == "context_compaction" and (
+                not isinstance(data.get("before_tokens"), int) or not isinstance(data.get("after_tokens"), int)
+            ):
                 errors.append("compaction event must include integer token counts")
     unsettled = sorted(call_id for call_id, state in states.items() if state == "started")
     if unsettled:
@@ -194,6 +206,7 @@ def _recovery_gate(trace: list[dict[str, Any]]) -> dict[str, object]:
             "provider_errors": provider_errors,
             "tool_errors": tool_errors,
             "interruptions": interruptions,
+            "duplicate_tool_ids": duplicate_tool_ids,
             "compaction_events": compactions,
         }
     )

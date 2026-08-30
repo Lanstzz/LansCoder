@@ -45,13 +45,27 @@ semantics:
 
 Supported provider faults are `malformed_response`, `timeout`,
 `prompt_too_long`, and `network_error`; tool faults are `timeout`, `failure`,
-and `interrupt`;
-`failure`. Faults are recorded as portable `provider_error`, tool result, or
-`context_compaction` facts. The recovery gate checks that tool starts are
-closed by an end or an interruption and reports provider/tool/compaction
-categories in the scorecard. The compaction option is an explicitly labelled
-deterministic no-op probe in the harness; it is not a substitute for a real
-model compaction run.
+and `interrupt`. Faults are recorded as portable `provider_error`, tool
+result, or `context_compaction` facts. The recovery gate checks that tool
+starts are closed by an end or an interruption and reports provider/tool/
+compaction categories in the scorecard. A manifest with `runtime: "session"`
+uses the headless `create_agent_session` API, so `resume_after_interrupt`
+reopens the same persisted session and `warmup_prompts` can exercise real
+automatic/L3 compaction. The older `enable_compaction` option remains an
+explicit L1 no-op probe for compatibility.
+
+The checked-in red-team set is intentionally small and portable:
+
+```sh
+venv/bin/python -m eval_harness run \
+  --case eval_harness/cases/redteam/malicious_provider_output.json \
+  --output /tmp/lanscoder-eval-redteam-output
+```
+
+It covers secret-bearing provider output, oversized tool results, duplicate
+tool IDs, and path escapes. Duplicate tool IDs are expected to produce a
+failed recovery gate with `duplicate_tool_ids` classification; the trace and
+security facts remain available for diagnosis.
 
 ## Golden replay
 

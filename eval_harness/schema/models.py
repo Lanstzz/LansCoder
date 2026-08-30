@@ -9,6 +9,8 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 SUPPORTED_MODES = frozenset({"interaction_replay", "fresh_model"})
+SUPPORTED_RUNTIME_MODES = frozenset({"l1", "session"})
+SUPPORTED_COMPACTION_STRATEGIES = frozenset({"no_compact", "l1_l2", "l1_l2_l3"})
 SUPPORTED_PROVIDER_FAULTS = frozenset({"malformed_response", "timeout", "prompt_too_long", "network_error"})
 SUPPORTED_TOOL_FAULTS = frozenset({"timeout", "failure", "interrupt"})
 
@@ -42,8 +44,16 @@ class CaseManifest:
     expected_delivery_contains: str
     private_values: tuple[str, ...] = ()
     tool_faults: dict[str, str] = field(default_factory=dict)
+    tool_result_sizes: dict[str, int] = field(default_factory=dict)
     interrupt_after_tool_calls: int | None = None
     enable_compaction: bool = False
+    runtime: str = "l1"
+    resume_after_interrupt: bool = False
+    resume_prompt: str | None = None
+    warmup_prompts: tuple[str, ...] = ()
+    context_window: int | None = None
+    max_output_tokens: int | None = None
+    compaction_strategy: str = "l1_l2_l3"
     capsule_required: bool = False
 
     def identity(self) -> dict[str, object]:
@@ -79,6 +89,9 @@ def load_case_manifest(
     mode = _required_string(raw, "mode")
     if mode not in SUPPORTED_MODES:
         raise ManifestError(f"unsupported case mode {mode!r}")
+    runtime = raw.get("runtime", "l1")
+    if not isinstance(runtime, str) or runtime not in SUPPORTED_RUNTIME_MODES:
+        raise ManifestError(f"runtime must be one of {sorted(SUPPORTED_RUNTIME_MODES)}")
 
     tape_raw = raw.get("provider_tape")
     if not isinstance(tape_raw, list) or not tape_raw:
@@ -104,6 +117,12 @@ def load_case_manifest(
         for call_id, kind in tool_faults_raw.items()
     ):
         raise ManifestError("tool_faults must map call IDs to supported fault kinds")
+    tool_result_sizes_raw = raw.get("tool_result_sizes", {})
+    if not isinstance(tool_result_sizes_raw, dict) or not all(
+        isinstance(call_id, str) and call_id and isinstance(size, int) and not isinstance(size, bool) and 0 <= size <= 2_000_000
+        for call_id, size in tool_result_sizes_raw.items()
+    ):
+        raise ManifestError("tool_result_sizes must map call IDs to integer sizes between 0 and 2000000")
     interrupt_after_tool_calls = raw.get("interrupt_after_tool_calls")
     if interrupt_after_tool_calls is not None and (
         isinstance(interrupt_after_tool_calls, bool)
@@ -114,6 +133,32 @@ def load_case_manifest(
     enable_compaction = raw.get("enable_compaction", False)
     if not isinstance(enable_compaction, bool):
         raise ManifestError("enable_compaction must be a boolean")
+    resume_after_interrupt = raw.get("resume_after_interrupt", False)
+    if not isinstance(resume_after_interrupt, bool):
+        raise ManifestError("resume_after_interrupt must be a boolean")
+    resume_prompt = raw.get("resume_prompt")
+    if resume_prompt is not None and (not isinstance(resume_prompt, str) or not resume_prompt):
+        raise ManifestError("resume_prompt must be a non-empty string or null")
+    warmup_prompts_raw = raw.get("warmup_prompts", [])
+    if not isinstance(warmup_prompts_raw, list) or not all(isinstance(prompt, str) and prompt for prompt in warmup_prompts_raw):
+        raise ManifestError("warmup_prompts must be a list of non-empty strings")
+    if len(warmup_prompts_raw) > 64:
+        raise ManifestError("warmup_prompts cannot contain more than 64 prompts")
+    context_window = raw.get("context_window")
+    if context_window is not None and (isinstance(context_window, bool) or not isinstance(context_window, int) or context_window <= 0):
+        raise ManifestError("context_window must be a positive integer or null")
+    max_output_tokens = raw.get("max_output_tokens")
+    if max_output_tokens is not None and (
+        isinstance(max_output_tokens, bool) or not isinstance(max_output_tokens, int) or max_output_tokens <= 0
+    ):
+        raise ManifestError("max_output_tokens must be a positive integer or null")
+    compaction_strategy = raw.get("compaction_strategy", "l1_l2_l3")
+    if not isinstance(compaction_strategy, str) or compaction_strategy not in SUPPORTED_COMPACTION_STRATEGIES:
+        raise ManifestError(f"compaction_strategy must be one of {sorted(SUPPORTED_COMPACTION_STRATEGIES)}")
+    if runtime == "l1" and (resume_after_interrupt or warmup_prompts_raw or context_window is not None or max_output_tokens is not None):
+        raise ManifestError("session runtime options require runtime='session'")
+    if resume_after_interrupt and (interrupt_after_tool_calls is None or resume_prompt is None):
+        raise ManifestError("resume_after_interrupt requires interrupt_after_tool_calls and resume_prompt")
     capsule = raw.get("capsule")
     capsule_required = isinstance(capsule, dict)
     if capsule is not None:
@@ -169,8 +214,16 @@ def load_case_manifest(
         expected_delivery_contains=_required_string(raw, "expected_delivery_contains"),
         private_values=tuple(private_values_raw),
         tool_faults=dict(tool_faults_raw),
+        tool_result_sizes=dict(tool_result_sizes_raw),
         interrupt_after_tool_calls=interrupt_after_tool_calls,
         enable_compaction=enable_compaction,
+        runtime=runtime,
+        resume_after_interrupt=resume_after_interrupt,
+        resume_prompt=resume_prompt,
+        warmup_prompts=tuple(warmup_prompts_raw),
+        context_window=context_window,
+        max_output_tokens=max_output_tokens,
+        compaction_strategy=compaction_strategy,
         capsule_required=capsule_required,
     )
 

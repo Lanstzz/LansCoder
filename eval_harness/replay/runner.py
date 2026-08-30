@@ -12,11 +12,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from lanscoder.core import LoopConfig, LoopContext, LoopMessage, agent_loop
+from lanscoder.core import LoopConfig, LoopContext, LoopMessage, agent_loop, create_agent_session
+from lanscoder.agent.tool_execution import ToolExecutionEvent
 from lanscoder.core.events import AgentEndEvent, MessageEndEvent, ToolExecutionEndEvent, ToolExecutionStartEvent
 from lanscoder.core.events import ToolExecutionUpdateEvent
 from lanscoder.utils.cancellation import CancellationToken, current_cancellation_token
-from lanscoder.providers.types import ToolDefinition
+from lanscoder.providers.types import MainRequestOptions, ToolDefinition
 from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 
 from eval_harness.replay.provider import ScriptedProvider
@@ -120,6 +121,14 @@ async def run_offline_case(
         and isinstance(call.get("arguments"), dict)
         and isinstance(call["arguments"].get("path"), str)
     }
+    tool_result_sizes = {
+        str(call["arguments"].get("path")): manifest.tool_result_sizes[call["id"]]
+        for entry in manifest.provider_tape
+        for call in entry.tool_calls
+        if call["id"] in manifest.tool_result_sizes
+        and isinstance(call.get("arguments"), dict)
+        and isinstance(call["arguments"].get("path"), str)
+    }
     baseline_artifacts = _snapshot_artifacts(artifacts_path)
     final_delivery = ""
     failure: str | None = None
@@ -130,7 +139,11 @@ async def run_offline_case(
         {
             "case": manifest.identity(),
             "network_policy": "disabled",
-            "runtime": {"api": "lanscoder.core.agent_loop", "session_id": f"eval-{manifest.identifier}"},
+            "runtime": {
+                "api": "lanscoder.core.create_agent_session" if manifest.runtime == "session" else "lanscoder.core.agent_loop",
+                "mode": manifest.runtime,
+                "session_id": f"eval-{manifest.identifier}",
+            },
         },
     )
     recorder.record(
@@ -140,29 +153,47 @@ async def run_offline_case(
             "sha256": _digest(manifest.prompt),
         },
     )
-    if manifest.enable_compaction:
+    if manifest.enable_compaction and manifest.runtime == "l1":
         _record_compaction_probe(recorder)
 
     try:
         with NetworkDisabled() as network_guard:
-            async for event in agent_loop(
-                [LoopMessage.user(manifest.prompt)],
-                LoopContext(tools=[_write_file_tool(artifacts_path, tool_faults=tool_faults)]),
-                LoopConfig(
+            if manifest.runtime == "session":
+                final_delivery, failure = await _run_session_runtime(
+                    manifest,
+                    artifacts_path=artifacts_path,
+                    recorder=recorder,
                     provider=provider,
-                    session_id=f"eval-{manifest.identifier}",
-                    use_streaming=False,
-                ),
-                signal=cancellation,
-            ):
-                recorder.record(event.type, _agent_event_payload(event))
-                if isinstance(event, ToolExecutionStartEvent) and _should_interrupt(manifest, event, recorder.events):
-                    cancellation.cancel()
-                    recorder.record("interrupt_requested", {"after_tool_calls": manifest.interrupt_after_tool_calls})
-                if isinstance(event, MessageEndEvent) and event.message is not None and event.message.role == "assistant":
-                    final_delivery = event.message.content
-                if isinstance(event, AgentEndEvent) and not final_delivery:
-                    final_delivery = _last_assistant_content(event)
+                    tool_faults=tool_faults,
+                    tool_result_sizes=tool_result_sizes,
+                )
+            else:
+                async for event in agent_loop(
+                    [LoopMessage.user(manifest.prompt)],
+                    LoopContext(
+                        tools=[
+                            _write_file_tool(
+                                artifacts_path,
+                                tool_faults=tool_faults,
+                                tool_result_sizes=tool_result_sizes,
+                            )
+                        ]
+                    ),
+                    LoopConfig(
+                        provider=provider,
+                        session_id=f"eval-{manifest.identifier}",
+                        use_streaming=False,
+                    ),
+                    signal=cancellation,
+                ):
+                    recorder.record(event.type, _agent_event_payload(event))
+                    if isinstance(event, ToolExecutionStartEvent) and _should_interrupt(manifest, event, recorder.events):
+                        cancellation.cancel()
+                        recorder.record("interrupt_requested", {"after_tool_calls": manifest.interrupt_after_tool_calls})
+                    if isinstance(event, MessageEndEvent) and event.message is not None and event.message.role == "assistant":
+                        final_delivery = event.message.content
+                    if isinstance(event, AgentEndEvent) and not final_delivery:
+                        final_delivery = _last_assistant_content(event)
         recorder.record("network_guard", {"attempts": network_guard.attempts})
     except Exception as exc:  # noqa: BLE001 - failures must be recorded for verifier evidence.
         failure = f"{type(exc).__name__}: {exc}"
@@ -179,7 +210,9 @@ async def run_offline_case(
             "provider_calls": provider.calls,
             "tool_calls": sum(event.get("type") == "tool_execution_start" for event in recorder.events),
             "elapsed_ms": round((time.monotonic() - started_at) * 1000, 3),
-            "compaction_events": sum(event.get("type") == "context_compaction" for event in recorder.events),
+            "compaction_events": sum(
+                event.get("type") in {"context_compaction", "context_compaction_l3"} for event in recorder.events
+            ),
             "recovery_events": _recovery_summary(recorder.events),
             "failure": failure,
         },
@@ -196,6 +229,174 @@ async def run_offline_case(
         artifacts_path=artifacts_path,
         scorecard=scorecard,
     )
+
+
+async def _run_session_runtime(
+    manifest: CaseManifest,
+    *,
+    artifacts_path: Path,
+    recorder: TraceRecorder,
+    provider: ScriptedProvider,
+    tool_faults: dict[str, str],
+    tool_result_sizes: dict[str, int],
+) -> tuple[str, str | None]:
+    """Run a persistent L3 session, optionally interrupting and reopening it."""
+
+    from lanscoder.context.store import JsonlSessionStore
+
+    session_id = f"eval-{manifest.identifier}"
+    runtime_root = recorder.output_dir / ".runtime"
+    tool = _write_file_tool(
+        artifacts_path,
+        tool_faults=tool_faults,
+        tool_result_sizes=tool_result_sizes,
+    )
+    options = MainRequestOptions(max_tokens=manifest.max_output_tokens)
+    seen_session_events: set[str] = set()
+    interrupt_requested = False
+    active_runner = None
+    final_delivery = ""
+
+    def on_tool_event(event: ToolExecutionEvent) -> None:
+        nonlocal interrupt_requested
+        if event.kind == "started":
+            recorder.record(
+                "tool_execution_start",
+                {
+                    "tool_call_id": event.tool_call.id,
+                    "tool_name": event.tool_call.name,
+                    "arguments_sha256": _digest_json(event.tool_call.arguments),
+                    "argument_keys": sorted(event.tool_call.arguments) if isinstance(event.tool_call.arguments, dict) else [],
+                },
+            )
+            if not interrupt_requested and _should_interrupt(
+                manifest,
+                ToolExecutionStartEvent(
+                    tool_call_id=event.tool_call.id,
+                    tool_name=event.tool_call.name,
+                    args=event.tool_call.arguments,
+                ),
+                recorder.events,
+            ):
+                interrupt_requested = True
+                recorder.record("interrupt_requested", {"after_tool_calls": manifest.interrupt_after_tool_calls})
+                if active_runner is not None:
+                    active_runner.cancel_current_turn()
+            return
+        if event.kind == "finished":
+            recorder.record(
+                "tool_execution_end",
+                {
+                    "tool_call_id": event.tool_call.id,
+                    "tool_name": event.tool_call.name,
+                    "result": _tool_result_payload(event.result),
+                    "is_error": event.result is not None and not event.result.ok,
+                },
+            )
+            return
+        recorder.record(
+            "tool_execution_update",
+            {
+                "tool_call_id": event.tool_call.id,
+                "tool_name": event.tool_call.name,
+                "lifecycle": event.kind,
+                "result": _tool_result_payload(event.result) if event.result is not None else None,
+            },
+        )
+
+    try:
+        handle = create_agent_session(
+            provider=provider,
+            project_root=artifacts_path,
+            data_root=runtime_root,
+            tools=[tool],
+            session_id=session_id,
+            limits=None,
+            request_options=options,
+            context_window=manifest.context_window,
+            compaction_strategy=manifest.compaction_strategy,
+        )
+        active_runner = handle.runner
+        active_runner.tool_event_handler = on_tool_event
+        store = JsonlSessionStore(runtime_root)
+
+        for prompt in manifest.warmup_prompts:
+            await active_runner.arun_user_turn(prompt)
+            _record_session_compaction_events(store, session_id, recorder, seen_session_events)
+
+        first_response = await active_runner.arun_user_turn(manifest.prompt)
+        final_delivery = first_response.content
+        _record_session_compaction_events(store, session_id, recorder, seen_session_events)
+
+        if manifest.resume_after_interrupt:
+            recorder.record(
+                "session_resumed",
+                {
+                    "session_id": session_id,
+                    "interrupted": interrupt_requested,
+                    "history_messages": len(handle.session.rebuild_view().messages),
+                },
+            )
+            resumed = create_agent_session(
+                provider=provider,
+                project_root=artifacts_path,
+                data_root=runtime_root,
+                tools=[tool],
+                session_id=session_id,
+                resume=True,
+                limits=None,
+                request_options=options,
+                context_window=manifest.context_window,
+                compaction_strategy=manifest.compaction_strategy,
+            )
+            active_runner = resumed.runner
+            active_runner.tool_event_handler = on_tool_event
+            resumed_response = await active_runner.arun_user_turn(manifest.resume_prompt or "继续完成当前任务。")
+            final_delivery = resumed_response.content
+            _record_session_compaction_events(store, session_id, recorder, seen_session_events)
+        return final_delivery, None
+    except Exception as exc:  # noqa: BLE001 - the trace must preserve runtime failures.
+        failure = f"{type(exc).__name__}: {exc}"
+        recorder.record("runtime_exception", {"kind": type(exc).__name__, "message": str(exc)})
+        return final_delivery, failure
+    finally:
+        shutil.rmtree(runtime_root, ignore_errors=True)
+
+
+def _record_session_compaction_events(
+    store: Any,
+    session_id: str,
+    recorder: TraceRecorder,
+    seen_event_ids: set[str],
+) -> None:
+    """Project persisted compaction events into portable, body-free trace facts."""
+
+    for event in store.list_events(session_id):
+        if event.id in seen_event_ids:
+            continue
+        seen_event_ids.add(event.id)
+        if event.type not in {"compaction_completed", "llm_compaction_completed"}:
+            continue
+        nested = event.payload.get("event")
+        nested = nested if isinstance(nested, dict) else {}
+        is_programmatic = event.type == "compaction_completed"
+        recorder.record(
+            "context_compaction" if is_programmatic else "context_compaction_l3",
+            {
+                "trigger": event.payload.get("trigger"),
+                "status": event.payload.get("status") or nested.get("status"),
+                "reason": event.payload.get("reason") or nested.get("failure_reason"),
+                "before_tokens": event.payload.get("before_tokens") if is_programmatic else None,
+                "after_tokens": event.payload.get("after_tokens") if is_programmatic else None,
+                "changed_parts": nested.get("changed_parts") if is_programmatic else None,
+                "levels_attempted": nested.get("levels_attempted", []) if is_programmatic else [],
+                "stopped_at": nested.get("stopped_at") if is_programmatic else None,
+                "noop": nested.get("noop") if is_programmatic else None,
+                "deduped": nested.get("deduped") if is_programmatic else None,
+                "checkpoint_created": bool(event.payload.get("checkpoint_id") or nested.get("checkpoint_id")),
+                "actual_runtime_event": True,
+            },
+        )
 
 
 def run_case_sync(
@@ -231,9 +432,15 @@ def _prepare_artifacts(manifest: CaseManifest, *, case_path: str | Path | None, 
     shutil.copytree(fixture_path, artifacts_path)
 
 
-def _write_file_tool(artifacts_path: Path, *, tool_faults: dict[str, str] | None = None) -> Tool:
+def _write_file_tool(
+    artifacts_path: Path,
+    *,
+    tool_faults: dict[str, str] | None = None,
+    tool_result_sizes: dict[str, int] | None = None,
+) -> Tool:
     root = artifacts_path.resolve()
     configured_faults = tool_faults or {}
+    configured_result_sizes = tool_result_sizes or {}
 
     def write_file(path: str, content: str) -> ToolResult:
         if not isinstance(path, str) or not isinstance(content, str):
@@ -256,7 +463,9 @@ def _write_file_tool(artifacts_path: Path, *, tool_faults: dict[str, str] | None
             return make_error_result("write_file", "tool interruption probe has no cancellation context", fault="interrupt")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
-        return make_text_result("write_file", f"wrote {relative.as_posix()}", path=relative.as_posix(), bytes=len(content.encode("utf-8")))
+        result_size = configured_result_sizes.get(path)
+        result_content = f"wrote {relative.as_posix()}" if result_size is None else "x" * result_size
+        return make_text_result("write_file", result_content, path=relative.as_posix(), bytes=len(content.encode("utf-8")))
 
     return Tool(
         definition=ToolDefinition(
@@ -387,6 +596,10 @@ def _recovery_summary(events: list[dict[str, object]]) -> list[dict[str, object]
             summary.append({"kind": "interrupt", "tool_call_id": data.get("tool_call_id")})
         elif event_type == "context_compaction":
             summary.append({"kind": "compaction", "status": data.get("status") if isinstance(data, dict) else None})
+        elif event_type == "context_compaction_l3":
+            summary.append({"kind": "compaction_l3", "status": data.get("status") if isinstance(data, dict) else None})
+        elif event_type == "session_resumed":
+            summary.append({"kind": "session_resume", "interrupted": data.get("interrupted") if isinstance(data, dict) else None})
     return summary
 
 
