@@ -40,7 +40,7 @@ class ContextCompactMode(StrEnum):
 
 
 class CompactionStrategy(StrEnum):
-    """上下文压缩策略开关(LoCoBench 评估 A/B 用,默认保持全量行为)。
+    """上下文压缩策略开关(基准 A/B 用,默认保持全量行为)。
 
     - ``NO_COMPACT``:完全不压缩(上下文无界增长,测量基线)。
     - ``L1_L2``:仅规则式压缩(L1 路由压缩 + L2 归档占位);规则压不达标时

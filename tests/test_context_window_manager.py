@@ -1191,7 +1191,7 @@ def test_manager_hard_truncate_falls_through_when_all_recent(tmp_path: Path) -> 
     assert not any(event.type == "checkpoint_created" for event in store.list_events("sess_test"))
 
 
-# -- CompactionStrategy 开关(Phase 2: LoCoBench 评估 A/B) ----------------
+# -- CompactionStrategy 开关(基准 A/B) ------------------------------------
 
 def test_manager_no_compact_strategy_skips_without_events(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)

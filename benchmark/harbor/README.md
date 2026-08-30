@@ -39,7 +39,7 @@ PYTHONPATH="$PWD" venv/bin/harbor run \
   -a benchmark.harbor.lanscoder_agent:LansCoderHarborAgent \
   --plugin benchmark.harbor.aider_feedback_plugin:AiderFeedbackPlugin \
   -m gpt-5.6-luna -n 2 -k 1 \
-  --ak max_tool_rounds=120 --ak reasoning_effort=high \
+  --ak reasoning_effort=high \
   -o benchmark/runs/harbor/aider-polyglot-feedback -y
 ```
 
@@ -87,7 +87,7 @@ zsh -lic 'export PYTHONPATH="$PWD"; venv/bin/harbor run \
   -i TASK_NAME \
   -a benchmark.harbor.lanscoder_agent:LansCoderHarborAgent \
   -m Yuren/gpt-5.6-terra \
-  -n 1 -k 1 --ak max_tool_rounds=120 --ak reasoning_effort=medium \
+  -n 1 -k 1 --ak reasoning_effort=medium \
   --agent-setup-timeout-multiplier 3 \
   --ae LANSCODER_PROVIDER_NAME=PROVIDER \
   --ae LANSCODER_MODEL=gpt-5.6-terra \
@@ -104,6 +104,10 @@ results is explicitly intended.
 `reasoning_effort` is optional and is passed to LansCoder as a provider-specific
 model request field. Whether values such as `low`, `medium`, or `high` are
 accepted depends on the selected provider/model.
+
+The benchmark preset is `max_tool_rounds=120`, `max_provider_calls=120`, and
+`max_turn_seconds=3600`. Override any one value with Harbor agent kwargs, for
+example `--ak max_turn_seconds=5400` for a deliberately slower task.
 
 ## Reuse dependencies across trials
 
@@ -155,4 +159,14 @@ Verify the agent log and verifier result before increasing concurrency.
 - **Harbor 0.18.0 汇总表 bug**:task 名含 `__`(如 `psf__requests-1142`)时 `harbor run` 打印汇总表崩溃(`_format_group_title` 拆分 eval key 出错);任务本身已完成,直接读 `jobs_dir/<ts>/result.json` 与 trial `result.json`。
 - **会话/压缩数据**:适配器把 session 导出到容器 `/logs/agent/lanscoder-session.jsonl`(含工具调用/CompactionEvent);运行加 `--agent-include-logs '*.jsonl'` 即可抓取(比 `--artifact` 简单)。
 - **工作区源码注入(重要)**:容器默认装的是 PyPI `lanscoder-core`,不是工作区代码——必须让 staging 生成 `lanscoder-core` pyproject(打包工作区 `lanscoder/`),否则 `--context-window/--compaction-strategy` 等新参数不生效。已修:适配器 `_stage_local_source` 写 staged pyproject(依赖含 anyio/portalocker/PyYAML/openai/anthropic/mcp/textual/prompt_toolkit/tomlkit/python-dotenv)。
-- **最小冒烟命令**:`harbor run -p ~/.cache/harbor/tasks/packages/swe-bench/<task> -a benchmark.harbor.lanscoder_agent:LansCoderHarborAgent -m deepseek/deepseek-v4-flash -n 1 -k 1 --ak max_tool_rounds=120 --agent-setup-timeout-multiplier 3 --ae LANSCODER_PROVIDER_NAME=deepseek --ae LANSCODER_MODEL=deepseek-v4-flash --ae LANSCODER_BASE_URL=https://api.deepseek.com --ae "LANSCODER_API_KEY=\${LANSCODER_API_KEY}" --ae LANSCODER_DISABLE_GLOBAL_SKILLS=1 --mounts '[{"type":"bind","source":"'$HOME'/.cache/lanscoder-harbor","target":"/opt/lanscoder-cache"}]' -o benchmark/runs/harbor/<run> -y`
+- **最小冒烟命令**:`harbor run -p ~/.cache/harbor/tasks/packages/swe-bench/<task> -a benchmark.harbor.lanscoder_agent:LansCoderHarborAgent -m deepseek/deepseek-v4-flash -n 1 -k 1 --agent-setup-timeout-multiplier 3 --ae LANSCODER_PROVIDER_NAME=deepseek --ae LANSCODER_MODEL=deepseek-v4-flash --ae LANSCODER_BASE_URL=https://api.deepseek.com --ae "LANSCODER_API_KEY=\${LANSCODER_API_KEY}" --ae LANSCODER_DISABLE_GLOBAL_SKILLS=1 --mounts '[{"type":"bind","source":"'$HOME'/.cache/lanscoder-harbor","target":"/opt/lanscoder-cache"}]' -o benchmark/runs/harbor/<run> -y`
+
+## SWE-bench Pro 接入注意事项(2026-08-30 冒烟实测)
+
+- **数据集**:Harbor Hub 官方 `scale-ai/swe-bench-pro`(731 题,public);`harbor dataset download scale-ai/swe-bench-pro --cache`。下载 100 并发经代理会掉线,分轮重跑累积即可;不一定要全量,先凑够要跑的任务。
+- **镜像**:DockerHub `jefzda/sweap-images:<tag>`(预构建,~2.3GB,amd64-only → `DOCKER_DEFAULT_PLATFORM=linux/amd64`)。大层经 mirror 频繁 `short read: unexpected EOF` 或挂死,用"看门狗"循环拉取(120s 无日志增长 kill 重启,已下载层续传)。
+- **精简镜像两个坑(适配器已修)**:
+  - 无 curl/wget、只有旧 python3.9+pip → bootstrap 在无 ≥3.11 python 时用系统包管理器装 python3.11,install_uv 增加 python3-pip 兜底;
+  - 内置私有 pip 索引 `http://127.0.0.1:9876/`(容器内不可达)→ install 命令强制 `PIP_INDEX_URL=https://pypi.org/simple`(可用 `PIP_INDEX_URL_OVERRIDE` 覆盖)。
+- **冒烟结论**:qutebrowser-0b621c 用 deepseek-v4-flash + 200K + l1_l2_l3 → reward 1.0(21/21),会话峰值 ~31K chars/4,压缩 0。**SWE-bench(含 Pro)单会话上下文天然 ~30–50K chars/4,200K/60K 不触发压缩;触发临界窗口 = 任务峰值/(0.9×0.95) 附近(本任务 ≈40K,压到 32K 会触发)**。Phase 4 A/B 先测峰值再定窗口。
+- **后台运行**:不要用 `nohup` 从 exec 会话启动 harbor run(会话结束会被杀);直接前台长会话轮询,或用 launchctl(绝对路径)。
