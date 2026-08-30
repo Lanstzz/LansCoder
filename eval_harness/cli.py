@@ -8,8 +8,11 @@ import json
 import os
 from pathlib import Path
 
+from eval_harness.canary.runner import run_canary_sync
+from eval_harness.live import run_fresh_model_case_sync
 from eval_harness.replay.extractor import extract_replay_case
 from eval_harness.replay.runner import run_case_sync
+from eval_harness.schema.models import load_case_manifest
 from eval_harness.trace.canonicalize import canonical_json, load_trace
 from eval_harness.verify.checks import compare_scorecards
 
@@ -17,12 +20,22 @@ from eval_harness.verify.checks import compare_scorecards
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="eval_harness", description="Offline-first LansCoder evaluation harness")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    run_parser = subparsers.add_parser("run", help="run one offline interaction replay case")
+    run_parser = subparsers.add_parser("run", help="run one interaction replay or fresh_model case")
     run_parser.add_argument("--case", type=Path, required=True, help="portable JSON case manifest")
     run_parser.add_argument("--output", type=Path, required=True, help="new directory for trace, scorecard, and artifacts")
+    run_parser.add_argument("--project", type=Path, default=Path("."), help="project root for provider config")
+    run_parser.add_argument("--model", help="model reference for fresh_model, for example provider/model")
+    run_parser.add_argument("--max-tool-rounds", type=_positive_int, default=120)
+    run_parser.add_argument("--max-provider-calls", type=_positive_int, default=120)
+    run_parser.add_argument("--max-turn-seconds", type=_positive_float, default=3600)
     run_parser.add_argument("--baseline", type=Path, help="optional baseline scorecard for regression comparison")
     run_parser.add_argument("--capsule", type=Path, help="encrypted capsule for an extracted history case")
     run_parser.add_argument("--capsule-passphrase-env", help="read the capsule passphrase from this environment variable")
+    canary_parser = subparsers.add_parser("canary", help="run a batch of direct fresh_model canary cases")
+    canary_parser.add_argument("--config", type=Path, required=True, help="canary JSON configuration")
+    canary_parser.add_argument("--output", type=Path, required=True, help="new directory for canary runs and summary")
+    canary_parser.add_argument("--project", type=Path, default=Path("."), help="project root for provider config")
+    canary_parser.add_argument("--model", help="override the model in the canary config")
     extract_parser = subparsers.add_parser("extract", help="extract a redacted replay case from a session or Harbor trace")
     extract_parser.add_argument("--source", type=Path, required=True, help="LansCoder session JSONL, eval trace JSONL, Harbor trace, or containing directory")
     extract_parser.add_argument("--output", type=Path, required=True, help="portable JSON case manifest")
@@ -40,10 +53,29 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run":
         baseline = _load_json(args.baseline) if args.baseline is not None else None
         passphrase = _passphrase(args.capsule_passphrase_env) if args.capsule is not None else None
-        result = run_case_sync(args.case, args.output, baseline_scorecard=baseline, capsule_path=args.capsule, capsule_passphrase=passphrase)
+        manifest = load_case_manifest(args.case, capsule_path=args.capsule, capsule_passphrase=passphrase)
+        if manifest.mode == "fresh_model":
+            if args.capsule is not None:
+                raise ValueError("fresh_model cases cannot use replay capsules")
+            result = run_fresh_model_case_sync(
+                args.case,
+                args.output,
+                project_root=args.project,
+                model_ref=args.model,
+                baseline_scorecard=baseline,
+                max_tool_rounds=args.max_tool_rounds,
+                max_provider_calls=args.max_provider_calls,
+                max_turn_seconds=args.max_turn_seconds,
+            )
+        else:
+            result = run_case_sync(args.case, args.output, baseline_scorecard=baseline, capsule_path=args.capsule, capsule_passphrase=passphrase)
         print(json.dumps(result.scorecard, ensure_ascii=False, sort_keys=True))
         comparison = result.scorecard.get("comparison")
         return 0 if result.scorecard["passed"] and (comparison is None or comparison.get("passed")) else 1
+    if args.command == "canary":
+        result = run_canary_sync(args.config, args.output, project_root=args.project, model_ref=args.model)
+        print(json.dumps(result.summary, ensure_ascii=False, sort_keys=True))
+        return 0 if result.summary["passed"] else 1
     if args.command == "extract":
         result = extract_replay_case(
             args.source,
@@ -90,3 +122,23 @@ def _passphrase(environment_name: str | None) -> str:
             raise ValueError(f"capsule passphrase environment variable is empty or missing: {environment_name}")
         return value
     return getpass.getpass("Capsule passphrase: ")
+
+
+def _positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive number") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive number")
+    return parsed
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed

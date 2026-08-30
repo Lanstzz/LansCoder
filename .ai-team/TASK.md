@@ -105,6 +105,8 @@ Trace 与 case 分离：case 是可执行输入和断言，trace 是本次运行
 - **D9 (用户已确认，已实施)**：文档是重构交付的一部分：更新根 `README.md` 的 benchmark 入口和状态，新增完整 `eval_harness/README.md`，并迁移/重写 Harbor adapter 文档；文档中的命令、路径、参数和 trace schema 必须与实现一致。
 - **D10（本 checkpoint 实施）**：v1 portable trace 对 system prompt、工具描述、工具参数与工具结果正文一律不保留原文；使用 redacted placeholder、字段摘要和稳定 SHA-256 指纹，保留 verifier 所需的生命周期、状态与完整性事实。
 - **D11（本 checkpoint 实施）**：真实 resume/compaction case 显式声明 `runtime: "session"`；runner 只持久化到 fresh run 的临时 runtime 目录并在投影 compaction facts 后删除，避免 session 原始内容进入 portable trace。重复 tool ID 作为 red-team 负例保留失败 scorecard，但必须输出可分类的 recovery evidence。
+- **D12（本 checkpoint 实施）**：live model canary 使用与离线相同的五类 hard gate，但对真实模型只做阈值/统计比较，不做全文 trace golden；Harbor 按 provider/model/config、dataset/task set、repetition、repair policy 和环境版本组成显式 matrix，并将 agent failure 与 provider/infra/timeout/missing-result 分开统计。
+- **D13（本 checkpoint 实施）**：`fresh_model` 由 eval harness 直接装配 LansCoder provider，使用 normal model catalog、`api_key`/`api_key_env` 和独立 canary config；Harbor 不作为其依赖，`canary` 命令仅批量编排 direct fresh-model runs。
 
 ## Completed
 
@@ -134,14 +136,18 @@ Trace 与 case 分离：case 是可执行输入和断言，trace 是本次运行
 - [x] 补齐 trace verifier 对 config/runtime identity、provider/tool lifecycle、异常恢复、最终交付和 integrity 的完整覆盖，并继续保持 portable trace 脱敏。
 - [x] 实现历史 session/Harbor trace 的脱敏 case extractor 和 local encrypted capsule 约定。
 - [x] 补充 red-team case；之后再设计 live model canary 和 Harbor regression matrix。
-- [ ] 设计 live model canary 和 Harbor regression matrix（不在本 checkpoint 范围内）。
+- [x] 设计 live model canary 和 Harbor regression matrix；设计文档明确 `fresh_model` 后续 runner 的输入、五类 hard gate、统计/基线规则、Harbor H0-H4 cells、结果分类和证据留存边界。
 - [x] 更新根 `README.md`，新增 `eval_harness/README.md`，并迁移/重写 Harbor 使用与复现文档。
 - [x] 扩展 deterministic offline golden 集：补充无工具完成、单/多文件写入、fixture 修改/覆盖、失败后重试、重复写入、嵌套 Unicode、多轮工具调用和越权路径拒绝等 case；删除仓库工作区中的历史 `benchmark/` 运行产物目录。
 - [x] 实现历史 session/Harbor trace 脱敏 case extractor 与 local encrypted capsule：支持 LansCoder session JSONL、fresh trace JSONL、Harbor job 目录，portable manifest 只保留 hash 占位符，运行时显式解密 capsule。
 
+## Completed this checkpoint
+
+- [x] 实现不依赖 Harbor 的 `fresh_model` runner、真实 provider interaction recorder、token usage scorecard、单 case CLI 分派、批量 `canary` 命令和 checked-in canary config；通过 fake provider 集成测试与 DeepSeek 真实 provider smoke 验证。
+
 ## Next step
 
-设计 live model canary 和 Harbor regression matrix。当前 checkpoint 已完成 trace verifier 完整覆盖、artifact/delivery 断言、真实 session resume/L3 compaction 与 red-team 基础集；新增 case 继续只经公开 runtime 接口运行，不改 AgentLoop 回合语义。
+按设计文档运行并维护 live canary 与 Harbor H1-H4 regression matrix；优先固定 provider/model/config lineage 和任务集，再扩大 repetitions。当前 checkpoint 已完成不依赖 Harbor 的 `fresh_model` runner、canary 执行配置、live provider trace 录制、trace verifier 完整覆盖、artifact/delivery 断言、真实 session resume/L3 compaction 与 red-team 基础集；不改 AgentLoop 回合语义。
 
 ## Verification
 
@@ -156,9 +162,13 @@ Trace 与 case 分离：case 是可执行输入和断言，trace 是本次运行
 - [x] focused eval tests：`tests/test_eval_harness.py` → 31 passed；覆盖 session resume、真实 L3 compaction、四个 red-team case、created/modified/deleted diff、forbidden path 和 delivery completion。red-team CLI smoke：malicious/oversized/unauthorized exit 0，duplicate exit 1 且 `duplicate_tool_ids` 可见；L3 compaction probe 已改为显式 `prompt_too_long` 注入，避免 CI token 水位差异导致测试不稳定（2026-08-31）。
 - [x] trace verifier focused tests：`tests/test_eval_harness.py` → 36 passed；新增 identity 缺失、provider outcome 缺失、tool orphan/lifecycle、final delivery 篡改和 integrity footer 篡改负例；同时验证工具参数 schema 不保留原文（2026-08-31）。
 - [x] history extractor/capsule focused tests：`tests/test_eval_extractor.py tests/test_eval_harness.py` → 28 passed；`ruff check eval_harness tests/test_eval_extractor.py` → All checks passed；覆盖 session/trace/Harbor 目录抽取、capsule hydrate/replay、CLI 口令环境变量、错误口令与篡改拒绝（2026-08-30）。
+- [x] 本 checkpoint 实际验证：`venv/bin/pytest` → 1784 passed in 59.23s；`venv/bin/ruff check .` → All checks passed；`node .ai-team/check.mjs --base 3cfbce37e1227a2ec9a2193ea7e02be6a57001bf` → valid，functional progress 11/11；`node .ai-team/session.mjs validate` → valid/enabled，无 errors（2026-08-31）。系统解释器直接执行 `pytest` 因环境缺少 `yaml` 在收集阶段失败，项目 `venv` 验证通过。
+- [x] fresh model focused tests：`tests/test_eval_live.py tests/test_eval_harness.py tests/test_eval_extractor.py` → 46 passed；覆盖 direct fresh-model trace、token usage、批量 repetitions、config API key env resolution 与 Harbor-free execution（2026-08-31）。
+- [x] 真实 provider smoke：`export all_proxy=http://127.0.0.1:7890 && venv/bin/python -m eval_harness canary --config eval_harness/canary.json --project . --output /private/tmp/lanscoder-live-smoke-20260831-01` → exit 0；DeepSeek `deepseek-v4-flash`，1 case/1 repetition，五类 gate 全绿，2 provider calls、1 tool call、0 provider/tool errors、token usage 5059/146/5205；生成 trace、scorecard、artifacts（2026-08-31）。
+- [x] 本 checkpoint 最终验证：`venv/bin/pytest` → 1788 passed in 57.34s；`venv/bin/ruff check .` → All checks passed；`git diff --check` → 通过（2026-08-31）。
 
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: 在既有最小离线闭环上完成 deterministic provider/tool fault probe、interrupt lifecycle verifier、artifact diff 校验、compaction no-op probe、scorecard recovery metrics 与 baseline compare CLI；前一 checkpoint 新增历史 session/trace/Harbor 目录 extractor、hash-only portable manifest、PBKDF2/HMAC 加密 capsule 与显式 hydrate/replay；随后补充真实 session resume/L3 compaction、red-team 基础集、创建/修改/删除/禁止路径和 delivery completion hard gate，并将 compaction probe 改为显式 provider fault 以消除 CI 水位差异。本 checkpoint 补齐 trace verifier 的 identity、provider/tool lifecycle、异常恢复、最终交付和 integrity 覆盖，并将工具参数 schema 脱敏为占位符加指纹；全量 pytest（1784）、ruff、仓库门禁和私有 session 校验均通过。不改 AgentLoop 回合语义或 core 公共字段；下一步是 live model canary 与 Harbor regression matrix。
+- Summary: 在既有最小离线闭环上完成 deterministic provider/tool fault probe、interrupt lifecycle verifier、artifact diff 校验、compaction no-op probe、scorecard recovery metrics 与 baseline compare CLI；前一 checkpoint 新增历史 session/trace/Harbor 目录 extractor、hash-only portable manifest、PBKDF2/HMAC 加密 capsule 与显式 hydrate/replay；随后补充真实 session resume/L3 compaction、red-team 基础集、创建/修改/删除/禁止路径和 delivery completion hard gate，并将 compaction probe 改为显式 provider fault 以消除 CI 水位差异。本 checkpoint 补齐 trace verifier 的 identity、provider/tool lifecycle、异常恢复、最终交付和 integrity 覆盖，完成 live model canary 与 Harbor regression matrix 设计，并实现不依赖 Harbor 的 `fresh_model` direct provider runner、真实 interaction recorder、token usage scorecard、单 case/批量 canary CLI 与 config。DeepSeek 真实 smoke、1788 项全量测试、ruff、diff 检查均通过；不改 AgentLoop 回合语义或 core 公共字段。任务状态切回 handoff，下一步是按 H1-H4 执行并维护 live canary/Harbor regression matrix。

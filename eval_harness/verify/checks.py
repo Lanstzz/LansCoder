@@ -40,6 +40,7 @@ def build_scorecard(
     completed = next((event.get("data", {}) for event in reversed(trace) if event.get("type") == "run_completed"), {})
     if not isinstance(completed, dict):
         completed = {}
+    token_usage = _token_usage(trace)
     scorecard: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "passed": all(bool(gate.get("passed")) for gate in verification.values()),
@@ -66,12 +67,29 @@ def build_scorecard(
             ),
             "session_resumes": type_counts["session_resumed"],
             "recovery_events": len(completed.get("recovery_events", [])) if isinstance(completed.get("recovery_events", []), list) else 0,
-            "token_usage": None,
+            "token_usage": token_usage,
         },
     }
     if comparison is not None:
         scorecard["comparison"] = comparison
     return scorecard
+
+
+def _token_usage(trace: list[dict[str, Any]]) -> dict[str, int] | None:
+    totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    found = False
+    for event in trace:
+        if event.get("type") != "provider_response" or not isinstance(event.get("data"), dict):
+            continue
+        usage = event["data"].get("usage")
+        if not isinstance(usage, dict):
+            continue
+        for field in totals:
+            value = usage.get(field)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                totals[field] += value
+                found = True
+    return totals if found else None
 
 
 def compare_scorecards(baseline: dict[str, Any], current: dict[str, Any]) -> dict[str, object]:
@@ -204,23 +222,32 @@ def _validate_run_identity(manifest: CaseManifest, data: dict[str, Any], errors:
             if runtime.get(field) != expected:
                 errors.append(f"runtime identity field differs: {field}")
 
-    expected_config = {
-        "provider": "scripted",
-        "model": "offline-tape-v1",
-        "streaming": False,
-        "context_window": manifest.context_window,
-        "max_output_tokens": manifest.max_output_tokens,
-        "compaction_strategy": manifest.compaction_strategy,
-    }
     config = data.get("config")
     if not isinstance(config, dict):
         errors.append("run_started is missing config identity")
     else:
+        if manifest.mode == "interaction_replay":
+            expected_config = {"provider": "scripted", "model": "offline-tape-v1"}
+        else:
+            expected_config = {}
+            if not isinstance(config.get("provider"), str) or not config.get("provider"):
+                errors.append("fresh_model config must identify a provider")
+            if not isinstance(config.get("model"), str) or not config.get("model"):
+                errors.append("fresh_model config must identify a model")
         for field, expected in expected_config.items():
             if config.get(field) != expected:
                 errors.append(f"config identity field differs: {field}")
-    if data.get("network_policy") != "disabled":
-        errors.append("run_started must declare the disabled network policy")
+        expected_runtime_config = {"streaming": False, "compaction_strategy": manifest.compaction_strategy}
+        if manifest.mode == "interaction_replay" or manifest.context_window is not None:
+            expected_runtime_config["context_window"] = manifest.context_window
+        if manifest.mode == "interaction_replay" or manifest.max_output_tokens is not None:
+            expected_runtime_config["max_output_tokens"] = manifest.max_output_tokens
+        for field, expected in expected_runtime_config.items():
+            if config.get(field) != expected:
+                errors.append(f"config identity field differs: {field}")
+    expected_network_policy = "disabled" if manifest.mode == "interaction_replay" else "enabled"
+    if data.get("network_policy") != expected_network_policy:
+        errors.append(f"run_started must declare the {expected_network_policy} network policy")
 
 
 def _validate_provider_interactions(
@@ -636,8 +663,9 @@ def _security_gate(manifest: CaseManifest, trace_path: Path) -> dict[str, object
     leaked = [value for value in manifest.private_values if value in content]
     if leaked:
         return _failed("portable trace contains a registered private value")
-    if '"network_policy":"disabled"' not in content.replace(" ", ""):
-        return _failed("trace does not declare the offline network policy")
+    expected_policy = "disabled" if manifest.mode == "interaction_replay" else "enabled"
+    if f'"network_policy":"{expected_policy}"' not in content.replace(" ", ""):
+        return _failed(f"trace does not declare the {expected_policy} network policy")
     return _result([])
 
 

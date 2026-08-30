@@ -8,14 +8,17 @@ import json
 import shutil
 import socket
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from lanscoder.core import LoopConfig, LoopContext, LoopMessage, agent_loop, create_agent_session
+from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.tool_execution import ToolExecutionEvent
 from lanscoder.core.events import AgentEndEvent, MessageEndEvent, ToolExecutionEndEvent, ToolExecutionStartEvent
 from lanscoder.core.events import ToolExecutionUpdateEvent
+from lanscoder.providers.base import ChatProvider
 from lanscoder.utils.cancellation import CancellationToken, current_cancellation_token
 from lanscoder.providers.types import MainRequestOptions, ToolDefinition
 from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
@@ -103,6 +106,31 @@ async def run_offline_case(
         raise ValueError("extracted replay case requires capsule_path and capsule_passphrase")
     if manifest.mode != "interaction_replay":
         raise ValueError("offline runner supports only interaction_replay cases")
+    return await _run_case_with_provider(
+        manifest,
+        output_dir,
+        case_path=case_path,
+        baseline_scorecard=baseline_scorecard,
+        provider_factory=lambda recorder: ScriptedProvider(manifest.provider_tape, on_interaction=recorder.record),
+        network_policy="disabled",
+    )
+
+
+async def _run_case_with_provider(
+    manifest: CaseManifest,
+    output_dir: str | Path,
+    *,
+    case_path: str | Path | None,
+    baseline_scorecard: dict[str, Any] | None,
+    provider_factory: Callable[[TraceRecorder], ChatProvider],
+    network_policy: str,
+    limits: AgentLoopLimits | None = None,
+    request_options: MainRequestOptions | None = None,
+    context_window: int | None = None,
+    provider_ref: str | None = None,
+) -> RunResult:
+    """Run one case with either the scripted or a real provider."""
+
     run_dir = Path(output_dir)
     if run_dir.exists():
         raise FileExistsError(f"fresh run directory already exists: {run_dir}")
@@ -111,7 +139,7 @@ async def run_offline_case(
 
     redactor = Redactor(sensitive_values=manifest.private_values, paths=[artifacts_path])
     recorder = TraceRecorder(run_dir, redactor=redactor)
-    provider = ScriptedProvider(manifest.provider_tape, on_interaction=recorder.record)
+    provider = provider_factory(recorder)
     cancellation = CancellationToken()
     tool_faults = {
         str(call["arguments"].get("path")): manifest.tool_faults[call["id"]]
@@ -132,14 +160,21 @@ async def run_offline_case(
     baseline_artifacts = _snapshot_artifacts(artifacts_path)
     final_delivery = ""
     failure: str | None = None
+    network_attempts: int | None = None
     started_at = time.monotonic()
 
     recorder.record(
         "run_started",
         {
             "case": manifest.identity(),
-            "network_policy": "disabled",
-            "config": _runtime_config_identity(manifest, provider),
+            "network_policy": network_policy,
+            "config": _runtime_config_identity(
+                manifest,
+                provider,
+                provider_ref=provider_ref,
+                request_options=request_options,
+                context_window=context_window,
+            ),
             "runtime": {
                 "api": "lanscoder.core.create_agent_session" if manifest.runtime == "session" else "lanscoder.core.agent_loop",
                 "mode": manifest.runtime,
@@ -158,7 +193,35 @@ async def run_offline_case(
         _record_compaction_probe(recorder)
 
     try:
-        with NetworkDisabled() as network_guard:
+        if network_policy == "disabled":
+            with NetworkDisabled() as network_guard:
+                if manifest.runtime == "session":
+                    final_delivery, failure = await _run_session_runtime(
+                        manifest,
+                        artifacts_path=artifacts_path,
+                        recorder=recorder,
+                        provider=provider,
+                        tool_faults=tool_faults,
+                        tool_result_sizes=tool_result_sizes,
+                        limits=limits,
+                        request_options=request_options,
+                        context_window=context_window,
+                    )
+                else:
+                    final_delivery, failure = await _run_l1_runtime(
+                        manifest,
+                        artifacts_path=artifacts_path,
+                        recorder=recorder,
+                        provider=provider,
+                        tool_faults=tool_faults,
+                        tool_result_sizes=tool_result_sizes,
+                        cancellation=cancellation,
+                        limits=limits,
+                        request_options=request_options,
+                        context_window=context_window,
+                    )
+            network_attempts = network_guard.attempts
+        else:
             if manifest.runtime == "session":
                 final_delivery, failure = await _run_session_runtime(
                     manifest,
@@ -167,39 +230,31 @@ async def run_offline_case(
                     provider=provider,
                     tool_faults=tool_faults,
                     tool_result_sizes=tool_result_sizes,
+                    limits=limits,
+                    request_options=request_options,
+                    context_window=context_window,
                 )
             else:
-                async for event in agent_loop(
-                    [LoopMessage.user(manifest.prompt)],
-                    LoopContext(
-                        tools=_evaluation_tools(
-                            manifest,
-                            artifacts_path,
-                            tool_faults=tool_faults,
-                            tool_result_sizes=tool_result_sizes,
-                        )
-                    ),
-                    LoopConfig(
-                        provider=provider,
-                        session_id=f"eval-{manifest.identifier}",
-                        use_streaming=False,
-                    ),
-                    signal=cancellation,
-                ):
-                    recorder.record(event.type, _agent_event_payload(event))
-                    if isinstance(event, ToolExecutionStartEvent) and _should_interrupt(manifest, event, recorder.events):
-                        cancellation.cancel()
-                        recorder.record("interrupt_requested", {"after_tool_calls": manifest.interrupt_after_tool_calls})
-                    if isinstance(event, MessageEndEvent) and event.message is not None and event.message.role == "assistant":
-                        final_delivery = event.message.content
-                    if isinstance(event, AgentEndEvent) and not final_delivery:
-                        final_delivery = _last_assistant_content(event)
-        recorder.record("network_guard", {"attempts": network_guard.attempts})
+                final_delivery, failure = await _run_l1_runtime(
+                    manifest,
+                    artifacts_path=artifacts_path,
+                    recorder=recorder,
+                    provider=provider,
+                    tool_faults=tool_faults,
+                    tool_result_sizes=tool_result_sizes,
+                    cancellation=cancellation,
+                    limits=limits,
+                    request_options=request_options,
+                    context_window=context_window,
+                )
     except Exception as exc:  # noqa: BLE001 - failures must be recorded for verifier evidence.
         failure = f"{type(exc).__name__}: {exc}"
         recorder.record("runtime_exception", {"kind": type(exc).__name__, "message": str(exc)})
-        if "network_guard" not in {str(event.get("type")) for event in recorder.events}:
-            recorder.record("network_guard", {"attempts": network_guard.attempts})
+    if "network_guard" not in {str(event.get("type")) for event in recorder.events}:
+        recorder.record(
+            "network_guard",
+            {"policy": network_policy, "attempts": network_attempts if network_attempts is not None else 0},
+        )
 
     artifacts_after = _snapshot_artifacts(artifacts_path)
     recorder.record("artifacts", _artifact_diff(baseline_artifacts, artifacts_after))
@@ -207,7 +262,7 @@ async def run_offline_case(
     recorder.record(
         "run_completed",
         {
-            "provider_calls": provider.calls,
+            "provider_calls": sum(event.get("type") == "provider_request" for event in recorder.events),
             "tool_calls": sum(event.get("type") == "tool_execution_start" for event in recorder.events),
             "elapsed_ms": round((time.monotonic() - started_at) * 1000, 3),
             "compaction_events": sum(
@@ -231,14 +286,70 @@ async def run_offline_case(
     )
 
 
+async def _run_l1_runtime(
+    manifest: CaseManifest,
+    *,
+    artifacts_path: Path,
+    recorder: TraceRecorder,
+    provider: ChatProvider,
+    tool_faults: dict[str, str],
+    tool_result_sizes: dict[str, int],
+    cancellation: CancellationToken,
+    limits: AgentLoopLimits | None,
+    request_options: MainRequestOptions | None,
+    context_window: int | None,
+) -> tuple[str, str | None]:
+    """Run the public L1 loop and project its events into the fresh trace."""
+
+    final_delivery = ""
+    failure: str | None = None
+    try:
+        async for event in agent_loop(
+            [LoopMessage.user(manifest.prompt)],
+            LoopContext(
+                tools=_evaluation_tools(
+                    manifest,
+                    artifacts_path,
+                    tool_faults=tool_faults,
+                    tool_result_sizes=tool_result_sizes,
+                    include_delete=manifest.mode == "fresh_model",
+                )
+            ),
+            LoopConfig(
+                provider=provider,
+                session_id=f"eval-{manifest.identifier}",
+                use_streaming=False,
+                limits=limits,
+                request_options=request_options,
+                context_window=context_window if context_window is not None else manifest.context_window,
+            ),
+            signal=cancellation,
+        ):
+            recorder.record(event.type, _agent_event_payload(event))
+            if isinstance(event, ToolExecutionStartEvent) and _should_interrupt(manifest, event, recorder.events):
+                cancellation.cancel()
+                recorder.record("interrupt_requested", {"after_tool_calls": manifest.interrupt_after_tool_calls})
+            if isinstance(event, MessageEndEvent) and event.message is not None and event.message.role == "assistant":
+                final_delivery = event.message.content
+            if isinstance(event, AgentEndEvent) and not final_delivery:
+                final_delivery = _last_assistant_content(event)
+    except Exception as exc:  # noqa: BLE001 - failures must be recorded for verifier evidence.
+        failure = f"{type(exc).__name__}: {exc}"
+        recorder.record("runtime_exception", {"kind": type(exc).__name__, "message": str(exc)})
+    return final_delivery, failure
+
+
 async def _run_session_runtime(
     manifest: CaseManifest,
     *,
     artifacts_path: Path,
     recorder: TraceRecorder,
-    provider: ScriptedProvider,
+    provider: ChatProvider,
     tool_faults: dict[str, str],
     tool_result_sizes: dict[str, int],
+    limits: AgentLoopLimits | None,
+    request_options: MainRequestOptions | None,
+    context_window: int | None,
 ) -> tuple[str, str | None]:
     """Run a persistent L3 session, optionally interrupting and reopening it."""
 
@@ -251,8 +362,9 @@ async def _run_session_runtime(
         artifacts_path,
         tool_faults=tool_faults,
         tool_result_sizes=tool_result_sizes,
+        include_delete=manifest.mode == "fresh_model",
     )
-    options = MainRequestOptions(max_tokens=manifest.max_output_tokens)
+    options = request_options or MainRequestOptions(max_tokens=manifest.max_output_tokens)
     seen_session_events: set[str] = set()
     interrupt_requested = False
     active_runner = None
@@ -312,9 +424,9 @@ async def _run_session_runtime(
             data_root=runtime_root,
             tools=tools,
             session_id=session_id,
-            limits=None,
+            limits=limits,
             request_options=options,
-            context_window=manifest.context_window,
+            context_window=context_window if context_window is not None else manifest.context_window,
             compaction_strategy=manifest.compaction_strategy,
         )
         active_runner = handle.runner
@@ -345,9 +457,9 @@ async def _run_session_runtime(
                 tools=tools,
                 session_id=session_id,
                 resume=True,
-                limits=None,
+                limits=limits,
                 request_options=options,
-                context_window=manifest.context_window,
+                context_window=context_window if context_window is not None else manifest.context_window,
                 compaction_strategy=manifest.compaction_strategy,
             )
             active_runner = resumed.runner
@@ -488,6 +600,7 @@ def _evaluation_tools(
     *,
     tool_faults: dict[str, str],
     tool_result_sizes: dict[str, int],
+    include_delete: bool = False,
 ) -> list[Tool]:
     """Build only the mutation tools explicitly exercised by a case."""
 
@@ -498,7 +611,7 @@ def _evaluation_tools(
             tool_result_sizes=tool_result_sizes,
         )
     ]
-    if any(call["name"] == "delete_file" for entry in manifest.provider_tape for call in entry.tool_calls):
+    if include_delete or any(call["name"] == "delete_file" for entry in manifest.provider_tape for call in entry.tool_calls):
         tools.append(_delete_file_tool(artifacts_path, tool_faults=tool_faults))
     return tools
 
@@ -638,17 +751,31 @@ def _record_compaction_probe(recorder: TraceRecorder) -> None:
     )
 
 
-def _runtime_config_identity(manifest: CaseManifest, provider: ScriptedProvider) -> dict[str, object]:
+def _runtime_config_identity(
+    manifest: CaseManifest,
+    provider: ChatProvider,
+    *,
+    provider_ref: str | None = None,
+    request_options: MainRequestOptions | None = None,
+    context_window: int | None = None,
+) -> dict[str, object]:
     """Return portable runtime configuration facts without secret-bearing values."""
 
-    return {
+    identity = {
         "provider": provider.name,
         "model": provider.model,
         "streaming": False,
-        "context_window": manifest.context_window,
-        "max_output_tokens": manifest.max_output_tokens,
+        "context_window": context_window if context_window is not None else manifest.context_window,
+        "max_output_tokens": (
+            request_options.max_tokens
+            if request_options is not None and request_options.max_tokens is not None
+            else manifest.max_output_tokens
+        ),
         "compaction_strategy": manifest.compaction_strategy,
     }
+    if provider_ref is not None:
+        identity["model_ref"] = provider_ref
+    return identity
 
 
 def _should_interrupt(manifest: CaseManifest, event: ToolExecutionStartEvent, events: list[dict[str, object]]) -> bool:
