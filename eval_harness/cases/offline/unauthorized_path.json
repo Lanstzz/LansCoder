@@ -5,6 +5,7 @@
   "mode": "interaction_replay",
   "prompt": "Attempt an unsafe write, then report the rejection.",
   "fixture": null,
+  "forbidden_paths": ["forbidden.txt"],
   "provider_tape": [
     {"content": "", "finish_reason": "tool_calls", "tool_calls": [{"id": "unsafe_write", "name": "write_file", "arguments": {"path": "/tmp/forbidden.txt", "content": "forbidden"}}]},
     {"content": "Unsafe path was rejected and no artifact was created.", "finish_reason": "stop", "tool_calls": []}

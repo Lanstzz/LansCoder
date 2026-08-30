@@ -129,6 +129,10 @@ passphrase; pass `capsule_path` and `capsule_passphrase` to hydrate it, while
 `cases/` contains portable JSON manifests and `fixtures/` contains small,
 reviewable seed workspaces. A manifest has an ID, schema version, mode, prompt,
 fixture path, provider tape, expected artifacts, and expected final delivery.
+Optional `expected_artifact_diff` lists exact `created`, `modified`, and
+`deleted` paths; `forbidden_paths` makes untouched paths an explicit hard gate.
+`expected_delivery_completed` verifies that the run reached a completed
+delivery rather than merely containing the expected text.
 `trace.jsonl` records facts for one run and must not be reused as a case.
 
 Before writing a portable trace, the recorder redacts registered private
