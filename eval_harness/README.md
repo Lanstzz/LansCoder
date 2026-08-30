@@ -134,6 +134,9 @@ Optional `expected_artifact_diff` lists exact `created`, `modified`, and
 `expected_delivery_completed` verifies that the run reached a completed
 delivery rather than merely containing the expected text.
 `trace.jsonl` records facts for one run and must not be reused as a case.
+Its `run_started` event records the case, portable runtime configuration, and
+runtime API identity; the trace gate verifies provider request/outcome pairing,
+tool lifecycle closure, completion evidence, and the integrity footer.
 
 Before writing a portable trace, the recorder redacts registered private
 values, API-key-like values, bearer tokens, and absolute paths using stable

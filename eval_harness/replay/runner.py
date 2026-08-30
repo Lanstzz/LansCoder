@@ -139,6 +139,7 @@ async def run_offline_case(
         {
             "case": manifest.identity(),
             "network_policy": "disabled",
+            "config": _runtime_config_identity(manifest, provider),
             "runtime": {
                 "api": "lanscoder.core.create_agent_session" if manifest.runtime == "session" else "lanscoder.core.agent_loop",
                 "mode": manifest.runtime,
@@ -635,6 +636,19 @@ def _record_compaction_probe(recorder: TraceRecorder) -> None:
             "noop": True,
         },
     )
+
+
+def _runtime_config_identity(manifest: CaseManifest, provider: ScriptedProvider) -> dict[str, object]:
+    """Return portable runtime configuration facts without secret-bearing values."""
+
+    return {
+        "provider": provider.name,
+        "model": provider.model,
+        "streaming": False,
+        "context_window": manifest.context_window,
+        "max_output_tokens": manifest.max_output_tokens,
+        "compaction_strategy": manifest.compaction_strategy,
+    }
 
 
 def _should_interrupt(manifest: CaseManifest, event: ToolExecutionStartEvent, events: list[dict[str, object]]) -> bool:
