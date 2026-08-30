@@ -44,6 +44,7 @@ class CaseManifest:
     tool_faults: dict[str, str] = field(default_factory=dict)
     interrupt_after_tool_calls: int | None = None
     enable_compaction: bool = False
+    capsule_required: bool = False
 
     def identity(self) -> dict[str, object]:
         """Stable manifest identity copied into fresh traces."""
@@ -56,7 +57,12 @@ class CaseManifest:
         }
 
 
-def load_case_manifest(path: str | Path) -> CaseManifest:
+def load_case_manifest(
+    path: str | Path,
+    *,
+    capsule_path: str | Path | None = None,
+    capsule_passphrase: str | None = None,
+) -> CaseManifest:
     """Load and validate a JSON case manifest without executing it."""
 
     source = Path(path)
@@ -108,6 +114,49 @@ def load_case_manifest(path: str | Path) -> CaseManifest:
     enable_compaction = raw.get("enable_compaction", False)
     if not isinstance(enable_compaction, bool):
         raise ManifestError("enable_compaction must be a boolean")
+    capsule = raw.get("capsule")
+    capsule_required = isinstance(capsule, dict)
+    if capsule is not None:
+        if capsule_path is None and capsule_passphrase is None:
+            # A portable manifest is useful for review and transport on its
+            # own.  The replay runner must additionally hydrate it before
+            # execution; keep parsing available for cataloguing and audits.
+            capsule = None
+        elif capsule_path is None or capsule_passphrase is None:
+            raise ManifestError("capsule_path and capsule_passphrase must be provided together")
+    if capsule_path is not None and capsule_passphrase is not None:
+        from eval_harness.trace.capsule import CapsuleError, capsule_payload_digest, read_capsule
+
+        try:
+            material = read_capsule(capsule_path, capsule_passphrase)
+        except CapsuleError as exc:
+            raise ManifestError(f"cannot load replay capsule: {exc}") from exc
+        expected_capsule = raw.get("capsule")
+        expected_digest = expected_capsule.get("material_sha256") if isinstance(expected_capsule, dict) else None
+        if not isinstance(expected_digest, str) or capsule_payload_digest(material) != expected_digest:
+            raise ManifestError("replay capsule does not match the case manifest")
+        raw = {
+            **raw,
+            "prompt": material.get("prompt"),
+            "provider_tape": material.get("provider_tape"),
+            "expected_delivery_contains": material.get("expected_delivery_contains"),
+            "private_values": material.get("private_values", []),
+            "tool_faults": material.get("tool_faults", raw.get("tool_faults", {})),
+        }
+        tape_raw = raw.get("provider_tape")
+        if not isinstance(tape_raw, list) or not tape_raw:
+            raise ManifestError("replay capsule provider_tape must be a non-empty list")
+        tape = tuple(_load_tape_response(item, index) for index, item in enumerate(tape_raw, start=1))
+        private_values_raw = raw.get("private_values", [])
+        if not isinstance(private_values_raw, list) or not all(isinstance(value, str) and value for value in private_values_raw):
+            raise ManifestError("replay capsule private_values must be a list of non-empty strings")
+        tool_faults_raw = raw.get("tool_faults", {})
+        if not isinstance(tool_faults_raw, dict) or not all(
+            isinstance(call_id, str) and call_id and isinstance(kind, str) and kind in SUPPORTED_TOOL_FAULTS
+            for call_id, kind in tool_faults_raw.items()
+        ):
+            raise ManifestError("replay capsule tool_faults must map call IDs to supported fault kinds")
+        capsule_required = False
     return CaseManifest(
         schema_version=schema_version,
         identifier=_required_string(raw, "id"),
@@ -122,6 +171,7 @@ def load_case_manifest(path: str | Path) -> CaseManifest:
         tool_faults=dict(tool_faults_raw),
         interrupt_after_tool_calls=interrupt_after_tool_calls,
         enable_compaction=enable_compaction,
+        capsule_required=capsule_required,
     )
 
 

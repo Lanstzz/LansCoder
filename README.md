@@ -116,6 +116,9 @@ await agent.prompt("你好")  # 需在 async 上下文中运行;完整可运行�
 不创建网络 provider，也不调用真实模型。trace 使用稳定序号与 schema version，写入前脱敏，
 golden 比较会忽略时间戳和运行时 ID；离线 case 还可注入 provider/tool
 故障、取消和压缩探针，并通过 `eval_harness compare` 比较 scorecard 基线。
+历史 LansCoder session 或 Harbor job 可用 `eval_harness extract` 生成脱敏
+portable case；完整 replay material 只存放在仓库外加密 capsule，运行时需显式提供
+capsule 和口令环境变量。
 
 Harbor 作为可选的外部 regression/canary adapter，位于
 [`eval_harness/harbor/`](eval_harness/harbor/README.md)，不参与离线 golden 门禁。

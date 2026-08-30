@@ -75,12 +75,14 @@ async def run_offline_case_path(
     output_dir: str | Path,
     *,
     baseline_scorecard: dict[str, Any] | None = None,
+    capsule_path: str | Path | None = None,
+    capsule_passphrase: str | None = None,
 ) -> RunResult:
     """Load a portable JSON case and produce one fresh run directory."""
 
     resolved_case_path = Path(case_path)
     return await run_offline_case(
-        load_case_manifest(resolved_case_path),
+        load_case_manifest(resolved_case_path, capsule_path=capsule_path, capsule_passphrase=capsule_passphrase),
         output_dir,
         case_path=resolved_case_path,
         baseline_scorecard=baseline_scorecard,
@@ -96,6 +98,8 @@ async def run_offline_case(
 ) -> RunResult:
     """Replay one interaction tape without network access or a real model provider."""
 
+    if manifest.capsule_required:
+        raise ValueError("extracted replay case requires capsule_path and capsule_passphrase")
     if manifest.mode != "interaction_replay":
         raise ValueError("offline runner supports only interaction_replay cases")
     run_dir = Path(output_dir)
@@ -199,10 +203,20 @@ def run_case_sync(
     output_dir: str | Path,
     *,
     baseline_scorecard: dict[str, Any] | None = None,
+    capsule_path: str | Path | None = None,
+    capsule_passphrase: str | None = None,
 ) -> RunResult:
     """Small synchronous convenience wrapper for the command-line interface."""
 
-    return asyncio.run(run_offline_case_path(case_path, output_dir, baseline_scorecard=baseline_scorecard))
+    return asyncio.run(
+        run_offline_case_path(
+            case_path,
+            output_dir,
+            baseline_scorecard=baseline_scorecard,
+            capsule_path=capsule_path,
+            capsule_passphrase=capsule_passphrase,
+        )
+    )
 
 
 def _prepare_artifacts(manifest: CaseManifest, *, case_path: str | Path | None, artifacts_path: Path) -> None:
