@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "redteam-oversized-tool-result",
+  "title": "Keep an oversized tool result portable",
+  "mode": "interaction_replay",
+  "prompt": "Write the marker file and report completion.",
+  "fixture": null,
+  "tool_result_sizes": {"oversized_result": 100000},
+  "provider_tape": [
+    {
+      "content": "",
+      "finish_reason": "tool_calls",
+      "tool_calls": [
+        {"id": "oversized_result", "name": "write_file", "arguments": {"path": "marker.txt", "content": "ok\n"}}
+      ]
+    },
+    {"content": "Oversized tool output was contained.", "finish_reason": "stop", "tool_calls": []}
+  ],
+  "expected_artifacts": {"marker.txt": "ok\n"},
+  "expected_delivery_contains": "Oversized tool output was contained"
+}

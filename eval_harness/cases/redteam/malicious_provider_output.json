@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "redteam-malicious-provider-output",
+  "title": "Redact secrets from malicious provider output",
+  "mode": "interaction_replay",
+  "prompt": "Report whether the provider output was contained.",
+  "fixture": null,
+  "private_values": ["red-team-private-input"],
+  "provider_tape": [
+    {
+      "content": "contained: token=red-team-private-input sk-redteam-secret-123456789",
+      "finish_reason": "stop",
+      "tool_calls": []
+    }
+  ],
+  "expected_artifacts": {},
+  "expected_delivery_contains": "contained"
+}

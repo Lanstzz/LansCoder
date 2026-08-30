@@ -14,6 +14,7 @@ from eval_harness.verify.checks import compare_scorecards
 
 CASE_PATH = Path(__file__).parents[1] / "eval_harness" / "cases" / "offline" / "write_greeting.json"
 CASES_DIR = CASE_PATH.parent
+REDTEAM_CASES_DIR = CASE_PATH.parents[1] / "redteam"
 
 
 def test_offline_case_catalog_has_ten_small_deterministic_cases() -> None:
@@ -90,6 +91,32 @@ def test_portable_trace_redacts_registered_values_and_absolute_paths(tmp_path: P
     assert str(tmp_path) not in portable
     assert "<REDACTED:" in portable
     assert "<PATH:" in portable
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+@pytest.mark.parametrize("case_name", ["malicious_provider_output", "oversized_tool_result", "unauthorized_path"])
+async def test_redteam_cases_keep_portable_runs_safe(case_name: str, tmp_path: Path) -> None:
+    result = await run_offline_case_path(REDTEAM_CASES_DIR / f"{case_name}.json", tmp_path / case_name)
+    trace = result.trace_path.read_text(encoding="utf-8")
+
+    assert result.scorecard["passed"] is True
+    assert result.scorecard["gates"]["security"]["passed"] is True
+    assert "red-team-private-input" not in trace
+    assert len(trace) < 200_000
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_redteam_duplicate_result_is_classified_without_runtime_crash(tmp_path: Path) -> None:
+    result = await run_offline_case_path(REDTEAM_CASES_DIR / "duplicate_tool_result.json", tmp_path / "duplicate")
+    recovery = result.scorecard["gates"]["recovery"]
+
+    assert result.scorecard["passed"] is False
+    assert recovery["duplicate_tool_ids"] == ["duplicate_result"]
+    assert "duplicate tool start: duplicate_result" in recovery["errors"]
+    assert "runtime recorded an exception" in recovery["errors"]
+    assert recovery["passed"] is False
 
 
 def test_scorecard_is_machine_readable_json(tmp_path: Path) -> None:
@@ -211,6 +238,66 @@ async def test_interrupt_probe_settles_tool_lifecycle(tmp_path: Path) -> None:
     assert result.scorecard["gates"]["recovery"]["interruptions"] == ["interrupt_me"]
     assert result.scorecard["gates"]["recovery"]["errors"] == []
     assert any(event["type"] == "interrupt_requested" for event in load_trace(result.trace_path))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_session_runtime_resumes_a_persisted_interrupted_session(tmp_path: Path) -> None:
+    case_path = _write_case(
+        tmp_path,
+        runtime="session",
+        resume_after_interrupt=True,
+        resume_prompt="Continue the interrupted task.",
+        interrupt_after_tool_calls=1,
+        provider_tape=[
+            {
+                "content": "",
+                "finish_reason": "tool_calls",
+                "tool_calls": [
+                    {"id": "resume_write", "name": "write_file", "arguments": {"path": "resumed.txt", "content": "resumed\n"}}
+                ],
+            },
+            {"content": "Resumed and completed the task.", "finish_reason": "stop", "tool_calls": []},
+        ],
+        expected_artifacts={"resumed.txt": "resumed\n"},
+        expected_delivery_contains="Resumed and completed",
+    )
+
+    result = await run_offline_case_path(case_path, tmp_path / "run")
+
+    assert result.scorecard["passed"] is True
+    assert result.scorecard["metrics"]["session_resumes"] == 1
+    assert result.scorecard["gates"]["recovery"]["interruptions"] == ["resume_write"]
+    assert any(event["type"] == "session_resumed" for event in load_trace(result.trace_path))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_session_runtime_records_real_l3_compaction(tmp_path: Path) -> None:
+    summary = "## 用户请求要点\n无\n## 已给出的结论\n无\n## 未完成事项\n无\n## 关键约束与偏好\n无"
+    warmup_prompts = [f"Warmup {index} " + ("x" * 1200) for index in range(22)]
+    case_path = _write_case(
+        tmp_path,
+        runtime="session",
+        warmup_prompts=warmup_prompts,
+        context_window=12000,
+        max_output_tokens=100,
+        provider_tape=[
+            *({"content": "ok", "finish_reason": "stop", "tool_calls": []} for _ in range(21)),
+            {"content": summary, "finish_reason": "stop", "tool_calls": []},
+            {"content": "ok", "finish_reason": "stop", "tool_calls": []},
+            {"content": "Real compaction completed.", "finish_reason": "stop", "tool_calls": []},
+        ],
+        expected_delivery_contains="Real compaction completed",
+    )
+
+    result = await run_offline_case_path(case_path, tmp_path / "run")
+    compactions = [event for event in load_trace(result.trace_path) if event["type"].startswith("context_compaction")]
+
+    assert result.scorecard["passed"] is True
+    assert result.scorecard["metrics"]["successful_compactions"] == 2
+    assert any(event["type"] == "context_compaction_l3" and event["data"]["checkpoint_created"] for event in compactions)
+    assert all(event["data"]["actual_runtime_event"] for event in compactions)
 
 
 def test_compare_scorecards_flags_lost_hard_gate_and_reports_numeric_deltas() -> None:
