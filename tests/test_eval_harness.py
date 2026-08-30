@@ -275,7 +275,7 @@ async def test_session_runtime_resumes_a_persisted_interrupted_session(tmp_path:
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_session_runtime_records_real_l3_compaction(tmp_path: Path) -> None:
     summary = "## 用户请求要点\n无\n## 已给出的结论\n无\n## 未完成事项\n无\n## 关键约束与偏好\n无"
-    warmup_prompts = [f"Warmup {index} " + ("x" * 1200) for index in range(22)]
+    warmup_prompts = [f"Warmup {index}" for index in range(12)]
     case_path = _write_case(
         tmp_path,
         runtime="session",
@@ -283,9 +283,9 @@ async def test_session_runtime_records_real_l3_compaction(tmp_path: Path) -> Non
         context_window=12000,
         max_output_tokens=100,
         provider_tape=[
-            *({"content": "ok", "finish_reason": "stop", "tool_calls": []} for _ in range(21)),
+            *({"content": "ok", "finish_reason": "stop", "tool_calls": []} for _ in range(12)),
+            {"fault": "prompt_too_long"},
             {"content": summary, "finish_reason": "stop", "tool_calls": []},
-            {"content": "ok", "finish_reason": "stop", "tool_calls": []},
             {"content": "Real compaction completed.", "finish_reason": "stop", "tool_calls": []},
         ],
         expected_delivery_contains="Real compaction completed",
