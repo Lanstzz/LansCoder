@@ -1,0 +1,283 @@
+"""Offline interaction replay through LansCoder's public L1 runtime API."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import shutil
+import socket
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from lanscoder.core import LoopConfig, LoopContext, LoopMessage, agent_loop
+from lanscoder.core.events import AgentEndEvent, MessageEndEvent, ToolExecutionEndEvent, ToolExecutionStartEvent
+from lanscoder.providers.types import ToolDefinition
+from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
+
+from eval_harness.replay.provider import ScriptedProvider
+from eval_harness.schema.models import CaseManifest, load_case_manifest
+from eval_harness.trace.recorder import TraceRecorder
+from eval_harness.trace.redaction import Redactor
+from eval_harness.verify.checks import build_scorecard, verify_run
+
+
+@dataclass(frozen=True, slots=True)
+class RunResult:
+    """Paths and machine-readable outcome from one fresh offline run."""
+
+    trace_path: Path
+    scorecard_path: Path
+    artifacts_path: Path
+    scorecard: dict[str, Any]
+
+
+class NetworkDisabled:
+    """Reject process-level socket connections while an offline case is executing."""
+
+    def __init__(self) -> None:
+        self.attempts = 0
+        self._original_create_connection = None
+        self._original_connect = None
+        self._original_connect_ex = None
+
+    def __enter__(self) -> "NetworkDisabled":
+        self._original_create_connection = socket.create_connection
+        self._original_connect = socket.socket.connect
+        self._original_connect_ex = socket.socket.connect_ex
+
+        def blocked_connection(*args: object, **kwargs: object) -> None:
+            del args, kwargs
+            self.attempts += 1
+            raise RuntimeError("network access is disabled for offline evaluation")
+
+        socket.create_connection = blocked_connection
+        socket.socket.connect = blocked_connection
+        socket.socket.connect_ex = blocked_connection
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        del exc_type, exc, traceback
+        assert self._original_create_connection is not None
+        assert self._original_connect is not None
+        assert self._original_connect_ex is not None
+        socket.create_connection = self._original_create_connection
+        socket.socket.connect = self._original_connect
+        socket.socket.connect_ex = self._original_connect_ex
+
+
+async def run_offline_case_path(case_path: str | Path, output_dir: str | Path) -> RunResult:
+    """Load a portable JSON case and produce one fresh run directory."""
+
+    resolved_case_path = Path(case_path)
+    return await run_offline_case(
+        load_case_manifest(resolved_case_path),
+        output_dir,
+        case_path=resolved_case_path,
+    )
+
+
+async def run_offline_case(
+    manifest: CaseManifest,
+    output_dir: str | Path,
+    *,
+    case_path: str | Path | None = None,
+) -> RunResult:
+    """Replay one interaction tape without network access or a real model provider."""
+
+    if manifest.mode != "interaction_replay":
+        raise ValueError("offline runner supports only interaction_replay cases")
+    run_dir = Path(output_dir)
+    if run_dir.exists():
+        raise FileExistsError(f"fresh run directory already exists: {run_dir}")
+    artifacts_path = run_dir / "artifacts"
+    _prepare_artifacts(manifest, case_path=case_path, artifacts_path=artifacts_path)
+
+    redactor = Redactor(sensitive_values=manifest.private_values, paths=[artifacts_path])
+    recorder = TraceRecorder(run_dir, redactor=redactor)
+    provider = ScriptedProvider(manifest.provider_tape, on_interaction=recorder.record)
+    baseline_artifacts = _snapshot_artifacts(artifacts_path)
+    final_delivery = ""
+    failure: str | None = None
+    started_at = time.monotonic()
+
+    recorder.record(
+        "run_started",
+        {
+            "case": manifest.identity(),
+            "network_policy": "disabled",
+            "runtime": {"api": "lanscoder.core.agent_loop", "session_id": f"eval-{manifest.identifier}"},
+        },
+    )
+    recorder.record(
+        "user_input",
+        {
+            "content": manifest.prompt,
+            "sha256": _digest(manifest.prompt),
+        },
+    )
+
+    try:
+        with NetworkDisabled() as network_guard:
+            async for event in agent_loop(
+                [LoopMessage.user(manifest.prompt)],
+                LoopContext(tools=[_write_file_tool(artifacts_path)]),
+                LoopConfig(provider=provider, session_id=f"eval-{manifest.identifier}", use_streaming=False),
+            ):
+                recorder.record(event.type, _agent_event_payload(event))
+                if isinstance(event, MessageEndEvent) and event.message is not None and event.message.role == "assistant":
+                    final_delivery = event.message.content
+                if isinstance(event, AgentEndEvent) and not final_delivery:
+                    final_delivery = _last_assistant_content(event)
+        recorder.record("network_guard", {"attempts": network_guard.attempts})
+    except Exception as exc:  # noqa: BLE001 - failures must be recorded for verifier evidence.
+        failure = f"{type(exc).__name__}: {exc}"
+        recorder.record("runtime_exception", {"kind": type(exc).__name__, "message": str(exc)})
+
+    artifacts_after = _snapshot_artifacts(artifacts_path)
+    recorder.record("artifacts", _artifact_diff(baseline_artifacts, artifacts_after))
+    recorder.record("final_delivery", {"content": final_delivery, "completed": failure is None})
+    recorder.record(
+        "run_completed",
+        {
+            "provider_calls": provider.calls,
+            "tool_calls": sum(len(entry.tool_calls) for entry in manifest.provider_tape),
+            "elapsed_ms": round((time.monotonic() - started_at) * 1000, 3),
+            "compaction_events": 0,
+            "recovery_events": [],
+            "failure": failure,
+        },
+    )
+    trace_path = recorder.write()
+    verification = verify_run(manifest, trace_path, artifacts_path)
+    scorecard = build_scorecard(verification, trace_path)
+    scorecard_path = run_dir / "scorecard.json"
+    scorecard_path.write_text(_json(scorecard), encoding="utf-8")
+    return RunResult(
+        trace_path=trace_path,
+        scorecard_path=scorecard_path,
+        artifacts_path=artifacts_path,
+        scorecard=scorecard,
+    )
+
+
+def run_case_sync(case_path: str | Path, output_dir: str | Path) -> RunResult:
+    """Small synchronous convenience wrapper for the command-line interface."""
+
+    return asyncio.run(run_offline_case_path(case_path, output_dir))
+
+
+def _prepare_artifacts(manifest: CaseManifest, *, case_path: str | Path | None, artifacts_path: Path) -> None:
+    if manifest.fixture is None:
+        artifacts_path.mkdir(parents=True)
+        return
+    if case_path is None:
+        raise ValueError("case_path is required when a manifest references a fixture")
+    fixture_path = (Path(case_path).parent / manifest.fixture).resolve()
+    if not fixture_path.is_dir():
+        raise ValueError(f"fixture directory does not exist: {fixture_path}")
+    shutil.copytree(fixture_path, artifacts_path)
+
+
+def _write_file_tool(artifacts_path: Path) -> Tool:
+    root = artifacts_path.resolve()
+
+    def write_file(path: str, content: str) -> ToolResult:
+        if not isinstance(path, str) or not isinstance(content, str):
+            return make_error_result("write_file", "path and content must be strings")
+        target = (root / path).resolve()
+        try:
+            relative = target.relative_to(root)
+        except ValueError:
+            return make_error_result("write_file", "path escapes the fixture workspace")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return make_text_result("write_file", f"wrote {relative.as_posix()}", path=relative.as_posix(), bytes=len(content.encode("utf-8")))
+
+    return Tool(
+        definition=ToolDefinition(
+            name="write_file",
+            description="Write a UTF-8 text file inside the fixture workspace.",
+            parameters={
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                "required": ["path", "content"],
+            },
+        ),
+        executor=write_file,
+    )
+
+
+def _agent_event_payload(event: object) -> dict[str, Any]:
+    if isinstance(event, ToolExecutionStartEvent):
+        return {
+            "tool_call_id": event.tool_call_id,
+            "tool_name": event.tool_name,
+            "arguments_sha256": _digest_json(event.args),
+            "argument_keys": sorted(event.args) if isinstance(event.args, dict) else [],
+        }
+    if isinstance(event, ToolExecutionEndEvent):
+        return {
+            "tool_call_id": event.tool_call_id,
+            "tool_name": event.tool_name,
+            "result": _tool_result_payload(event.result),
+            "is_error": event.is_error,
+        }
+    message = getattr(event, "message", None)
+    if message is not None:
+        return {"message": {"role": message.role, "content": message.content, "metadata": message.metadata}}
+    if isinstance(event, AgentEndEvent):
+        return {"message_count": len(event.messages)}
+    return {}
+
+
+def _last_assistant_content(event: AgentEndEvent) -> str:
+    for message in reversed(event.messages):
+        if message.role == "assistant":
+            return message.content
+    return ""
+
+
+def _snapshot_artifacts(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): _digest(path.read_bytes())
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _artifact_diff(before: dict[str, str], after: dict[str, str]) -> dict[str, object]:
+    return {
+        "created": sorted(path for path in after if path not in before),
+        "modified": sorted(path for path in after if path in before and after[path] != before[path]),
+        "deleted": sorted(path for path in before if path not in after),
+        "files": after,
+    }
+
+
+def _digest(value: str | bytes) -> str:
+    encoded = value.encode("utf-8") if isinstance(value, str) else value
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _digest_json(value: object) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return _digest(payload)
+
+
+def _tool_result_payload(result: object) -> dict[str, object]:
+    if not isinstance(result, ToolResult):
+        return {"present": result is not None}
+    return {
+        "name": result.name,
+        "ok": result.ok,
+        "content_sha256": _digest(result.content),
+        "has_error": result.error is not None,
+        "data_keys": sorted(result.data),
+    }
+
+
+def _json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"

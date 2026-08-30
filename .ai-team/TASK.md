@@ -2,7 +2,7 @@
 
 - ID: `TASK-005`
 - Title: `eval_harness：本地 trace、回放与 Agent 回归评测体系`
-- Status: `planning`
+- Status: `handoff`
 - Owner: `Lanster`
 - Next owner: `Lanster`
 
@@ -68,7 +68,7 @@ Trace 与 case 分离：case 是可执行输入和断言，trace 是本次运行
 
 ## Acceptance scenarios
 
-- [ ] **SC-1 (统一入口)**：Given `eval_harness` 已初始化，When 运行一个 offline case，Then 不访问网络，当前 runtime 完成一次执行并产出 `trace.jsonl`、`scorecard.json` 和 artifacts。
+- [x] **SC-1 (统一入口)**：Given `eval_harness` 已初始化，When 运行一个 offline case，Then 不访问网络，当前 runtime 完成一次执行并产出 `trace.jsonl`、`scorecard.json` 和 artifacts。
 - [ ] **SC-2 (Trace 完整性)**：Given offline fresh trace，Then 包含脱敏输入、case/config/runtime identity、provider 交互、工具生命周期、异常/恢复、文件产物、最终交付和 trace integrity 信息。
 - [ ] **SC-3 (Golden 回归)**：Given 至少 10 个人工微型 golden case，When 重复运行，Then canonicalized trace 的关键事件和 verifier 结果稳定，时间戳与随机 ID 不造成误报。
 - [ ] **SC-4 (历史回放)**：Given 一份已有 session/Harbor trace，When 执行脱敏 case extractor，Then 产出可审阅的 replay case，并能驱动当前 runtime 生成 fresh trace。
@@ -103,6 +103,7 @@ Trace 与 case 分离：case 是可执行输入和断言，trace 是本次运行
 - **D7 (用户已确认，待实施)**：scorecard 采用 trace、artifact、recovery、security、delivery 五类硬门禁，provider calls、tool calls、elapsed、token、context 和 compaction 作为独立指标。
 - **D8 (用户已确认，待实施)**：历史 case 采用 portable manifest + local encrypted capsule 双层存储；portable 部分保留稳定 hash 占位符以支持关联，不提供原文恢复能力。
 - **D9 (用户已确认，待实施)**：文档是重构交付的一部分：更新根 `README.md` 的 benchmark 入口和状态，新增完整 `eval_harness/README.md`，并迁移/重写 Harbor adapter 文档；文档中的命令、路径、参数和 trace schema 必须与实现一致。
+- **D10（本 checkpoint 实施）**：v1 portable trace 对 system prompt、工具描述、工具参数与工具结果正文一律不保留原文；使用 redacted placeholder、字段摘要和稳定 SHA-256 指纹，保留 verifier 所需的生命周期、状态与完整性事实。
 
 ## Completed
 
@@ -112,34 +113,37 @@ Trace 与 case 分离：case 是可执行输入和断言，trace 是本次运行
 - [x] 当前 runtime 已有 `JsonlSessionStore`、工具生命周期事件、异常/中断状态、CompactionEvent 和 Harbor session 导出能力，可作为 trace 采集底座。
 - [x] 设计决策已确认：长期 trace 脱敏、原始内容本地加密、第一阶段完全离线、人工微型 fixture 作为 canonical golden。
 - [x] 已确认文档交付范围：根 README 更新 + `eval_harness/README.md` 新 benchmark 文档 + Harbor adapter 文档迁移/重写。
+- [x] 第一阶段最小闭环已落地：`eval_harness` v1 schema、JSON CLI、scripted provider、网络拒绝器、fresh JSONL recorder、trace/artifact/recovery/security/delivery verifier、scorecard、一个人工 fixture/case 与测试均通过公开 L1 `lanscoder.core.agent_loop` 接口工作。
+- [x] Portable trace 默认不保存 system prompt、工具描述、工具参数或工具结果正文；这些值仅留 redacted placeholder、稳定指纹或字段摘要，且 trace integrity 使用稳定序号与 SHA-256 footer。
+- [x] Harbor adapter 已从 `benchmark/harbor/` 迁移到 `eval_harness/harbor/`；根 README、harness README 和 Harbor 命令已改用统一入口。
 
 ## Pending
 
-- [ ] 创建 `eval_harness` 包和统一 CLI，迁移 `benchmark/harbor` adapter 入口。
-- [ ] 定义 trace/case/scorecard schema、版本策略、canonicalization 和脱敏规则。
-- [ ] 实现 scripted provider、offline runner 和 fresh trace recorder。
-- [ ] 编写首批人工微型项目 fixture、provider tapes 和至少 10 个 golden case。
-- [ ] 实现 trace、artifact、recovery、security、delivery verifier 与机器可读 scorecard。
+- [x] 创建 `eval_harness` 包和统一 CLI，迁移 `benchmark/harbor` adapter 入口。
+- [x] 冻结第一版 trace/case/scorecard schema、版本策略、canonicalization 和脱敏规则。
+- [x] 实现 scripted provider、offline runner 和 fresh trace recorder。
+- [ ] 将人工微型项目 fixture、provider tapes 和 golden case 扩展到至少 10 个。
+- [ ] 将 trace、artifact、recovery、security、delivery verifier 与机器可读 scorecard 扩展到异常、取消、恢复、压缩和基线比较的完整场景。
 - [ ] 实现历史 session/Harbor trace 的脱敏 case extractor 和 local encrypted capsule 约定。
 - [ ] 补充 red-team case；之后再设计 live model canary 和 Harbor regression matrix。
-- [ ] 更新根 `README.md`，新增 `eval_harness/README.md`，并迁移/重写 Harbor 使用与复现文档。
+- [x] 更新根 `README.md`，新增 `eval_harness/README.md`，并迁移/重写 Harbor 使用与复现文档。
 
 ## Next step
 
-先冻结 TASK-005 的 schema 与目录设计，然后创建 `eval_harness` 最小包、offline scripted provider、一个人工 fixture 和一个端到端 golden case，证明“case → current runtime → fresh trace → verifier → scorecard”闭环；同步维护根 README 和 `eval_harness/README.md`，确保第一条可复现命令从文档开始就成立；全程不访问网络、不改 AgentLoop 回合语义。
+扩展确定性 golden 集至至少 10 个小型人工 fixture，优先覆盖无工具完成、读改测、多文件修改、provider malformed response、tool failure/retry、tool timeout、interrupt/resume、重复结果、越权路径和压缩事件；每个 case 继续只经公开 runtime 接口运行，不改 AgentLoop 回合语义。
 
 ## Verification
 
-- [ ] `pytest` → TASK-005 实现后重新运行
-- [ ] `ruff check .` → TASK-005 实现后重新运行
-- [ ] `node .ai-team/check.mjs --base origin/main` → valid
-- [ ] `node .ai-team/session.mjs validate` → valid（private sessions 已启用）
-- [ ] offline smoke：明确证明无网络访问并产出 trace / scorecard / artifacts
-- [ ] golden replay：同一 case 重跑后的 canonicalized 关键事件稳定
-- [ ] 文档复现检查：按根 README 和 `eval_harness/README.md` 的命令完成 offline smoke，并核对文档路径/参数与实现一致
+- [x] `pytest` → 1746 passed in 58.20s（2026-08-30，变基后最终运行）
+- [x] `ruff check .` → All checks passed（2026-08-30，本 checkpoint）
+- [x] `node .ai-team/check.mjs --base origin/main` → valid；TASK-005 handoff，functional progress 1/11，code progress 16 commits / 54 files / +4095/-969，private sessions 18（2026-08-30，变基后最终运行）
+- [x] `node .ai-team/session.mjs validate` → `{ "valid": true, "enabled": true }`（private sessions 已启用，2026-08-30）
+- [x] offline smoke：`venv/bin/python -m eval_harness run --case eval_harness/cases/offline/write_greeting.json --output /private/tmp/lanscoder-eval-smoke-20260830-verified` 通过；五类 gate 全绿，network guard attempts 为 0，并生成 trace / scorecard / artifacts。
+- [x] golden replay：`tests/test_eval_harness.py` 两次 fresh run 的 canonical JSON 相同；时间戳、elapsed、trace digest 和随机 message/part ID 不造成误报。
+- [x] 文档复现检查：根 README 与 `eval_harness/README.md` 均指向现有命令和路径；CLI smoke 已按 harness README 命令参数实跑。
 
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: TASK-004 已取消，当前进入 TASK-005 planning。目标是将 benchmark 重构为 `eval_harness`，建立脱敏长期 trace、offline golden、历史 replay、deterministic verifier、scorecard、red-team 和 canary 分层，并同步更新根 README、补齐 `eval_harness/README.md`、迁移/重写 Harbor 文档。用户已确认长期 trace 脱敏、原始内容只本地加密、第一阶段完全离线、人工微型 fixture 作为 canonical golden；历史 trace 作为第二阶段 regression case。下一步实现 schema、最小 offline 闭环和对应复现文档。历史工作区存在未提交改动，继续实施前需保留并审阅。
+- Summary: 最小离线闭环已完成并验证：`eval_harness` 包、CLI、v1 portable schema、scripted provider、socket network guard、fresh trace recorder、五类 hard gates/scorecard、一个人工 fixture/case、canonical golden 检查与文档入口均已落地；Harbor 已迁移到 `eval_harness/harbor/`。portable trace 不保留 system prompt、工具描述、工具参数或工具结果正文。全量 pytest（1746）、ruff与私有 session 校验均通过；仓库门禁将在 handoff 状态下最终复跑。下一位 owner 从「扩展至少 10 个 deterministic golden case」继续。工作区的 `.gitignore`、`LESSONS.md` 和 `agentops-health-check-2026-08-29.md` 改动依用户要求一并提交。

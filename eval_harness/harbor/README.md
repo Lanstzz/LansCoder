@@ -9,11 +9,12 @@ environment, runs the selected agent, invokes the verifier after the agent
 exits, and records job and trial artifacts.
 
 LansCoder deliberately does not implement dataset-specific runners. Harbor is
-the only benchmark integration maintained by this repository.
+the optional external regression/canary adapter in the unified evaluation
+harness; offline replay and golden checks live one directory above it.
 
 ## How LansCoder participates
 
-`benchmark.harbor.lanscoder_agent:LansCoderHarborAgent` is an installed-agent
+`eval_harness.harbor.lanscoder_agent:LansCoderHarborAgent` is an installed-agent
 adapter. For each task it stages only `pyproject.toml`, `README.md`, and
 `lanscoder/`, creates an isolated agent virtual environment, and runs one
 non-interactive `lanscoder --benchmark` turn in Harbor's task directory.
@@ -36,11 +37,11 @@ For a long-running local suite, classify infrastructure failures separately from
 ```sh
 PYTHONPATH="$PWD" venv/bin/harbor run \
   -p .local/harbor-datasets/aider-polyglot \
-  -a benchmark.harbor.lanscoder_agent:LansCoderHarborAgent \
-  --plugin benchmark.harbor.aider_feedback_plugin:AiderFeedbackPlugin \
+  -a eval_harness.harbor.lanscoder_agent:LansCoderHarborAgent \
+  --plugin eval_harness.harbor.aider_feedback_plugin:AiderFeedbackPlugin \
   -m gpt-5.6-luna -n 2 -k 1 \
   --ak reasoning_effort=high \
-  -o benchmark/runs/harbor/aider-polyglot-feedback -y
+  -o /tmp/lanscoder-harbor/aider-polyglot-feedback -y
 ```
 
 Do not use this plugin for Terminal-Bench or any benchmark whose official
@@ -85,7 +86,7 @@ your own values:
 zsh -lic 'export PYTHONPATH="$PWD"; venv/bin/harbor run \
   -d DATASET_NAME \
   -i TASK_NAME \
-  -a benchmark.harbor.lanscoder_agent:LansCoderHarborAgent \
+  -a eval_harness.harbor.lanscoder_agent:LansCoderHarborAgent \
   -m Yuren/gpt-5.6-terra \
   -n 1 -k 1 --ak reasoning_effort=medium \
   --agent-setup-timeout-multiplier 3 \
@@ -94,7 +95,7 @@ zsh -lic 'export PYTHONPATH="$PWD"; venv/bin/harbor run \
   --ae LANSCODER_BASE_URL=https://provider.example/v1 \
   --ae "LANSCODER_API_KEY=\${LANSCODER_API_KEY}" \
   --ae LANSCODER_DISABLE_GLOBAL_SKILLS=1 \
-  -o benchmark/runs/harbor/smoke -y'
+  -o /tmp/lanscoder-harbor/smoke -y'
 ```
 
 `-m` records model metadata in Harbor. The `LANSCODER_*` variables configure
@@ -139,7 +140,7 @@ logs, rewards, and timing under the selected jobs directory. Inspect a completed
 local run with:
 
 ```sh
-venv/bin/harbor view benchmark/runs/harbor/smoke
+venv/bin/harbor view /tmp/lanscoder-harbor/smoke
 ```
 
 A successful dataset download or container start is not a passing result. Use
@@ -159,7 +160,7 @@ Verify the agent log and verifier result before increasing concurrency.
 - **Harbor 0.18.0 汇总表 bug**:task 名含 `__`(如 `psf__requests-1142`)时 `harbor run` 打印汇总表崩溃(`_format_group_title` 拆分 eval key 出错);任务本身已完成,直接读 `jobs_dir/<ts>/result.json` 与 trial `result.json`。
 - **会话/压缩数据**:适配器把 session 导出到容器 `/logs/agent/lanscoder-session.jsonl`(含工具调用/CompactionEvent);运行加 `--agent-include-logs '*.jsonl'` 即可抓取(比 `--artifact` 简单)。
 - **工作区源码注入(重要)**:容器默认装的是 PyPI `lanscoder-core`,不是工作区代码——必须让 staging 生成 `lanscoder-core` pyproject(打包工作区 `lanscoder/`),否则 `--context-window/--compaction-strategy` 等新参数不生效。已修:适配器 `_stage_local_source` 写 staged pyproject(依赖含 anyio/portalocker/PyYAML/openai/anthropic/mcp/textual/prompt_toolkit/tomlkit/python-dotenv)。
-- **最小冒烟命令**:`harbor run -p ~/.cache/harbor/tasks/packages/swe-bench/<task> -a benchmark.harbor.lanscoder_agent:LansCoderHarborAgent -m deepseek/deepseek-v4-flash -n 1 -k 1 --agent-setup-timeout-multiplier 3 --ae LANSCODER_PROVIDER_NAME=deepseek --ae LANSCODER_MODEL=deepseek-v4-flash --ae LANSCODER_BASE_URL=https://api.deepseek.com --ae "LANSCODER_API_KEY=\${LANSCODER_API_KEY}" --ae LANSCODER_DISABLE_GLOBAL_SKILLS=1 --mounts '[{"type":"bind","source":"'$HOME'/.cache/lanscoder-harbor","target":"/opt/lanscoder-cache"}]' -o benchmark/runs/harbor/<run> -y`
+- **最小冒烟命令**:`harbor run -p ~/.cache/harbor/tasks/packages/swe-bench/<task> -a eval_harness.harbor.lanscoder_agent:LansCoderHarborAgent -m deepseek/deepseek-v4-flash -n 1 -k 1 --agent-setup-timeout-multiplier 3 --ae LANSCODER_PROVIDER_NAME=deepseek --ae LANSCODER_MODEL=deepseek-v4-flash --ae LANSCODER_BASE_URL=https://api.deepseek.com --ae "LANSCODER_API_KEY=\${LANSCODER_API_KEY}" --ae LANSCODER_DISABLE_GLOBAL_SKILLS=1 --mounts '[{"type":"bind","source":"'$HOME'/.cache/lanscoder-harbor","target":"/opt/lanscoder-cache"}]' -o /tmp/lanscoder-harbor/<run> -y`
 
 ## SWE-bench Pro 接入注意事项(2026-08-30 冒烟实测)
 

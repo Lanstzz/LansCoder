@@ -112,12 +112,47 @@ venv/bin/harbor run -p ~/.cache/harbor/tasks/packages/swe-bench/<task> \
 
 1. **访问网络一律先 export 代理**:`export all_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 https_proxy=http://127.0.0.1:7890`。
    实测:django 基础镜像拉取**没带代理**卡了 25+ 分钟;requests 镜像**带代理**秒过。docker pull/harbor run/curl 等一律带。
-2. **长时间任务(拉大镜像、跑 LLM 批量、harbor run 等)一律挂后台跑**,立刻返回给用户:
-   `nohup <cmd> > /tmp/<task>.log 2>&1 &` 记下 PID,进度/报错看日志文件,不阻塞对话,用户随时可问进度或插其他问题。
-3. 后台任务完成或异常要主动汇报一次,并把产物路径/结论给用户。
 
 ## 2026-08-29 — SWE-bench 单回合上下文增长有限(正式 run 实测)
 
 - 最大仓库 django(`django__django-11087`)单回合(120 工具轮)也**只摸 7 个文件、峰值 ≈42.6K chars/4(~170K chars)**,200K 窗口高水位(~163K chars/4)根本没到 → **压缩事件 0**。
 - 结论:SWE-bench 题是"聚焦修 bug",不是"读全仓库";**单回合会话上下文天然小**。
 - 要做压缩 A/B,窗口必须压到该任务实际水位以下(如 60K → 高水位≈49K)才能触发 L1/L2/L3;否则再大的仓库也不会触发。**先测任务的峰值 chars/4,再定窗口**,别盲信"大仓库=大上下文"。
+
+## 2026-08-30 — 长时间任务"挂后台"的正确做法(实测修正)
+
+- **不要依赖 `nohup` 从工具 exec 会话启动后台任务**:实测两次 `nohup docker pull`/`nohup harbor run` 都在 exec 会话结束后**静默被杀**(进程消失、无报错、产物半途而废)。原因:exec 会话结束会清理其进程组。
+- **可靠做法**:
+  1. **前台长会话**:`harbor run` 直接前台跑,exec 会话保持存活,用轮询看输出(一次 yield 最长 30s,可反复 poll)。本机实测最稳。
+  2. **launchctl**(真正脱离会话):需用绝对路径(如 `/opt/homebrew/bin/docker`),launchd 无 PATH。
+- 附带:镜像拉取这类"会挂死但可续传"的任务,用**看门狗循环**——每 N 秒检查日志大小无增长就 kill 重启(已下载层续传),比盲等/盲重试有效。
+
+## 2026-08-30 — SWE-bench Pro 接入冒烟(新基准 SOP,已验证)
+
+### 接入要点
+
+1. **数据集**:Harbor Hub 官方 `scale-ai/swe-bench-pro`(731 题,public)。`harbor dataset download scale-ai/swe-bench-pro --cache`。
+   - 下载走代理时 **100 并发会掉线**(ConnectError 部分任务);分轮重跑累积即可(每轮 60–120 个),**不必等全量 731,先凑够要跑的任务**。
+2. **任务镜像**:SWE-bench Pro 用 DockerHub `jefzda/sweap-images:<tag>`(预构建,单镜像 ~2.3GB,amd64-only → `DOCKER_DEFAULT_PLATFORM=linux/amd64`)。
+   - 大镜像经 daemon proxy/mirror 链路频繁 `short read: unexpected EOF` 或**无限挂死**(docker pull 无超时);用**看门狗循环**(120s 无日志增长就 kill 重启)拉取,~28 分钟/7 轮成功。
+3. **SWE-bench Pro 镜像是精简镜像(两个坑,已修适配器)**:
+   - **无 curl/wget**,只有旧 python3.9 + pip;适配器 bootstrap 要 ≥3.11 且 install_uv 只支持 curl/wget → 修复:`_python_setup_command` 在 `PYTHON_BIN` 为空时直接 `install_system_python`(apt 装 python3.11),install_uv 增加 `python3 -m pip install uv` 兜底。
+   - **内置私有 pip 索引 `http://127.0.0.1:9876/`**(容器内不可达)→ pip install 报 `Connection refused`;修复:适配器 install 命令强制 `PIP_INDEX_URL=https://pypi.org/simple`(可被 `PIP_INDEX_URL_OVERRIDE` 覆盖)。
+4. **任务结构**:Harbor 标准包装,含 `<pr_description>`(problem_statement + requirements + interface);验证器跑官方测试(如 qutebrowser 21 个单测)。
+
+### 冒烟实测结果(qutebrowser-0b621c,patch 34 行)
+
+- 命令:`harbor run -p <task-dir>/<contenthash>/ ... -m deepseek/deepseek-v4-flash --ak context_window=200000 --ak compaction_strategy=l1_l2_l3 --agent-include-logs '*.jsonl'`。
+- **reward 1.0(21/21 测试通过)**,5m20s,55 次 LLM 调用、56 assistant / 71 tool_result。
+- 会话峰值上下文 **~31K chars/4(123.5K chars)**,均值 ~23.7K chars/4;200K 窗口 → **压缩事件 0**。
+- **结论延续 Verified 的教训**:SWE-bench(含 Pro)是"聚焦修 bug",高效小模型单会话上下文天然 ~30–50K chars/4;**200K/60K 都不会触发压缩**。要触发需窗口压到任务峰值之下:
+  `high_watermark = 0.9 × (0.95 × window − 4096)`,该任务触发临界窗口 ≈ **40K**,压到 **32K** 则后 ~10 次调用会触发。
+- 因此 **Phase 4 A/B 的窗口选择必须"先测该任务的峰值 chars/4,再定窗口"**(如 32K/40K 档),而不是盲用 200K。
+
+## 2026-08-30 — SWE-bench Pro vuls(最复杂任务)冒烟实测
+
+- **任务**:`future-architect__vuls-4a72295d`(Trivy library-only 导入;金标准 patch 130.9K chars/1484 行/7 文件 + 测试面 322K chars/6537 行,全数据集最大)。镜像 `jefzda/sweap-images:future-architect.vuls-...`(3.5GB,看门狗 7 轮/约 20 分钟拉完)。
+- **结果**:deepseek-v4-flash + 200K + l1_l2_l3 → **reward 1.0(验证器 77/77 测试通过)**,总耗时 37m17s(agent 30 分钟回合上限被停,但改动已完整,验证器直接过)。
+- **上下文**:73 次工具调用(32 shell + 12 view + 9 grep + 4 edit + 2 write …),**峰值 288.6K chars → 72.2K chars/4**,是 qutebrowser(31K)的 **2.3 倍**;200K 窗口 → **压缩仍 0**。
+- **触发临界(本任务)**:high_watermark=0.9×(0.95×window−4096) ≤ 72K → **window ≤ ~88K 开始临界,64K 会在后半程触发**。
+- 结论:任务越复杂(大 patch + 大测试面 + Go 构建输出)上下文确实越大,但**高效小模型仍不会把 200K 顶满**;Phase 4 A/B 按"每任务峰值定窗口"跑即可(vuls 这类用 64K 档)。
