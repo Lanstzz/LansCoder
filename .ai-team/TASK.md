@@ -145,7 +145,7 @@ Trace 与 case 分离：case 是可执行输入和断言，trace 是本次运行
 
 - [x] `pytest` → 1779 passed in 59.30s（2026-08-30，本 checkpoint）
 - [x] `ruff check .` → All checks passed（2026-08-30，本 checkpoint）
-- [x] `node .ai-team/check.mjs --base ca5ff7431e13efb0df698d2092cc87e8423b6c5d` → valid；functional progress 10/11，code progress 2 commits / 17 files / +707/-47，private sessions 18（2026-08-30，本 checkpoint）。当前分支基于 PR #27 的提交，故使用实际 merge-base；直接使用 `origin/main` 时因 PR #27 尚未合入而不是当前分支祖先，门禁会拒绝该参数。
+- [x] `node .ai-team/check.mjs --base ca5ff7431e13efb0df698d2092cc87e8423b6c5d` → valid；functional progress 10/11，code progress 6 commits / 17 files / +707/-47，private sessions 18（2026-08-31，本 checkpoint）。当前分支基于 PR #27 的 stacked 提交，故使用实际 merge-base；直接使用 `origin/main` 时因 PR #27 尚未合入而不是当前分支祖先，门禁会拒绝该参数。
 - [x] `node .ai-team/session.mjs validate` → `{ "valid": true, "enabled": true, "errors": [] }`；已审阅现有 session Markdown；本次 hook 未生成新的 TASK-005 session 文件（2026-08-30）
 - [x] offline smoke：`venv/bin/python -m eval_harness run --case eval_harness/cases/offline/write_greeting.json --output /private/tmp/lanscoder-eval-smoke-20260830-verified` 通过；五类 gate 全绿，network guard attempts 为 0，并生成 trace / scorecard / artifacts。
 - [x] golden replay：`tests/test_eval_harness.py` 两次 fresh run 的 canonical JSON 相同；时间戳、elapsed、trace digest 和随机 message/part ID 不造成误报。
