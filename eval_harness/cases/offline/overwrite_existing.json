@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "offline-overwrite-existing",
+  "title": "Overwrite an existing fixture artifact",
+  "mode": "interaction_replay",
+  "prompt": "Replace version.txt with version 2.",
+  "fixture": "../../fixtures/overwrite_existing",
+  "provider_tape": [
+    {"content": "", "finish_reason": "tool_calls", "tool_calls": [{"id": "overwrite_version", "name": "write_file", "arguments": {"path": "version.txt", "content": "version 2\n"}}]},
+    {"content": "Replaced version.txt with version 2.", "finish_reason": "stop", "tool_calls": []}
+  ],
+  "expected_artifacts": {"version.txt": "version 2\n"},
+  "expected_delivery_contains": "Replaced version.txt"
+}

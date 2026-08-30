@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "offline-no-tool-completion",
+  "title": "Complete without invoking tools",
+  "mode": "interaction_replay",
+  "prompt": "Explain that the offline harness is ready.",
+  "fixture": null,
+  "provider_tape": [
+    {"content": "Offline harness is ready.", "finish_reason": "stop", "tool_calls": []}
+  ],
+  "expected_artifacts": {},
+  "expected_delivery_contains": "Offline harness is ready."
+}

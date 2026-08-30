@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "offline-multi-round",
+  "title": "Complete a three-round file plan",
+  "mode": "interaction_replay",
+  "prompt": "Create first.txt, second.txt, and third.txt in separate rounds.",
+  "fixture": null,
+  "provider_tape": [
+    {"content": "", "finish_reason": "tool_calls", "tool_calls": [{"id": "write_first", "name": "write_file", "arguments": {"path": "first.txt", "content": "first\n"}}]},
+    {"content": "", "finish_reason": "tool_calls", "tool_calls": [{"id": "write_second", "name": "write_file", "arguments": {"path": "second.txt", "content": "second\n"}}]},
+    {"content": "", "finish_reason": "tool_calls", "tool_calls": [{"id": "write_third", "name": "write_file", "arguments": {"path": "third.txt", "content": "third\n"}}]},
+    {"content": "Created all three planned files.", "finish_reason": "stop", "tool_calls": []}
+  ],
+  "expected_artifacts": {"first.txt": "first\n", "second.txt": "second\n", "third.txt": "third\n"},
+  "expected_delivery_contains": "Created all three planned files"
+}
