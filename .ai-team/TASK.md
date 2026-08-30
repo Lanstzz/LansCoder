@@ -151,11 +151,11 @@ Trace 与 case 分离：case 是可执行输入和断言，trace 是本次运行
 - [x] golden replay：`tests/test_eval_harness.py` 两次 fresh run 的 canonical JSON 相同；时间戳、elapsed、trace digest 和随机 message/part ID 不造成误报。
 - [x] 文档复现检查：根 README 与 `eval_harness/README.md` 均指向现有命令和路径；CLI smoke 已按 harness README 命令参数实跑。
 - [x] focused fault/scorecard tests：`tests/test_eval_harness.py` → 23 passed；CLI baseline run/compare smoke → exit 0，gate regressions 为空（2026-08-30）。
-- [x] focused eval tests：`tests/test_eval_harness.py` → 31 passed；覆盖 session resume、真实 L3 compaction、四个 red-team case、created/modified/deleted diff、forbidden path 和 delivery completion。red-team CLI smoke：malicious/oversized/unauthorized exit 0，duplicate exit 1 且 `duplicate_tool_ids` 可见（2026-08-30）。
+- [x] focused eval tests：`tests/test_eval_harness.py` → 31 passed；覆盖 session resume、真实 L3 compaction、四个 red-team case、created/modified/deleted diff、forbidden path 和 delivery completion。red-team CLI smoke：malicious/oversized/unauthorized exit 0，duplicate exit 1 且 `duplicate_tool_ids` 可见；L3 compaction probe 已改为显式 `prompt_too_long` 注入，避免 CI token 水位差异导致测试不稳定（2026-08-31）。
 - [x] history extractor/capsule focused tests：`tests/test_eval_extractor.py tests/test_eval_harness.py` → 28 passed；`ruff check eval_harness tests/test_eval_extractor.py` → All checks passed；覆盖 session/trace/Harbor 目录抽取、capsule hydrate/replay、CLI 口令环境变量、错误口令与篡改拒绝（2026-08-30）。
 
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: 在既有最小离线闭环上完成 deterministic provider/tool fault probe、interrupt lifecycle verifier、artifact diff 校验、compaction no-op probe、scorecard recovery metrics 与 baseline compare CLI；前一 checkpoint 新增历史 session/trace/Harbor 目录 extractor、hash-only portable manifest、PBKDF2/HMAC 加密 capsule 与显式 hydrate/replay；本 checkpoint 新增真实 session resume/L3 compaction 采集、red-team 基础集，以及创建/修改/删除/禁止路径和 delivery completion hard gate。全量 pytest（1779）、ruff、仓库门禁和私有 session 校验均通过；不改 AgentLoop 回合语义或 core 公共字段。trace 完整性 SC-2 仍待补齐。
+- Summary: 在既有最小离线闭环上完成 deterministic provider/tool fault probe、interrupt lifecycle verifier、artifact diff 校验、compaction no-op probe、scorecard recovery metrics 与 baseline compare CLI；前一 checkpoint 新增历史 session/trace/Harbor 目录 extractor、hash-only portable manifest、PBKDF2/HMAC 加密 capsule 与显式 hydrate/replay；随后补充真实 session resume/L3 compaction、red-team 基础集、创建/修改/删除/禁止路径和 delivery completion hard gate，并将 compaction probe 改为显式 provider fault 以消除 CI 水位差异。全量 pytest（1779）、ruff、仓库门禁和私有 session 校验均通过；不改 AgentLoop 回合语义或 core 公共字段。trace 完整性 SC-2 仍待补齐。
