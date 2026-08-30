@@ -149,11 +149,11 @@ Trace 与 case 分离：case 是可执行输入和断言，trace 是本次运行
 - [x] golden replay：`tests/test_eval_harness.py` 两次 fresh run 的 canonical JSON 相同；时间戳、elapsed、trace digest 和随机 message/part ID 不造成误报。
 - [x] 文档复现检查：根 README 与 `eval_harness/README.md` 均指向现有命令和路径；CLI smoke 已按 harness README 命令参数实跑。
 - [x] focused fault/scorecard tests：`tests/test_eval_harness.py` → 23 passed；CLI baseline run/compare smoke → exit 0，gate regressions 为空（2026-08-30）。
-- [x] focused eval tests：`tests/test_eval_harness.py` → 28 passed；覆盖 session resume、真实 L3 compaction、四个 red-team case（重复 tool ID 保留预期失败分类）。red-team CLI smoke：malicious/oversized/unauthorized exit 0，duplicate exit 1 且 `duplicate_tool_ids` 可见（2026-08-30）。
+- [x] focused eval tests：`tests/test_eval_harness.py` → 28 passed；覆盖 session resume、真实 L3 compaction、四个 red-team case（重复 tool ID 保留预期失败分类）。red-team CLI smoke：malicious/oversized/unauthorized exit 0，duplicate exit 1 且 `duplicate_tool_ids` 可见；L3 compaction probe 已改为显式 `prompt_too_long` 注入，避免 CI token 水位差异导致测试不稳定（2026-08-31）。
 - [x] history extractor/capsule focused tests：`tests/test_eval_extractor.py tests/test_eval_harness.py` → 28 passed；`ruff check eval_harness tests/test_eval_extractor.py` → All checks passed；覆盖 session/trace/Harbor 目录抽取、capsule hydrate/replay、CLI 口令环境变量、错误口令与篡改拒绝（2026-08-30）。
 
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: 在既有最小离线闭环上完成 deterministic provider/tool fault probe、interrupt lifecycle verifier、artifact diff 校验、compaction no-op probe、scorecard recovery metrics 与 baseline compare CLI；本 checkpoint 新增历史 session/trace/Harbor 目录 extractor、hash-only portable manifest、PBKDF2/HMAC 加密 capsule 与显式 hydrate/replay；不改 AgentLoop 回合语义或 core 公共字段。全量 pytest（1770）、ruff、仓库门禁与私有 session 校验均通过；已审阅现有 session Markdown，本次 hook 未生成新的 TASK-005 session 文件。真实 resume/compaction 与 red-team case 仍未完成。
+- Summary: 在既有最小离线闭环上完成 deterministic provider/tool fault probe、interrupt lifecycle verifier、artifact diff 校验、compaction no-op probe、scorecard recovery metrics 与 baseline compare CLI；本 checkpoint 新增历史 session/trace/Harbor 目录 extractor、hash-only portable manifest、PBKDF2/HMAC 加密 capsule 与显式 hydrate/replay；随后补充真实 session resume/L3 compaction、red-team 基础集，并将 compaction probe 改为显式 provider fault 以消除 CI 水位差异。不改 AgentLoop 回合语义或 core 公共字段。全量 pytest（1776）、ruff、仓库门禁与私有 session 校验均通过；已审阅现有 session Markdown，本次 hook 未生成新的 TASK-005 session 文件。artifact/delivery verifier 下一步在 stacked PR #28。
