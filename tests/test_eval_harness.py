@@ -9,6 +9,7 @@ from eval_harness.replay.runner import run_offline_case_path
 from eval_harness.trace.canonicalize import canonical_json, load_trace
 from eval_harness.trace.recorder import TraceRecorder
 from eval_harness.trace.redaction import Redactor
+from eval_harness.verify.checks import compare_scorecards
 
 
 CASE_PATH = Path(__file__).parents[1] / "eval_harness" / "cases" / "offline" / "write_greeting.json"
@@ -95,3 +96,133 @@ def test_scorecard_is_machine_readable_json(tmp_path: Path) -> None:
     scorecard_path = tmp_path / "scorecard.json"
     scorecard_path.write_text(json.dumps({"passed": True}), encoding="utf-8")
     assert json.loads(scorecard_path.read_text(encoding="utf-8")) == {"passed": True}
+
+
+def _write_case(tmp_path: Path, **overrides: object) -> Path:
+    case = {
+        "schema_version": 1,
+        "id": "probe",
+        "title": "harness probe",
+        "mode": "interaction_replay",
+        "prompt": "Run the probe.",
+        "fixture": None,
+        "provider_tape": [{"content": "Probe completed.", "finish_reason": "stop", "tool_calls": []}],
+        "expected_artifacts": {},
+        "expected_delivery_contains": "Probe completed.",
+    }
+    case.update(overrides)
+    path = tmp_path / "case.json"
+    path.write_text(json.dumps(case), encoding="utf-8")
+    return path
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_provider_timeout_is_recorded_and_retried(tmp_path: Path) -> None:
+    case_path = _write_case(
+        tmp_path,
+        provider_tape=[
+            {"fault": "timeout"},
+            {"content": "Recovered after provider timeout.", "finish_reason": "stop", "tool_calls": []},
+        ],
+        expected_delivery_contains="Recovered after provider timeout.",
+    )
+
+    result = await run_offline_case_path(case_path, tmp_path / "run")
+
+    assert result.scorecard["passed"] is True
+    assert result.scorecard["metrics"]["provider_errors"] == 1
+    assert result.scorecard["gates"]["recovery"]["provider_errors"] == ["timeout"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_tool_timeout_is_a_closed_recoverable_lifecycle(tmp_path: Path) -> None:
+    case_path = _write_case(
+        tmp_path,
+        prompt="Write timeout.txt, then report the result.",
+        provider_tape=[
+            {
+                "content": "",
+                "finish_reason": "tool_calls",
+                "tool_calls": [{"id": "timed_out", "name": "write_file", "arguments": {"path": "timeout.txt", "content": "never\n"}}],
+            },
+            {"content": "Tool timeout was recovered.", "finish_reason": "stop", "tool_calls": []},
+        ],
+        tool_faults={"timed_out": "timeout"},
+        expected_delivery_contains="Tool timeout was recovered.",
+    )
+
+    result = await run_offline_case_path(case_path, tmp_path / "run")
+
+    assert result.scorecard["passed"] is True
+    assert result.scorecard["gates"]["recovery"]["tool_errors"] == ["timeout"]
+    assert not (result.artifacts_path / "timeout.txt").exists()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_malformed_provider_response_is_categorized_without_trace_loss(tmp_path: Path) -> None:
+    case_path = _write_case(tmp_path, provider_tape=[{"fault": "malformed_response"}])
+
+    result = await run_offline_case_path(case_path, tmp_path / "run")
+
+    assert result.scorecard["passed"] is False
+    assert result.scorecard["gates"]["trace"]["passed"] is True
+    assert result.scorecard["gates"]["recovery"]["provider_errors"] == ["malformed_response"]
+    assert "runtime recorded an exception" in result.scorecard["gates"]["recovery"]["errors"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_compaction_probe_is_recorded_in_trace_and_metrics(tmp_path: Path) -> None:
+    case_path = _write_case(tmp_path, enable_compaction=True)
+
+    result = await run_offline_case_path(case_path, tmp_path / "run")
+    events = load_trace(result.trace_path)
+
+    assert result.scorecard["passed"] is True
+    assert result.scorecard["metrics"]["context_compactions"] == 1
+    assert result.scorecard["gates"]["recovery"]["compaction_events"] == 1
+    assert next(event for event in events if event["type"] == "context_compaction")["data"]["noop"] is True
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_interrupt_probe_settles_tool_lifecycle(tmp_path: Path) -> None:
+    case_path = _write_case(
+        tmp_path,
+        provider_tape=[
+            {
+                "content": "",
+                "finish_reason": "tool_calls",
+                "tool_calls": [{"id": "interrupt_me", "name": "write_file", "arguments": {"path": "partial.txt", "content": "written\n"}}],
+            }
+        ],
+        interrupt_after_tool_calls=1,
+        tool_faults={"interrupt_me": "interrupt"},
+        expected_artifacts={},
+        expected_delivery_contains="当前任务已中断。",
+    )
+
+    result = await run_offline_case_path(case_path, tmp_path / "run")
+
+    assert result.scorecard["passed"] is True
+    assert result.scorecard["gates"]["recovery"]["interruptions"] == ["interrupt_me"]
+    assert result.scorecard["gates"]["recovery"]["errors"] == []
+    assert any(event["type"] == "interrupt_requested" for event in load_trace(result.trace_path))
+
+
+def test_compare_scorecards_flags_lost_hard_gate_and_reports_numeric_deltas() -> None:
+    baseline = {"passed": True, "gates": {"trace": {"passed": True}}, "metrics": {"provider_calls": 2}}
+    current = {"passed": False, "gates": {"trace": {"passed": False}}, "metrics": {"provider_calls": 3}}
+
+    comparison = compare_scorecards(baseline, current)
+
+    assert comparison == {
+        "passed": False,
+        "baseline_passed": True,
+        "current_passed": False,
+        "gate_regressions": ["trace"],
+        "metric_deltas": {"provider_calls": 1},
+    }

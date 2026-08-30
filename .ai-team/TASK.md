@@ -75,7 +75,7 @@ Trace 与 case 分离：case 是可执行输入和断言，trace 是本次运行
 - [ ] **SC-5 (异常恢复)**：Given provider malformed response、tool failure、tool timeout、取消和 resume 等故障注入，Then runtime 不产生未结算生命周期，恢复行为由 verifier 明确判定。
 - [ ] **SC-6 (产物与交付)**：Given fixture case，Then verifier 能检查创建/修改/删除文件、diff、测试结果、禁止路径和最终交付状态。
 - [ ] **SC-7 (安全脱敏)**：Given 含 secret、绝对路径和私有输入的 trace，Then 长期 portable trace 只保留脱敏值；原始内容仅存在本地加密 capsule，不能进入 Git 或 scorecard。
-- [ ] **SC-8 (Scorecard)**：Given trace 和 verifier 输出，Then 生成机器可读 scorecard，区分硬门禁与性能指标，并支持与基线比较。
+- [x] **SC-8 (Scorecard)**：Given trace 和 verifier 输出，Then 生成机器可读 scorecard，区分硬门禁与性能指标，并支持与基线比较。
 - [ ] **SC-9 (Red-team 基础集)**：Given 恶意/异常 provider 输出、超大工具结果、重复结果和越权路径，Then trace 不泄密、runtime 不崩溃、失败原因可归类。
 - [ ] **SC-10 (文档与复现)**：Given 新用户只阅读根 `README.md` 和 `eval_harness/README.md`，Then 能理解评测层边界、安装依赖、运行 offline/golden/replay/Harbor case、查看 trace/scorecard，并按文档复现实例。
 - [ ] **SC-11 (门禁)**：When 运行 `pytest`、`ruff check .`、`node .ai-team/check.mjs --base origin/main` 和私有 session 校验，Then 全绿。
@@ -116,6 +116,8 @@ Trace 与 case 分离：case 是可执行输入和断言，trace 是本次运行
 - [x] 第一阶段最小闭环已落地：`eval_harness` v1 schema、JSON CLI、scripted provider、网络拒绝器、fresh JSONL recorder、trace/artifact/recovery/security/delivery verifier、scorecard、一个人工 fixture/case 与测试均通过公开 L1 `lanscoder.core.agent_loop` 接口工作。
 - [x] Portable trace 默认不保存 system prompt、工具描述、工具参数或工具结果正文；这些值仅留 redacted placeholder、稳定指纹或字段摘要，且 trace integrity 使用稳定序号与 SHA-256 footer。
 - [x] Harbor adapter 已从 `benchmark/harbor/` 迁移到 `eval_harness/harbor/`；根 README、harness README 和 Harbor 命令已改用统一入口。
+- [x] verifier 已覆盖 provider error 分类、tool timeout/failure、interrupt 后的错误结束与中断结算、artifact diff 路径安全和 compaction 事件结构；scorecard 新增 provider/tool/recovery/compaction 指标。
+- [x] 增加 deterministic fault probe manifest 字段与 provider tape fault；CLI 支持 `run --baseline` 和独立 `compare` 命令，丢失已通过的 hard gate 会报告为 regression。
 
 ## Pending
 
@@ -123,7 +125,7 @@ Trace 与 case 分离：case 是可执行输入和断言，trace 是本次运行
 - [x] 冻结第一版 trace/case/scorecard schema、版本策略、canonicalization 和脱敏规则。
 - [x] 实现 scripted provider、offline runner 和 fresh trace recorder。
 - [x] 将人工微型项目 fixture、provider tapes 和 golden case 扩展到至少 10 个；当前离线目录包含 11 个可执行 deterministic case，并有批量 scorecard 回归测试。
-- [ ] 将 trace、artifact、recovery、security、delivery verifier 与机器可读 scorecard 扩展到异常、取消、恢复、压缩和基线比较的完整场景。
+- [ ] 将 trace、artifact、recovery、security、delivery verifier 与机器可读 scorecard 扩展到真实异常、取消、恢复、压缩和基线比较的完整场景；当前已完成 deterministic fault 分类与 no-op compression probe，真实 resume/compaction 仍待接入。
 - [ ] 实现历史 session/Harbor trace 的脱敏 case extractor 和 local encrypted capsule 约定。
 - [ ] 补充 red-team case；之后再设计 live model canary 和 Harbor regression matrix。
 - [x] 更新根 `README.md`，新增 `eval_harness/README.md`，并迁移/重写 Harbor 使用与复现文档。
@@ -131,20 +133,21 @@ Trace 与 case 分离：case 是可执行输入和断言，trace 是本次运行
 
 ## Next step
 
-继续扩展 verifier 与 scorecard，覆盖 provider malformed response、tool timeout、interrupt/resume、压缩事件和基线比较；随后实现历史 session/Harbor trace 脱敏 extractor。新增 case 继续只经公开 runtime 接口运行，不改 AgentLoop 回合语义。
+实现历史 session/Harbor trace 的脱敏 case extractor 和 local encrypted capsule 约定；随后补齐真实 resume/compaction 采集与 red-team case。新增 case 继续只经公开 runtime 接口运行，不改 AgentLoop 回合语义。
 
 ## Verification
 
-- [x] `pytest` → 1758 passed in 56.08s（2026-08-30，本 checkpoint，含 10+ case 批量回归）
+- [x] `pytest` → 1764 passed in 55.76s（2026-08-30，本 checkpoint）
 - [x] `ruff check .` → All checks passed（2026-08-30，本 checkpoint）
-- [x] `node .ai-team/check.mjs --base origin/main` → valid；TASK-005 handoff，functional progress 2/11，code progress 16 commits / 70 files / +4126/-11899，private sessions 18（2026-08-30，本 checkpoint）
-- [x] `node .ai-team/session.mjs validate` → `{ "valid": true, "enabled": true, "errors": [] }`（private sessions 已启用，2026-08-30）
+- [x] `node .ai-team/check.mjs --base origin/main` → valid；TASK-005 handoff，functional progress 3/11，code progress 17 commits / 70 files / +4689/-11899，private sessions 18（2026-08-30，本 checkpoint）
+- [x] `node .ai-team/session.mjs validate` → `{ "valid": true, "enabled": true, "errors": [] }`；已审阅现有 session Markdown；本次 hook 未生成新的 TASK-005 session 文件（2026-08-30）
 - [x] offline smoke：`venv/bin/python -m eval_harness run --case eval_harness/cases/offline/write_greeting.json --output /private/tmp/lanscoder-eval-smoke-20260830-verified` 通过；五类 gate 全绿，network guard attempts 为 0，并生成 trace / scorecard / artifacts。
 - [x] golden replay：`tests/test_eval_harness.py` 两次 fresh run 的 canonical JSON 相同；时间戳、elapsed、trace digest 和随机 message/part ID 不造成误报。
 - [x] 文档复现检查：根 README 与 `eval_harness/README.md` 均指向现有命令和路径；CLI smoke 已按 harness README 命令参数实跑。
+- [x] focused fault/scorecard tests：`tests/test_eval_harness.py` → 23 passed；CLI baseline run/compare smoke → exit 0，gate regressions 为空（2026-08-30）。
 
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: 最小离线闭环已完成并验证：`eval_harness` 包、CLI、v1 portable schema、scripted provider、socket network guard、fresh trace recorder、五类 hard gates/scorecard、一个人工 fixture/case、canonical golden 检查与文档入口均已落地；Harbor 已迁移到 `eval_harness/harbor/`。portable trace 不保留 system prompt、工具描述、工具参数或工具结果正文。全量 pytest（1746）、ruff与私有 session 校验均通过；仓库门禁将在 handoff 状态下最终复跑。下一位 owner 从「扩展至少 10 个 deterministic golden case」继续。工作区的 `.gitignore`、`LESSONS.md` 和 `agentops-health-check-2026-08-29.md` 改动依用户要求一并提交。
+- Summary: 在既有最小离线闭环上完成 deterministic provider/tool fault probe、interrupt lifecycle verifier、artifact diff 校验、compaction no-op probe、scorecard recovery metrics 与 baseline compare CLI；不改 AgentLoop 回合语义或 core 公共字段。全量 pytest（1764）、ruff、仓库门禁与私有 session 校验均通过；已审阅现有 session Markdown，本次 hook 未生成新的 TASK-005 session 文件。真实 resume/compaction、历史 extractor/capsule 和 red-team case 仍未完成。

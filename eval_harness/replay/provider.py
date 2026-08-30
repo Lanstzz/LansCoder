@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from lanscoder.providers.base import ChatProvider
+from lanscoder.providers.errors import ProviderError, ProviderErrorKind
 from lanscoder.providers.types import ChatRequest, ChatResponse, ProviderCapabilities, ToolCall
 
 from eval_harness.schema.models import ProviderTapeResponse
@@ -42,6 +43,18 @@ class ScriptedProvider(ChatProvider):
             raise RuntimeError("scripted provider tape exhausted")
         entry = self.tape[self._position]
         self._position += 1
+        if entry.fault is not None:
+            kind = _fault_kind(entry.fault)
+            self._emit(
+                "provider_error",
+                {
+                    "kind": entry.fault,
+                    "provider_error_kind": kind.value,
+                    "message": f"scripted {entry.fault} injected",
+                    "recoverable": kind in {ProviderErrorKind.TIMEOUT, ProviderErrorKind.NETWORK_ERROR},
+                },
+            )
+            raise ProviderError(kind, f"scripted {entry.fault} injected")
         response = ChatResponse(
             provider=self.name,
             model=self.model,
@@ -127,3 +140,14 @@ def _tool_call_payload(call: Any) -> dict[str, Any]:
 def _fingerprint(value: object) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _fault_kind(fault: str) -> ProviderErrorKind:
+    """Map portable fault labels to the runtime's existing error taxonomy."""
+
+    return {
+        "malformed_response": ProviderErrorKind.API_ERROR,
+        "timeout": ProviderErrorKind.TIMEOUT,
+        "prompt_too_long": ProviderErrorKind.PROMPT_TOO_LONG,
+        "network_error": ProviderErrorKind.NETWORK_ERROR,
+    }[fault]
