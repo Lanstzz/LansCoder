@@ -26,7 +26,6 @@ _CONFIG_ROOT: Final = "/tmp/lanscoder-harbor-config"
 # ``--mounts``) so LansCoder's dependencies download once and are reused
 # across trials and containers instead of being fetched for every task.
 _CACHE_DIR: Final = "/opt/lanscoder-cache"
-_DEFAULT_PACKAGE: Final = "https://github.com/KomorGiaoGiao/LansCoder/archive/refs/heads/main.zip"
 
 
 class LansCoderHarborAgent(BaseInstalledAgent):
@@ -42,15 +41,25 @@ class LansCoderHarborAgent(BaseInstalledAgent):
     def __init__(
         self,
         *args,
-        max_tool_rounds: int | str = 90,
+        max_tool_rounds: int | str | None = None,
+        max_provider_calls: int | str | None = None,
+        max_turn_seconds: int | str | None = None,
         reasoning_effort: str | None = None,
+        context_window: int | str | None = None,
+        compaction_strategy: str | None = None,
         source_dir: str | Path | None = None,
         package: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self._max_tool_rounds = _positive_int(max_tool_rounds, "max_tool_rounds")
+        self._max_tool_rounds = _positive_int(max_tool_rounds, "max_tool_rounds") if max_tool_rounds is not None else None
+        self._max_provider_calls = _positive_int(max_provider_calls, "max_provider_calls") if max_provider_calls is not None else None
+        self._max_turn_seconds = _positive_int(max_turn_seconds, "max_turn_seconds") if max_turn_seconds is not None else None
         self._reasoning_effort = _optional_nonblank(reasoning_effort, "reasoning_effort")
+        self._context_window = _positive_int(context_window, "context_window") if context_window is not None else None
+        if compaction_strategy not in (None, "no_compact", "l1_l2", "l1_l2_l3"):
+            raise ValueError(f"compaction_strategy must be one of no_compact/l1_l2/l1_l2_l3, got {compaction_strategy!r}")
+        self._compaction_strategy = compaction_strategy
         self._source_dir = Path(source_dir).expanduser().resolve() if source_dir is not None else _default_source_dir()
         self._package = package
 
@@ -136,7 +145,16 @@ class LansCoderHarborAgent(BaseInstalledAgent):
         return _REMOTE_SOURCE_DIR
 
     def _stage_local_source(self) -> Path:
-        """Create the minimal host-side package tree copied into a task image."""
+        """Create the minimal host-side package tree copied into a task image.
+
+        The repo root ``lanscoder/`` is the SDK source (published as
+        ``lanscoder-core``); the repo's thin-shell ``pyproject.toml`` has
+        ``packages = []``, so installing it directly would install nothing and
+        the task image would fall back to PyPI ``lanscoder-core`` (stale CLI).
+        Instead we write a staged ``lanscoder-core`` pyproject that packages the
+        working-tree ``lanscoder/``, so the container always exercises the exact
+        checkout under development.
+        """
 
         source = self._source_dir
         if source is None:
@@ -151,7 +169,7 @@ class LansCoderHarborAgent(BaseInstalledAgent):
         if staged.exists():
             shutil.rmtree(staged)
         staged.mkdir(parents=True)
-        shutil.copy2(source / "pyproject.toml", staged / "pyproject.toml")
+        staged.joinpath("pyproject.toml").write_text(_staged_pyproject(source), encoding="utf-8")
         shutil.copy2(source / "README.md", staged / "README.md")
         shutil.copytree(package_dir, staged / "lanscoder", ignore=_ignore_source_artifacts)
         return staged
@@ -169,6 +187,11 @@ class LansCoderHarborAgent(BaseInstalledAgent):
         session_path = f"{_SESSION_ROOT}/sessions/{safe_session_id}.jsonl"
 
         effort = f"--reasoning-effort {shlex.quote(self._reasoning_effort)} " if self._reasoning_effort else ""
+        tool_rounds = f"--max-tool-rounds {self._max_tool_rounds} " if self._max_tool_rounds is not None else ""
+        provider_calls = f"--max-provider-calls {self._max_provider_calls} " if self._max_provider_calls is not None else ""
+        turn_seconds = f"--max-turn-seconds {self._max_turn_seconds} " if self._max_turn_seconds is not None else ""
+        context_window = f"--context-window {int(self._context_window)} " if self._context_window is not None else ""
+        compaction = f"--compaction-strategy {shlex.quote(self._compaction_strategy)} " if self._compaction_strategy else ""
         resume = "--resume-session " if resume_session else ""
         return (
             "set -o pipefail; "
@@ -180,8 +203,12 @@ class LansCoderHarborAgent(BaseInstalledAgent):
             f"--data-root {shlex.quote(_SESSION_ROOT)} "
             f"--session-id {shlex.quote(safe_session_id)} "
             f"{resume}"
-            f"--max-tool-rounds {self._max_tool_rounds} "
+            f"{tool_rounds}"
+            f"{provider_calls}"
+            f"{turn_seconds}"
             f"{effort}"
+            f"{context_window}"
+            f"{compaction}"
             f"--message {shlex.quote(instruction)} "
             "2>&1 | tee /logs/agent/lanscoder.txt; "
             'LANSCODER_EXIT="${PIPESTATUS[0]}"; '
@@ -289,7 +316,7 @@ fi
 if [ -n "$PYTHON_BIN" ] && has_venv "$PYTHON_BIN"; then
   exit 0
 fi
-if [ -z "$PYTHON_BIN" ] && ! command -v python3 >/dev/null 2>&1; then
+if [ -z "$PYTHON_BIN" ]; then
   install_system_python
   PYTHON_BIN="$(find_python || true)"
   if [ -n "$PYTHON_BIN" ] && has_venv "$PYTHON_BIN"; then
@@ -304,8 +331,14 @@ install_uv() {
     retry sh -c 'curl -LsSf https://astral.sh/uv/install.sh | UV_UNMANAGED_INSTALL="'"$AGENT_ROOT"'/bin" sh'
   elif command -v wget >/dev/null 2>&1; then
     retry sh -c 'wget -qO- https://astral.sh/uv/install.sh | UV_UNMANAGED_INSTALL="'"$AGENT_ROOT"'/bin" sh'
+  elif command -v python3 >/dev/null 2>&1; then
+    retry sh -c 'python3 -m pip install --quiet --prefix "$AGENT_ROOT" uv'
+    if [ ! -x "$AGENT_ROOT/bin/uv" ]; then
+      echo "LansCoder Harbor agent: python3 pip uv install produced no $AGENT_ROOT/bin/uv" >&2
+      exit 64
+    fi
   else
-    echo "LansCoder Harbor agent needs curl or wget to install uv." >&2
+    echo "LansCoder Harbor agent needs curl, wget, or python3 to install uv." >&2
     exit 64
   fi
 }
@@ -353,6 +386,65 @@ def _default_source_dir() -> Path | None:
     return root if (root / "pyproject.toml").is_file() else None
 
 
+def _staged_pyproject(source: Path) -> str:
+    """Build a ``lanscoder-core`` pyproject that packages the working-tree ``lanscoder/``."""
+
+    version = _staged_version(source)
+    return (
+        "[build-system]\n"
+        'requires = ["setuptools>=68", "wheel"]\n'
+        'build-backend = "setuptools.build_meta"\n'
+        "\n"
+        "[project]\n"
+        'name = "lanscoder-core"\n'
+        f'version = "{version}"\n'
+        'requires-python = ">=3.11"\n'
+        "dependencies = [\n"
+        '    "anyio",\n'
+        '    "portalocker",\n'
+        '    "PyYAML",\n'
+        '    "openai",\n'
+        '    "anthropic",\n'
+        '    "mcp>=1.28.1,<2",\n'
+        # 工作区 lanscoder 的 cli -> app -> tui 导入链需要 thin-shell/app 依赖
+        '    "textual",\n'
+        '    "prompt_toolkit",\n'
+        '    "tomlkit",\n'
+        '    "python-dotenv",\n'
+        "]\n"
+        "\n"
+        "[tool.setuptools.packages.find]\n"
+        'where = ["."]\n'
+        'include = ["lanscoder*"]\n'
+        "\n"
+        "[tool.setuptools.package-data]\n"
+        'lanscoder = ["py.typed", "context/prompts/*.md", "app/*.tcss"]\n'
+    )
+
+
+def _staged_version(source: Path) -> str:
+    """Read ``__version__`` from the working tree, falling back to a dev marker."""
+
+    import ast
+
+    version_file = source / "lanscoder" / "core" / "_version.py"
+    try:
+        tree = ast.parse(version_file.read_text(encoding="utf-8"))
+    except OSError:
+        return "0.0.0.dev"
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets
+        ):
+            try:
+                value = ast.literal_eval(node.value)
+            except (ValueError, SyntaxError):
+                break
+            if isinstance(value, str) and value:
+                return value
+    return "0.0.0.dev"
+
+
 def _ignore_source_artifacts(_directory: str, names: list[str]) -> set[str]:
     return {name for name in names if name == "__pycache__" or name.endswith((".pyc", ".pyo"))}
 
@@ -362,7 +454,11 @@ def _install_command(install_spec: str) -> str:
     quoted_cache = shlex.quote(_CACHE_DIR)
     quoted_spec = shlex.quote(install_spec)
     return (
+        # SWE-bench Pro task images bake a private pip index
+        # (http://127.0.0.1:9876/) that is unreachable inside Harbor containers,
+        # so force the public index unless the job explicitly overrides it.
         "set -euo pipefail; "
+        'export PIP_INDEX_URL="${PIP_INDEX_URL_OVERRIDE:-https://pypi.org/simple}"; '
         f"AGENT_ROOT={quoted_root}; "
         f"CACHE_DIR={quoted_cache}; "
         'UV_BIN="$AGENT_ROOT/bin/uv"; '

@@ -12,7 +12,7 @@
 
 LansCoder 是一个在终端里运行的 AI 编程代理。像 Claude Code 或 Aider 一样，它能理解你的代码库、编辑文件、运行命令；但它的代码只有 **约 2.9 万行 Python**，分布在 15 个职责清晰的模块里——从入口、代理循环到工具系统，你可以完整地读一遍，并看懂每一层在做什么。
 
-它不是玩具：**33 个内置工具**、OpenAI 兼容 + Anthropic 双模型适配、MCP 集成、会话恢复与分支、L1–L3 上下文压缩管线，并在 Harbor Aider Polyglot 基准上达到 **96.38% reward pass@1**（213/221，本地锁定配置，[口径见基准文档](docs/benchmark.md)）。
+它不是玩具：**33 个内置工具**、OpenAI 兼容 + Anthropic 双模型适配、MCP 集成、会话恢复与分支、L1–L3 上下文压缩管线，并具备可离线重放、脱敏 trace 和确定性 verifier 的评测闭环；历史 Harbor 结果属于外部 canary 证据，不是离线门禁。
 
 **核心承诺**：目标不是比一个更大的 agent 功能更多，而是保持系统真实可用的同时，小到足以通读——理解每个子系统为什么存在。
 
@@ -108,6 +108,19 @@ await agent.prompt("你好")  # 需在 async 上下文中运行;完整可运行�
 
 ---
 
+## 评测与回归
+
+[`eval_harness/`](eval_harness/README.md) 是独立于运行时的评测层。首个
+`interaction_replay` case 使用 scripted provider 和人工小型 fixture，经公开
+`lanscoder.core.agent_loop` 生成 fresh `trace.jsonl`、`scorecard.json` 和 artifacts；
+不创建网络 provider，也不调用真实模型。trace 使用稳定序号与 schema version，写入前脱敏，
+golden 比较会忽略时间戳和运行时 ID。
+
+Harbor 作为可选的外部 regression/canary adapter，位于
+[`eval_harness/harbor/`](eval_harness/harbor/README.md)，不参与离线 golden 门禁。
+
+---
+
 ## 功能概览
 
 | 能力 | 说明 |
@@ -175,7 +188,7 @@ await agent.prompt("你好")  # 需在 async 上下文中运行;完整可运行�
 - [快速开始](docs/getting-started/) — 安装、配置、5 分钟跑通
 - [能力指南](docs/guides/) — 权限模型、上下文压缩、会话管理
 - [架构](docs/architecture/) — 分层设计与依赖规则
-- [基准测试](docs/benchmark.md) — 96.38% 的评测口径与复现
+- [评测与回归](eval_harness/README.md) — 离线 smoke、golden replay、trace 与 scorecard
 - [FAQ](docs/faq.md) — 常见问题
 - [发布检查](docs/publishing.md) — `LansCoder` + `lanscoder-core` 双 dist 发布清单(Test PyPI → 真实 PyPI)
 
@@ -196,7 +209,7 @@ python -m venv venv
 venv/bin/python -m pip install -e packages/lanscoder-core
 venv/bin/python -m pip install -e ".[dev]"
 venv/bin/python -m pytest      
-venv/bin/python -m ruff check lanscoder tests
+venv/bin/python -m ruff check .
 ```
 
 贡献指南见 [docs/development.md](docs/development.md)。
@@ -237,7 +250,8 @@ venv/bin/python -m ruff check lanscoder tests
 ## 项目声明
 
 - 这是可运行的个人工程项目，不代表已完成的规模化市场验证。
-- 基准分数（96.38%）为本地锁定配置下测得，非官方榜单排名，[口径详见 benchmark 文档](docs/benchmark.md)。
+- 历史 Harbor 分数仅是特定本地锁定配置下的外部 canary 证据，不能替代
+  [`eval_harness/`](eval_harness/README.md) 的离线确定性门禁。
 - 仓库不包含生产环境密钥；请从示例配置创建本地配置。
 
 ## License

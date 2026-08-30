@@ -10,18 +10,18 @@ import pytest
 
 pytest.importorskip("harbor")
 
-from benchmark.harbor.lanscoder_agent import (  # noqa: E402
+from eval_harness.harbor.lanscoder_agent import (  # noqa: E402
     LansCoderHarborAgent,
     _catalog_bootstrap_command,
     _install_command,
 )
-from benchmark.harbor.aider_feedback_trial import (  # noqa: E402
+from eval_harness.harbor.aider_feedback_trial import (  # noqa: E402
     build_aider_feedback,
     create_aider_feedback_trial,
     should_request_feedback_after_missing_reward,
     should_request_feedback_round,
 )
-from benchmark.harbor.aider_feedback_plugin import AiderFeedbackPlugin  # noqa: E402
+from eval_harness.harbor.aider_feedback_plugin import AiderFeedbackPlugin  # noqa: E402
 
 
 def test_harbor_agent_builds_quoted_lanscoder_benchmark_command(tmp_path: Path) -> None:
@@ -296,3 +296,64 @@ def test_harbor_python_bootstrap_retries_flaky_package_and_network_steps(tmp_pat
     assert "retry yum install -y python3 python3-pip" in command
     assert "retry sh -c 'curl -LsSf https://astral.sh/uv/install.sh" in command
     assert 'retry "$AGENT_ROOT/bin/uv" python install 3.11' in command
+
+
+def test_harbor_agent_passes_context_window_and_compaction_strategy(tmp_path: Path) -> None:
+    agent = LansCoderHarborAgent(
+        logs_dir=tmp_path,
+        context_window="200000",
+        compaction_strategy="no_compact",
+    )
+
+    command = agent._run_command("Fix the task.", session_id="task")
+
+    assert "--context-window 200000" in command
+    assert "--compaction-strategy no_compact" in command
+
+
+def test_harbor_agent_omits_context_knobs_when_unset(tmp_path: Path) -> None:
+    agent = LansCoderHarborAgent(logs_dir=tmp_path)
+
+    command = agent._run_command("Fix the task.", session_id="task")
+
+    assert "--context-window" not in command
+    assert "--compaction-strategy" not in command
+
+
+def test_harbor_agent_rejects_invalid_compaction_strategy(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="compaction_strategy"):
+        LansCoderHarborAgent(logs_dir=tmp_path, compaction_strategy="bogus")
+
+
+def test_harbor_agent_rejects_invalid_context_window(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="context_window"):
+        LansCoderHarborAgent(logs_dir=tmp_path, context_window=0)
+
+
+def test_harbor_staged_pyproject_packages_working_tree_as_lanscoder_core(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    package = source / "lanscoder"
+    (package / "core").mkdir(parents=True)
+    (source / "pyproject.toml").write_text("[project]\nname = 'LansCoder'\n")
+    (source / "README.md").write_text("# LansCoder\n")
+    (package / "__init__.py").write_text("")
+    (package / "core" / "_version.py").write_text("__version__ = '9.9.9-test'\n")
+
+    agent = LansCoderHarborAgent(logs_dir=tmp_path / "logs", source_dir=source)
+    staged = agent._stage_local_source()
+
+    pyproject = (staged / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'name = "lanscoder-core"' in pyproject
+    assert 'version = "9.9.9-test"' in pyproject
+    assert 'where = ["."]' in pyproject
+    assert 'include = ["lanscoder*"]' in pyproject
+    assert '"openai"' in pyproject
+    assert (staged / "lanscoder" / "core" / "_version.py").is_file()
+
+
+def test_harbor_staged_version_falls_back_when_version_file_missing(tmp_path: Path) -> None:
+    from eval_harness.harbor.lanscoder_agent import _staged_version
+
+    source = tmp_path / "source"
+    (source / "lanscoder").mkdir(parents=True)
+    assert _staged_version(source) == "0.0.0.dev"

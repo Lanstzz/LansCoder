@@ -27,7 +27,11 @@ class CliConfig:
     message: str
     model_spec: str | None = None
     max_tool_rounds: int | None = None
+    max_provider_calls: int | None = None
+    max_turn_seconds: int | None = None
     reasoning_effort: str | None = None
+    context_window: int | None = None
+    compaction_strategy: str | None = None
     benchmark: bool = False
     resume_session: bool = False
 
@@ -81,7 +85,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tui", action="store_true", help="Run the Textual TUI.")
     parser.add_argument("--auto-approve", action="store_true", help="Automatically answer permission confirmations with allow_once.")
     parser.add_argument("--max-tool-rounds", type=_positive_int, default=None, help="Override per-turn tool round limit.")
+    parser.add_argument("--max-provider-calls", type=_positive_int, default=None, help="Override per-turn provider call limit.")
+    parser.add_argument("--max-turn-seconds", type=_positive_int, default=None, help="Override per-turn wall-clock limit in seconds.")
     parser.add_argument("--reasoning-effort", default=None, help="Provider-specific reasoning effort passed in the model request.")
+    parser.add_argument("--context-window", type=_positive_int, default=None, help="Override the provider context window (tokens).")
+    parser.add_argument(
+        "--compaction-strategy",
+        choices=["no_compact", "l1_l2", "l1_l2_l3"],
+        default=None,
+        help="Context compaction strategy (default: provider/L3 full behavior).",
+    )
     parser.add_argument(
         "--benchmark",
         action="store_true",
@@ -117,7 +130,11 @@ def main(
             message="",
             model_spec=args.model,
             max_tool_rounds=args.max_tool_rounds,
+            max_provider_calls=args.max_provider_calls,
+            max_turn_seconds=args.max_turn_seconds,
             reasoning_effort=args.reasoning_effort,
+            context_window=args.context_window,
+            compaction_strategy=args.compaction_strategy,
             benchmark=args.benchmark,
             resume_session=args.resume_session,
         )
@@ -137,7 +154,11 @@ def main(
             message="",
             model_spec=args.model,
             max_tool_rounds=args.max_tool_rounds,
+            max_provider_calls=args.max_provider_calls,
+            max_turn_seconds=args.max_turn_seconds,
             reasoning_effort=args.reasoning_effort,
+            context_window=args.context_window,
+            compaction_strategy=args.compaction_strategy,
             benchmark=args.benchmark,
             resume_session=args.resume_session,
         )
@@ -162,7 +183,11 @@ def main(
         message=message,
         model_spec=args.model,
         max_tool_rounds=args.max_tool_rounds,
+        max_provider_calls=args.max_provider_calls,
+        max_turn_seconds=args.max_turn_seconds,
         reasoning_effort=args.reasoning_effort,
+        context_window=args.context_window,
+        compaction_strategy=args.compaction_strategy,
         benchmark=args.benchmark,
         resume_session=args.resume_session,
     )
@@ -187,13 +212,17 @@ def run_single_turn(config: CliConfig) -> str:
 
 
 def run_benchmark_turn(config: CliConfig) -> str:
-    """以基准模式运行单次回合:绕过权限、关闭预写审查并套用 SWE-lite 限制。"""
+    """以基准模式运行单次回合:绕过权限、关闭预写审查并套用基准预算。"""
 
     app = create_cli_app(config)
     app.current_session.set_permission_mode(PermissionMode.BYPASS)
     app.current_session.session.require_prewrite_review = False
     app.current_session.session.set_benchmark_task(config.message)
-    app.chat_runner.limits = _benchmark_limits(config.max_tool_rounds)
+    app.chat_runner.limits = _benchmark_limits(
+        config.max_tool_rounds,
+        config.max_provider_calls,
+        config.max_turn_seconds,
+    )
     response = app.chat_runner.run_user_turn(config.message)
     return response.content
 
@@ -206,9 +235,16 @@ def create_cli_app(config: CliConfig):
         session_id=config.session_id,
         model_spec=config.model_spec,
         resume_session=config.resume_session,
+        context_window=config.context_window,
+        compaction_strategy=config.compaction_strategy,
     )
-    if config.max_tool_rounds is not None:
-        app.chat_runner.limits = AgentLoopLimits.default().with_max_tool_rounds(config.max_tool_rounds)
+    if any((config.max_tool_rounds, config.max_provider_calls, config.max_turn_seconds)):
+        app.chat_runner.limits = _with_limit_overrides(
+            AgentLoopLimits.default(),
+            max_tool_rounds=config.max_tool_rounds,
+            max_provider_calls=config.max_provider_calls,
+            max_turn_seconds=config.max_turn_seconds,
+        )
     if config.reasoning_effort is not None:
         effort = config.reasoning_effort.strip()
         if not effort:
@@ -369,12 +405,33 @@ def _effective_parallel_tool_calls(config) -> str:
     return "true" if enabled else "false"
 
 
-def _benchmark_limits(max_tool_rounds: int | None) -> AgentLoopLimits:
-    """基准模式限制:默认 SWE-lite,可被 --max-tool-rounds 覆盖。"""
-    base = AgentLoopLimits.swe_lite()
-    if max_tool_rounds is None:
-        return base
-    return base.with_max_tool_rounds(max_tool_rounds)
+def _benchmark_limits(
+    max_tool_rounds: int | None,
+    max_provider_calls: int | None,
+    max_turn_seconds: int | None,
+) -> AgentLoopLimits:
+    """基准模式限额,允许调用方显式覆盖三项上限。"""
+    return _with_limit_overrides(
+        AgentLoopLimits.benchmark(),
+        max_tool_rounds=max_tool_rounds,
+        max_provider_calls=max_provider_calls,
+        max_turn_seconds=max_turn_seconds,
+    )
+
+
+def _with_limit_overrides(
+    limits: AgentLoopLimits,
+    *,
+    max_tool_rounds: int | None,
+    max_provider_calls: int | None,
+    max_turn_seconds: int | None,
+) -> AgentLoopLimits:
+    return replace(
+        limits,
+        max_tool_rounds=max_tool_rounds if max_tool_rounds is not None else limits.max_tool_rounds,
+        max_provider_calls=max_provider_calls if max_provider_calls is not None else limits.max_provider_calls,
+        max_turn_seconds=max_turn_seconds if max_turn_seconds is not None else limits.max_turn_seconds,
+    )
 
 
 def run_repl(

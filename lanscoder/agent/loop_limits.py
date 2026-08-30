@@ -22,19 +22,11 @@ class AgentLoopLimits:
         return cls()
 
     @classmethod
-    def swe_lite(cls) -> "AgentLoopLimits":
+    def benchmark(cls) -> "AgentLoopLimits":
         return cls(
-            max_tool_rounds=60,
-            max_provider_calls=100,
-            max_turn_seconds=1800,
-        )
-
-    @classmethod
-    def summary(cls) -> "AgentLoopLimits":
-        return cls(
-            max_tool_rounds=1,
-            max_provider_calls=3,
-            max_turn_seconds=120,
+            max_tool_rounds=120,
+            max_provider_calls=120,
+            max_turn_seconds=3600,
         )
 
     def with_max_tool_rounds(self, value: int | None) -> "AgentLoopLimits":

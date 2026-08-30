@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "offline-write-greeting",
+  "title": "Write a greeting through the public L1 runtime",
+  "mode": "interaction_replay",
+  "prompt": "Create greeting.txt containing exactly 'hello from harness' followed by one newline.",
+  "fixture": "../../fixtures/write_greeting",
+  "provider_tape": [
+    {
+      "content": "",
+      "finish_reason": "tool_calls",
+      "tool_calls": [
+        {
+          "id": "write_greeting",
+          "name": "write_file",
+          "arguments": {
+            "path": "greeting.txt",
+            "content": "hello from harness\n"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Created greeting.txt with the requested greeting.",
+      "finish_reason": "stop",
+      "tool_calls": []
+    }
+  ],
+  "expected_artifacts": {
+    "greeting.txt": "hello from harness\n"
+  },
+  "expected_delivery_contains": "Created greeting.txt"
+}

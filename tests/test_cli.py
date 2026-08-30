@@ -3,6 +3,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 
 import lanscoder.cli as cli
+from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.cli import CliConfig, main, read_message, run_repl
 
 
@@ -490,6 +491,40 @@ def test_main_parses_max_tool_rounds_for_single_message(tmp_path: Path):
 
     assert exit_code == 0
     assert seen[0].max_tool_rounds == 80
+
+
+def test_main_parses_all_limit_overrides_for_single_message(tmp_path: Path):
+    seen: list[CliConfig] = []
+
+    def fake_runner(config: CliConfig) -> str:
+        seen.append(config)
+        return "done"
+
+    exit_code = main(
+        [
+            "--project",
+            str(tmp_path),
+            "--message",
+            "solve it",
+            "--max-tool-rounds",
+            "80",
+            "--max-provider-calls",
+            "90",
+            "--max-turn-seconds",
+            "1800",
+        ],
+        runner=fake_runner,
+    )
+
+    assert exit_code == 0
+    assert seen[0].max_tool_rounds == 80
+    assert seen[0].max_provider_calls == 90
+    assert seen[0].max_turn_seconds == 1800
+
+
+def test_benchmark_limits_use_benchmark_preset_and_explicit_overrides():
+    assert cli._benchmark_limits(None, None, None) == AgentLoopLimits(120, 120, 3600)
+    assert cli._benchmark_limits(80, 90, 1800) == AgentLoopLimits(80, 90, 1800)
 
 
 def test_main_parses_reasoning_effort_for_single_message(tmp_path: Path):

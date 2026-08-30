@@ -1,78 +1,149 @@
 # Current Task
 
-- ID: `TASK-004`
-- Title: `接入 LoCoBench-Agent:上下文系统可复现评估基准`
-- Status: `active`
+- ID: `TASK-005`
+- Title: `eval_harness：本地 trace、回放与 Agent 回归评测体系`
+- Status: `handoff`
 - Owner: `Lanster`
 - Next owner: `Lanster`
 
 ## Goal
 
-把 LoCoBench-Agent(Salesforce AI Research,arXiv 2511.13998)接入 LansCoder,作为上下文管理系统的**可复现量化评估基准**(纯测量,不改 `lanscoder/` 核心语义)。
+将当前仅有 Harbor adapter 的 benchmark 层重构为统一的 `eval_harness`，建立可离线运行、可回放、可验证、可长期回归的 Agent 评测体系。
 
-- **数据**:复用 LoCoBench-Agent 的 8,000 交互场景(10K–1M tokens、10 语言、8 任务类别、四档难度),按 `--scenario-count/--difficulty/--category` 抽子集。
-- **接入形态**:LansCoder 以自定义 `LansCoderAgent(BaseAgent)` **进程内**接入(`create_agent_session` + LoCoBench 工具映射),被测对象 = `ContextWindowManager` 三层压缩(L1 路由压缩 / L2 归档占位 / L3 LLM 摘要)。
-- **测量方式**:harness 跑 `--context-management none`(不干预 agent 历史),由 LansCoder 的上下文系统独占管理;对比 `no-compact / L1+L2 / L1+L2+L3` 三组,产出"上下文规模 vs 准确率/效率指标 + `CompactionEvent` 压缩行为(before/after tokens、L1/L2/L3 hit rate、硬截断率)"。
-- **短板记录**:评估暴露的已知短板(如 P2 token 计量 `chars/4` 对代码/中文失真)不在此任务修复,记入 `record.md`,修复另开任务。
+每次运行都应生成可审计的 fresh trace，记录脱敏用户输入、provider 响应、工具调用、工具异常与恢复、文件产物、上下文压缩、最终交付和 verifier 结果；系统应支持从历史 trace 抽取 replay case，重新驱动当前 runtime，并通过 verifier / scorecard 判断行为是否回归。
+
+TASK-004 已取消。其 LoCoBench 评测因数据质量问题废弃；已有 Harbor + SWE-bench Pro 冒烟结果、适配器修复和经验记录保留为历史证据，不再作为新的 harness 设计约束。`benchmark/harbor/` 迁移为 `eval_harness/harbor/`，Harbor 只是外部执行 adapter，不再代表整个评测层。
+
+## Scope
+
+- `eval_harness/` 统一承载 case manifest、trace schema、脱敏、录制、回放、verifier、scorecard 和 Harbor adapter。
+- 重构完成后同步更新项目根 `README.md`，并补齐 `eval_harness/README.md` 作为 benchmark/evaluation 使用文档；原 `benchmark/harbor/README.md` 的有效内容迁移、改写并与新入口保持一致。
+- 第一阶段完全离线：使用 scripted provider 和小型人工 fixture，不访问网络、不调用真实模型。
+- 第二阶段从已有 session / Harbor trace 抽取脱敏 replay case，重跑当前 runtime 生成 fresh trace。
+- 第三阶段加入 red-team 异常注入和真实模型 canary；Harbor/SWE-bench Pro 作为外部 regression/canary 来源。
+- `lanscoder/` 继续作为被测 runtime，不 import `eval_harness`；除稳定 observer / event 接口外不引入 benchmark 依赖。
+
+Out of scope:
+
+- 不在本任务重写 AgentLoop、ContextWindowManager 或工具语义。
+- 不把真实 Harbor 大仓库直接作为第一阶段 golden fixture。
+- 不把未脱敏用户输入、API key、系统提示、私有源码或大体积数据提交到 Git。
+
+## Architecture
+
+```text
+case manifest + fixture
+          ↓
+offline replay / live runner
+          ↓
+current LansCoder runtime
+          ↓
+canonical fresh trace
+          ↓
+trace / artifact / recovery / security verifier
+          ↓
+scorecard + regression report
+```
+
+建议目录：
+
+```text
+eval_harness/
+  schema/       # trace、case、scorecard 数据模型
+  trace/        # recorder、redaction、canonicalize
+  replay/       # runner、scripted provider、历史 trace 抽取
+  verify/       # trace、artifact、recovery、security verifier
+  fixtures/     # 小型项目与 provider tapes
+  cases/        # offline、golden、regression、redteam、canary
+  harbor/       # Harbor adapter
+  cli.py
+```
+
+Trace 与 case 分离：case 是可执行输入和断言，trace 是本次运行的事实证据；同一 case 可以生成多份 fresh trace。
+
+支持两种主要回放：
+
+- `interaction_replay`：固定 provider response tape，验证当前 runtime 的工具、状态、异常恢复、压缩和 trace 行为。
+- `fresh_model`：重新调用真实模型，验证 Agent 能力；结果只做阈值和统计比较，不做全文字节比较。
 
 ## Acceptance scenarios
 
-- [x] **SC-1 (最小闭环)**: Given LoCoBench 数据就绪,When 用 **1 个 easy 场景**由 `LansCoderAgent` 执行,Then 跑通并产出 `AgentEvaluationResults`(非基础设施失败)。
-- [ ] **SC-2 (hard/expert 冒烟)**: Given SC-1 通过,When 各跑 **1 个 hard + 1 个 expert** 场景,Then 均完成并出分,记录压缩是否触发及触发水位。
-- [ ] **SC-3 (策略 A/B)**: Given 同一场景子集,When 对比 `no-compact / L1+L2 / L1+L2+L3`,Then 产出对比(准确率/效率指标 + CompactionEvent 压缩行为统计)。
-- [ ] **SC-4 (可复现命令)**: Given 环境与数据就绪,When 运行 `benchmark/locobench/` 的 driver 命令,Then 可复现产出 results + conversation transcript + per-turn token/context 统计。
-- [ ] **SC-5 (短板记录)**: Given 评估完成,When 审阅暴露的上下文系统问题,Then 记入 `record.md`(标注不修复、待另开任务)。
-- [ ] **SC-6 (门禁)**: When 运行 `pytest` + `ruff check .` + `node .ai-team/check.mjs --base origin/main`,Then 全绿(新增 benchmark/locobench 不碰 `lanscoder/` 核心)。
+- [x] **SC-1 (统一入口)**：Given `eval_harness` 已初始化，When 运行一个 offline case，Then 不访问网络，当前 runtime 完成一次执行并产出 `trace.jsonl`、`scorecard.json` 和 artifacts。
+- [ ] **SC-2 (Trace 完整性)**：Given offline fresh trace，Then 包含脱敏输入、case/config/runtime identity、provider 交互、工具生命周期、异常/恢复、文件产物、最终交付和 trace integrity 信息。
+- [ ] **SC-3 (Golden 回归)**：Given 至少 10 个人工微型 golden case，When 重复运行，Then canonicalized trace 的关键事件和 verifier 结果稳定，时间戳与随机 ID 不造成误报。
+- [ ] **SC-4 (历史回放)**：Given 一份已有 session/Harbor trace，When 执行脱敏 case extractor，Then 产出可审阅的 replay case，并能驱动当前 runtime 生成 fresh trace。
+- [ ] **SC-5 (异常恢复)**：Given provider malformed response、tool failure、tool timeout、取消和 resume 等故障注入，Then runtime 不产生未结算生命周期，恢复行为由 verifier 明确判定。
+- [ ] **SC-6 (产物与交付)**：Given fixture case，Then verifier 能检查创建/修改/删除文件、diff、测试结果、禁止路径和最终交付状态。
+- [ ] **SC-7 (安全脱敏)**：Given 含 secret、绝对路径和私有输入的 trace，Then 长期 portable trace 只保留脱敏值；原始内容仅存在本地加密 capsule，不能进入 Git 或 scorecard。
+- [ ] **SC-8 (Scorecard)**：Given trace 和 verifier 输出，Then 生成机器可读 scorecard，区分硬门禁与性能指标，并支持与基线比较。
+- [ ] **SC-9 (Red-team 基础集)**：Given 恶意/异常 provider 输出、超大工具结果、重复结果和越权路径，Then trace 不泄密、runtime 不崩溃、失败原因可归类。
+- [ ] **SC-10 (文档与复现)**：Given 新用户只阅读根 `README.md` 和 `eval_harness/README.md`，Then 能理解评测层边界、安装依赖、运行 offline/golden/replay/Harbor case、查看 trace/scorecard，并按文档复现实例。
+- [ ] **SC-11 (门禁)**：When 运行 `pytest`、`ruff check .`、`node .ai-team/check.mjs --base origin/main` 和私有 session 校验，Then 全绿。
 
 ## Invariants
 
-- 不 fork / 不修改 LoCoBench-Agent 源码;外部工具固定 commit 引用,clone 到工具目录(不进仓库),类比 Harbor。
-- `benchmark/locobench/` 只做 driver + 分析脚本,**不改 `lanscoder/` 核心行为**(本任务纯测量)。
-- 不提交 API key、大体积数据(data.zip / 场景缓存);结果只保留聚合统计与图。
-- 预算可控(用户已定):第一波 **1 个 easy** 验证链路,通过后 **1 个 hard + 1 个 expert** 冒烟;模型 deepseek-chat 优先;暂不加官方基线。
-- token 口径必须分开标注:harness `context_tokens`(启发式 `len.split()*1.3`)/ provider 真实 usage / lanscoder `chars/4` 估算,不可混用。
-- 沿用"仓库只维护 benchmark 适配器"原则:LoCoBench-Agent 是本仓库继 Harbor 之后唯一新增的 benchmark 集成。
+- `lanscoder/core`、`lanscoder/agent` 不 import `eval_harness`；harness 通过 runtime 的公开装配、observer、session store 和事件接口采集事实。
+- 第一阶段完全离线，脚本和测试不得隐式创建网络 provider 或访问外部服务。
+- 长期 portable trace 默认只保存脱敏输入；原始输入、私有源码和未脱敏工具结果只允许存放在仓库外的本地加密 capsule。
+- Trace 事件必须有稳定序号和 schema version；时间戳、随机 ID、provider request ID 在 canonicalize 时不可导致 golden 误报。
+- 工具生命周期必须闭合；异常、取消、超时和 resume 必须有可验证的状态迁移。
+- Artifact verifier 不得读取 verifier 隐藏信息来污染 Agent 输入；case、runtime 和 verifier 的边界必须清晰。
+- Golden fixture 保持小型、人工可读、可审查；不提交 Harbor 大仓库、数据集缓存或大体积 transcript。
+- deterministic verifier 优先于 LLM judge；真实模型结果只允许进入 regression/canary 统计，不作为 offline 门禁依赖。
+- 同一任务同一时刻只有一个写入者；代码、case、测试和 `.ai-team/TASK.md` 在同一 PR 中同步。
 
 ## Decisions
 
-- **D1(已定,用户)** 只写 **LoCoBench-Agent**;LOCA-bench 弃用(候选对比结论保留在对话/调研记录,不写入任务)。
-- **D2(已定,用户)** 分波验证:第一波 1 个 easy;跑通后各 1 个 hard + 1 个 expert。
-- **D3(已定,用户)** 策略 A/B = `no-compact / L1+L2 / L1+L2+L3` 三组。
-- **D4(已定,用户)** 暂不加官方 OpenAI/Anthropic 基线对照。
-- **D5(已定,用户)** 纯测量;暴露的短板(如 P2 token 计量失真)记入 `record.md`,修复另开任务。
-- **D6(已定,调研)** 接入形态 = `LansCoderAgent(BaseAgent)` 进程内,复用 `create_agent_session`;LoCoBench 的 `AgentFactory._create_custom_agent` 是 stub、CLI `--agent-type` 不含 custom → 自写 driver 直接实例化 harness 类。
-- **D7(已定,调研)** 评估时 harness 跑 `--context-management none`,由 LansCoder `ContextWindowManager` 独占上下文管理(A/B 因果干净)。
+- **D1 (用户已定)**：TASK-004 取消，LoCoBench 可执行集成删除；已有结果只作为历史证据。新的统一根目录为 `eval_harness/`，Harbor 迁移为其 adapter。
+- **D2 (用户已定)**：长期 trace 默认保存脱敏输入；原始内容只允许本地加密存储，不能进入 Git、portable replay case 或 scorecard。
+- **D3 (用户已定)**：第一阶段完全离线，先用 scripted provider 和本地 fixture 跑通完整 trace → verifier → scorecard 链路，再接真实模型。
+- **D4 (用户已确认，待实施)**：第一阶段 canonical golden 使用人工编写的小型 fixture 仓库；历史 trace 抽取作为第二阶段 regression case；Harbor 任务仅用于后续 regression/canary。
+- **D5 (用户已确认，待实施)**：fixture 首批覆盖无工具完成、读改测、多文件修改、provider malformed response、tool failure/retry、tool timeout、interrupt/resume、重复结果、越权路径和压缩事件。
+- **D6 (用户已确认，待实施)**：提供 `interaction_replay` 与 `fresh_model` 两种模式；前者做确定性 runtime 回归，后者只做 live 能力与阈值统计。
+- **D7 (用户已确认，待实施)**：scorecard 采用 trace、artifact、recovery、security、delivery 五类硬门禁，provider calls、tool calls、elapsed、token、context 和 compaction 作为独立指标。
+- **D8 (用户已确认，待实施)**：历史 case 采用 portable manifest + local encrypted capsule 双层存储；portable 部分保留稳定 hash 占位符以支持关联，不提供原文恢复能力。
+- **D9 (用户已确认，待实施)**：文档是重构交付的一部分：更新根 `README.md` 的 benchmark 入口和状态，新增完整 `eval_harness/README.md`，并迁移/重写 Harbor adapter 文档；文档中的命令、路径、参数和 trace schema 必须与实现一致。
+- **D10（本 checkpoint 实施）**：v1 portable trace 对 system prompt、工具描述、工具参数与工具结果正文一律不保留原文；使用 redacted placeholder、字段摘要和稳定 SHA-256 指纹，保留 verifier 所需的生命周期、状态与完整性事实。
 
 ## Completed
 
-- [x] LoCoBench-Agent 源码调研(2026-08-29):`BaseAgent` 接口与自定义路径(`base_agent.py` / `custom_agent.py` / `agent_factory.py` CUSTOM=stub);8,000 场景结构(data.zip → `convert-scenarios` → 缓存 → `evaluate --mode agent`,`--scenario-count/--difficulty/--category` 子集);per-turn token/context 统计(`conversation_history[].context_tokens` 启发式 + `AgentResponse.tokens_used` 真实 usage + harness `ContextState.total_tokens`/`compression_history` tiktoken);harness context management(`none/basic/adaptive`,默认 adaptive,触发 0.4/0.6);`RobustAgentEvaluator` + `AgentSession` 主路径;`run_llm_evaluation` 为 random 占位符(只用 agent 模式)。
-- [x] 决策确认(2026-08-29,用户 Q1–Q5):LoCoBench 主选 / 分波验证 / 三组 A/B / 不加官方基线 / 短板记 record.md 不修。
-- [x] **Phase 1 数据与环境(2026-08-29)**:LoCoBench-Agent clone 到 `/tmp/LoCoBench-Agent`(commit `2ab9218`,工具目录不入仓库);venv 装依赖(requirements 去 lighteval/boto3 + tiktoken + psutil + gdown);`data.zip` 1.27GB 经代理 gdown 下载并解压(4.6GB,1000 项目 / 8000 场景 / 8000 已转换 agent 场景);`convert-scenarios --limit 5` 验证通过(全 8000 走缓存,0 失败)。
-- [x] **Phase 1 最小闭环跑通(2026-08-29)**:`benchmark/locobench/` 初版 driver 就绪(`lanscoder_agent.py` / `tool_mapping.py` / `driver.py` / `README.md`)。1 个 easy 场景(`php_api_rest_easy_078_architectural_understanding_easy_01`,19K context)由 `LansCoderAgent` + deepseek-v4-flash 执行 **3 turns**,产出 `AgentEvaluationResults`:**overall 0.704 / LCBA-Comp 0.74 / LCBA-Eff 0.65**,session_status=completed,0 error,59 条工具调用(6 类 LoCoBench 工具 + LansCoder `read_memory`),provider 真实 usage 共 131,327 tokens,**未触发压缩**(19K 场景 vs 1M 窗口,符合预期)。产物在 `benchmark/runs/locobench/smoke-easy-1/`(gitignored)。
-- [x] **Phase 1 坑(已修/已记录)**:① harness 场景文件必须嵌套在 `initial_context.project_files`,否则工具工作区为空;② LansCoder 内部 loop 工具调用需从 session store 事件采集(`ChatResponse.tool_calls` 只含末条消息);③ `FinishReason` 是字符串 Literal 不是 enum(首次跑 `'str' object has no attribute 'value'` 中断,已修);④ `--max-turns N` 才是预算上限(阶段循环 success 不满足会跑满回合);⑤ 工具名带 `_copy_<id>` 副本后缀需归一化。
+- [x] TASK-004 已由用户决定取消；LoCoBench 的 adapter、分析器、专属测试和运行文档已移除，历史教训和观测保留为不可执行证据。
+- [x] Harbor + SWE-bench Pro adapter 已完成最小链路验证：qutebrowser reward 1.0（21/21），vuls reward 1.0（77/77）；session JSONL 可收集。
+- [x] `--benchmark` 已与 SWE-lite 解耦，使用独立 `120 tools / 120 provider calls / 3600 seconds` 预设，三项限额可逐项覆盖；未接线的 `summary()` 预设已删除。
+- [x] 当前 runtime 已有 `JsonlSessionStore`、工具生命周期事件、异常/中断状态、CompactionEvent 和 Harbor session 导出能力，可作为 trace 采集底座。
+- [x] 设计决策已确认：长期 trace 脱敏、原始内容本地加密、第一阶段完全离线、人工微型 fixture 作为 canonical golden。
+- [x] 已确认文档交付范围：根 README 更新 + `eval_harness/README.md` 新 benchmark 文档 + Harbor adapter 文档迁移/重写。
+- [x] 第一阶段最小闭环已落地：`eval_harness` v1 schema、JSON CLI、scripted provider、网络拒绝器、fresh JSONL recorder、trace/artifact/recovery/security/delivery verifier、scorecard、一个人工 fixture/case 与测试均通过公开 L1 `lanscoder.core.agent_loop` 接口工作。
+- [x] Portable trace 默认不保存 system prompt、工具描述、工具参数或工具结果正文；这些值仅留 redacted placeholder、稳定指纹或字段摘要，且 trace integrity 使用稳定序号与 SHA-256 footer。
+- [x] Harbor adapter 已从 `benchmark/harbor/` 迁移到 `eval_harness/harbor/`；根 README、harness README 和 Harbor 命令已改用统一入口。
 
 ## Pending
 
-- **Phase 2(下一步)**:完善 `benchmark/locobench/` driver:① 给 `create_agent_session` 暴露压缩策略开关(no-compact / L1+L2 / L1+L2+L3,现为默认全量),② 验证 `CompactionEvent` 在 hard/expert 场景真实采集(before/after tokens、L1/L2/L3 hit rate、硬截断率),③ 结果对齐(harness 启发式 context_tokens / provider usage / lanscoder chars/4 分开输出)。
-- **Phase 3**:hard + expert 各 1 个冒烟,记录压缩触发情况与水位。
-- **Phase 4**:策略 A/B(no-compact / L1+L2 / L1+L2+L3)+ 分析脚本(上下文规模-指标曲线、压缩行为统计)。
-- **Phase 5**:`benchmark/locobench/README.md` 复现文档完善;更新 `record.md`(补 Phase 1 评估观察);全量门禁(SC-6)。
+- [x] 创建 `eval_harness` 包和统一 CLI，迁移 `benchmark/harbor` adapter 入口。
+- [x] 冻结第一版 trace/case/scorecard schema、版本策略、canonicalization 和脱敏规则。
+- [x] 实现 scripted provider、offline runner 和 fresh trace recorder。
+- [ ] 将人工微型项目 fixture、provider tapes 和 golden case 扩展到至少 10 个。
+- [ ] 将 trace、artifact、recovery、security、delivery verifier 与机器可读 scorecard 扩展到异常、取消、恢复、压缩和基线比较的完整场景。
+- [ ] 实现历史 session/Harbor trace 的脱敏 case extractor 和 local encrypted capsule 约定。
+- [ ] 补充 red-team case；之后再设计 live model canary 和 Harbor regression matrix。
+- [x] 更新根 `README.md`，新增 `eval_harness/README.md`，并迁移/重写 Harbor 使用与复现文档。
 
 ## Next step
 
-**Phase 1 已通过**(数据就绪 + 1 个 easy 跑通出分)。下一步 **Phase 2**:完善 `benchmark/locobench/` driver——给 LansCoder 压缩策略加 A/B 开关(no-compact / L1+L2 / L1+L2+L3),并把 CompactionEvent 采集对齐到 hard/expert 场景(验证 before/after tokens、L1/L2/L3 hit rate、硬截断率),随后进入 Phase 3 hard+expert 各 1 个冒烟。
+扩展确定性 golden 集至至少 10 个小型人工 fixture，优先覆盖无工具完成、读改测、多文件修改、provider malformed response、tool failure/retry、tool timeout、interrupt/resume、重复结果、越权路径和压缩事件；每个 case 继续只经公开 runtime 接口运行，不改 AgentLoop 回合语义。
 
 ## Verification
 
-- [ ] `node .ai-team/check.mjs --base origin/main` → valid
-- [ ] `node .ai-team/session.mjs validate` → valid(private sessions 已启用)
-- [x] SC-1:1 个 easy 场景跑通并出分(overall 0.704 / comp 0.74 / eff 0.65,3 turns,0 error)
-- [ ] SC-2:hard + expert 各 1 个跑通
-- [ ] SC-3:三组策略对比产出
-- [ ] `pytest` / `ruff check .` 不受影响(不改核心)
+- [x] `pytest` → 1746 passed in 58.20s（2026-08-30，变基后最终运行）
+- [x] `ruff check .` → All checks passed（2026-08-30，本 checkpoint）
+- [x] `node .ai-team/check.mjs --base origin/main` → valid；TASK-005 handoff，functional progress 1/11，code progress 16 commits / 54 files / +4095/-969，private sessions 18（2026-08-30，变基后最终运行）
+- [x] `node .ai-team/session.mjs validate` → `{ "valid": true, "enabled": true }`（private sessions 已启用，2026-08-30）
+- [x] offline smoke：`venv/bin/python -m eval_harness run --case eval_harness/cases/offline/write_greeting.json --output /private/tmp/lanscoder-eval-smoke-20260830-verified` 通过；五类 gate 全绿，network guard attempts 为 0，并生成 trace / scorecard / artifacts。
+- [x] golden replay：`tests/test_eval_harness.py` 两次 fresh run 的 canonical JSON 相同；时间戳、elapsed、trace digest 和随机 message/part ID 不造成误报。
+- [x] 文档复现检查：根 README 与 `eval_harness/README.md` 均指向现有命令和路径；CLI smoke 已按 harness README 命令参数实跑。
 
 ## Handoff note
 
 - From: `Lanster`
 - To: `Lanster`
-- Summary: TASK-004 **active**——LoCoBench-Agent 接入(纯测量,不改核心),决策 Q1–Q5 已定。**Phase 1 完成**(2026-08-29):数据 4.6GB 就绪、convert-scenarios 验证通过、`benchmark/locobench/` 初版 driver 跑通 1 个 easy 场景(SC-1 ✅,overall 0.704,3 turns,0 error)。下一步 **Phase 2**:压缩策略 A/B 开关 + CompactionEvent 采集对齐,再进 hard/expert 冒烟。
+- Summary: 最小离线闭环已完成并验证：`eval_harness` 包、CLI、v1 portable schema、scripted provider、socket network guard、fresh trace recorder、五类 hard gates/scorecard、一个人工 fixture/case、canonical golden 检查与文档入口均已落地；Harbor 已迁移到 `eval_harness/harbor/`。portable trace 不保留 system prompt、工具描述、工具参数或工具结果正文。全量 pytest（1746）、ruff与私有 session 校验均通过；仓库门禁将在 handoff 状态下最终复跑。下一位 owner 从「扩展至少 10 个 deterministic golden case」继续。工作区的 `.gitignore`、`LESSONS.md` 和 `agentops-health-check-2026-08-29.md` 改动依用户要求一并提交。

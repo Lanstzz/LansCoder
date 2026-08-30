@@ -9,20 +9,12 @@ def test_default_limits_match_tui_goal_profile() -> None:
     assert limits.max_turn_seconds == 3600
 
 
-def test_swe_lite_limits_match_goal_profile() -> None:
-    limits = AgentLoopLimits.swe_lite()
+def test_benchmark_limits_match_goal_profile() -> None:
+    limits = AgentLoopLimits.benchmark()
 
-    assert limits.max_tool_rounds == 60
-    assert limits.max_provider_calls == 100
-    assert limits.max_turn_seconds == 1800
-
-
-def test_summary_limits_disable_tool_loops() -> None:
-    limits = AgentLoopLimits.summary()
-
-    assert limits.max_tool_rounds == 1
-    assert limits.max_provider_calls == 3
-    assert limits.max_turn_seconds == 120
+    assert limits.max_tool_rounds == 120
+    assert limits.max_provider_calls == 120
+    assert limits.max_turn_seconds == 3600
 
 
 def test_custom_max_tool_rounds_override() -> None:
