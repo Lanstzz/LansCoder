@@ -12,6 +12,36 @@ from eval_harness.trace.redaction import Redactor
 
 
 CASE_PATH = Path(__file__).parents[1] / "eval_harness" / "cases" / "offline" / "write_greeting.json"
+CASES_DIR = CASE_PATH.parent
+
+
+def test_offline_case_catalog_has_ten_small_deterministic_cases() -> None:
+    cases = sorted(CASES_DIR.glob("*.json"))
+    assert len(cases) >= 10
+    assert {case.stem for case in cases} >= {
+        "write_greeting",
+        "no_tool_completion",
+        "write_single",
+        "write_two_files",
+        "modify_existing",
+        "tool_failure_retry",
+        "duplicate_write",
+        "nested_unicode",
+        "overwrite_existing",
+        "multi_round",
+        "unauthorized_path",
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+@pytest.mark.parametrize("case_path", sorted(CASES_DIR.glob("*.json")), ids=lambda path: path.stem)
+async def test_every_offline_case_produces_a_passing_scorecard(case_path: Path, tmp_path: Path) -> None:
+    first = await run_offline_case_path(case_path, tmp_path / "first" / case_path.stem)
+    second = await run_offline_case_path(case_path, tmp_path / "second" / case_path.stem)
+    assert first.scorecard["passed"] is True
+    assert all(gate["passed"] for gate in first.scorecard["gates"].values())
+    assert canonical_json(load_trace(first.trace_path)) == canonical_json(load_trace(second.trace_path))
 
 
 @pytest.mark.anyio

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "offline-duplicate-write",
+  "title": "Handle repeated writes deterministically",
+  "mode": "interaction_replay",
+  "prompt": "Write stable.txt, then repeat the same write.",
+  "fixture": null,
+  "provider_tape": [
+    {"content": "", "finish_reason": "tool_calls", "tool_calls": [{"id": "first_write", "name": "write_file", "arguments": {"path": "stable.txt", "content": "stable\n"}}]},
+    {"content": "", "finish_reason": "tool_calls", "tool_calls": [{"id": "second_write", "name": "write_file", "arguments": {"path": "stable.txt", "content": "stable\n"}}]},
+    {"content": "Repeated write completed for stable.txt.", "finish_reason": "stop", "tool_calls": []}
+  ],
+  "expected_artifacts": {"stable.txt": "stable\n"},
+  "expected_delivery_contains": "Repeated write completed"
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "offline-nested-unicode",
+  "title": "Create nested UTF-8 content",
+  "mode": "interaction_replay",
+  "prompt": "Create docs/你好.txt with UTF-8 content.",
+  "fixture": null,
+  "provider_tape": [
+    {"content": "", "finish_reason": "tool_calls", "tool_calls": [{"id": "write_unicode", "name": "write_file", "arguments": {"path": "docs/你好.txt", "content": "こんにちは 🌏\n"}}]},
+    {"content": "Created the nested Unicode document.", "finish_reason": "stop", "tool_calls": []}
+  ],
+  "expected_artifacts": {"docs/你好.txt": "こんにちは 🌏\n"},
+  "expected_delivery_contains": "nested Unicode document"
+}

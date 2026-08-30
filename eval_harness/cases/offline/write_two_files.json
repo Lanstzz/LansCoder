@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "offline-write-two-files",
+  "title": "Write multiple files in one tool turn",
+  "mode": "interaction_replay",
+  "prompt": "Create alpha.txt and beta.txt.",
+  "fixture": null,
+  "provider_tape": [
+    {"content": "", "finish_reason": "tool_calls", "tool_calls": [
+      {"id": "write_alpha", "name": "write_file", "arguments": {"path": "alpha.txt", "content": "alpha\n"}},
+      {"id": "write_beta", "name": "write_file", "arguments": {"path": "beta.txt", "content": "beta\n"}}
+    ]},
+    {"content": "Created alpha.txt and beta.txt.", "finish_reason": "stop", "tool_calls": []}
+  ],
+  "expected_artifacts": {"alpha.txt": "alpha\n", "beta.txt": "beta\n"},
+  "expected_delivery_contains": "Created alpha.txt and beta.txt"
+}

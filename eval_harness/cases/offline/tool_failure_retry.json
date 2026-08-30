@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "offline-tool-failure-retry",
+  "title": "Recover from a rejected path and retry",
+  "mode": "interaction_replay",
+  "prompt": "Write retry.txt inside the fixture workspace.",
+  "fixture": null,
+  "provider_tape": [
+    {"content": "", "finish_reason": "tool_calls", "tool_calls": [{"id": "bad_path", "name": "write_file", "arguments": {"path": "../outside.txt", "content": "must not escape"}}]},
+    {"content": "", "finish_reason": "tool_calls", "tool_calls": [{"id": "good_path", "name": "write_file", "arguments": {"path": "retry.txt", "content": "recovered\n"}}]},
+    {"content": "Recovered by writing retry.txt.", "finish_reason": "stop", "tool_calls": []}
+  ],
+  "expected_artifacts": {"retry.txt": "recovered\n"},
+  "expected_delivery_contains": "Recovered by writing retry.txt"
+}

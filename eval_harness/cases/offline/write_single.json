@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "offline-write-single",
+  "title": "Write one deterministic file",
+  "mode": "interaction_replay",
+  "prompt": "Create note.txt with exactly one line.",
+  "fixture": null,
+  "provider_tape": [
+    {"content": "", "finish_reason": "tool_calls", "tool_calls": [{"id": "write_note", "name": "write_file", "arguments": {"path": "note.txt", "content": "one line\n"}}]},
+    {"content": "Created note.txt.", "finish_reason": "stop", "tool_calls": []}
+  ],
+  "expected_artifacts": {"note.txt": "one line\n"},
+  "expected_delivery_contains": "Created note.txt"
+}
