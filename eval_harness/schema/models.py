@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = 1
 SUPPORTED_MODES = frozenset({"interaction_replay", "fresh_model"})
+SUPPORTED_PROVIDER_FAULTS = frozenset({"malformed_response", "timeout", "prompt_too_long", "network_error"})
+SUPPORTED_TOOL_FAULTS = frozenset({"timeout", "failure", "interrupt"})
 
 
 class ManifestError(ValueError):
@@ -22,6 +24,7 @@ class ProviderTapeResponse:
     content: str
     tool_calls: tuple[dict[str, Any], ...]
     finish_reason: str = "stop"
+    fault: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +41,9 @@ class CaseManifest:
     expected_artifacts: dict[str, str]
     expected_delivery_contains: str
     private_values: tuple[str, ...] = ()
+    tool_faults: dict[str, str] = field(default_factory=dict)
+    interrupt_after_tool_calls: int | None = None
+    enable_compaction: bool = False
 
     def identity(self) -> dict[str, object]:
         """Stable manifest identity copied into fresh traces."""
@@ -86,6 +92,22 @@ def load_case_manifest(path: str | Path) -> CaseManifest:
     fixture = raw.get("fixture")
     if fixture is not None and not isinstance(fixture, str):
         raise ManifestError("fixture must be a relative path or null")
+    tool_faults_raw = raw.get("tool_faults", {})
+    if not isinstance(tool_faults_raw, dict) or not all(
+        isinstance(call_id, str) and call_id and isinstance(kind, str) and kind in SUPPORTED_TOOL_FAULTS
+        for call_id, kind in tool_faults_raw.items()
+    ):
+        raise ManifestError("tool_faults must map call IDs to supported fault kinds")
+    interrupt_after_tool_calls = raw.get("interrupt_after_tool_calls")
+    if interrupt_after_tool_calls is not None and (
+        isinstance(interrupt_after_tool_calls, bool)
+        or not isinstance(interrupt_after_tool_calls, int)
+        or interrupt_after_tool_calls < 1
+    ):
+        raise ManifestError("interrupt_after_tool_calls must be a positive integer or null")
+    enable_compaction = raw.get("enable_compaction", False)
+    if not isinstance(enable_compaction, bool):
+        raise ManifestError("enable_compaction must be a boolean")
     return CaseManifest(
         schema_version=schema_version,
         identifier=_required_string(raw, "id"),
@@ -97,6 +119,9 @@ def load_case_manifest(path: str | Path) -> CaseManifest:
         expected_artifacts=dict(expected_artifacts_raw),
         expected_delivery_contains=_required_string(raw, "expected_delivery_contains"),
         private_values=tuple(private_values_raw),
+        tool_faults=dict(tool_faults_raw),
+        interrupt_after_tool_calls=interrupt_after_tool_calls,
+        enable_compaction=enable_compaction,
     )
 
 
@@ -114,13 +139,17 @@ def _load_tape_response(value: object, index: int) -> ProviderTapeResponse:
     finish_reason = value.get("finish_reason", "stop")
     if not isinstance(finish_reason, str):
         raise ManifestError(f"provider_tape[{index}].finish_reason must be a string")
-    content = value.get("content")
+    content = value.get("content", "")
     if not isinstance(content, str):
         raise ManifestError(f"provider_tape[{index}].content must be a string")
+    fault = value.get("fault")
+    if fault is not None and (not isinstance(fault, str) or fault not in SUPPORTED_PROVIDER_FAULTS):
+        raise ManifestError(f"provider_tape[{index}].fault must be one of {sorted(SUPPORTED_PROVIDER_FAULTS)}")
     return ProviderTapeResponse(
         content=content,
         tool_calls=tuple(dict(call) for call in tool_calls),
         finish_reason=finish_reason,
+        fault=fault,
     )
 
 

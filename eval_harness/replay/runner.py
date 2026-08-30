@@ -14,6 +14,8 @@ from typing import Any
 
 from lanscoder.core import LoopConfig, LoopContext, LoopMessage, agent_loop
 from lanscoder.core.events import AgentEndEvent, MessageEndEvent, ToolExecutionEndEvent, ToolExecutionStartEvent
+from lanscoder.core.events import ToolExecutionUpdateEvent
+from lanscoder.utils.cancellation import CancellationToken, current_cancellation_token
 from lanscoder.providers.types import ToolDefinition
 from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 
@@ -21,7 +23,7 @@ from eval_harness.replay.provider import ScriptedProvider
 from eval_harness.schema.models import CaseManifest, load_case_manifest
 from eval_harness.trace.recorder import TraceRecorder
 from eval_harness.trace.redaction import Redactor
-from eval_harness.verify.checks import build_scorecard, verify_run
+from eval_harness.verify.checks import build_scorecard, compare_scorecards, verify_run
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +70,12 @@ class NetworkDisabled:
         socket.socket.connect_ex = self._original_connect_ex
 
 
-async def run_offline_case_path(case_path: str | Path, output_dir: str | Path) -> RunResult:
+async def run_offline_case_path(
+    case_path: str | Path,
+    output_dir: str | Path,
+    *,
+    baseline_scorecard: dict[str, Any] | None = None,
+) -> RunResult:
     """Load a portable JSON case and produce one fresh run directory."""
 
     resolved_case_path = Path(case_path)
@@ -76,6 +83,7 @@ async def run_offline_case_path(case_path: str | Path, output_dir: str | Path) -
         load_case_manifest(resolved_case_path),
         output_dir,
         case_path=resolved_case_path,
+        baseline_scorecard=baseline_scorecard,
     )
 
 
@@ -84,6 +92,7 @@ async def run_offline_case(
     output_dir: str | Path,
     *,
     case_path: str | Path | None = None,
+    baseline_scorecard: dict[str, Any] | None = None,
 ) -> RunResult:
     """Replay one interaction tape without network access or a real model provider."""
 
@@ -98,6 +107,15 @@ async def run_offline_case(
     redactor = Redactor(sensitive_values=manifest.private_values, paths=[artifacts_path])
     recorder = TraceRecorder(run_dir, redactor=redactor)
     provider = ScriptedProvider(manifest.provider_tape, on_interaction=recorder.record)
+    cancellation = CancellationToken()
+    tool_faults = {
+        str(call["arguments"].get("path")): manifest.tool_faults[call["id"]]
+        for entry in manifest.provider_tape
+        for call in entry.tool_calls
+        if call["id"] in (manifest.tool_faults or {})
+        and isinstance(call.get("arguments"), dict)
+        and isinstance(call["arguments"].get("path"), str)
+    }
     baseline_artifacts = _snapshot_artifacts(artifacts_path)
     final_delivery = ""
     failure: str | None = None
@@ -118,15 +136,25 @@ async def run_offline_case(
             "sha256": _digest(manifest.prompt),
         },
     )
+    if manifest.enable_compaction:
+        _record_compaction_probe(recorder)
 
     try:
         with NetworkDisabled() as network_guard:
             async for event in agent_loop(
                 [LoopMessage.user(manifest.prompt)],
-                LoopContext(tools=[_write_file_tool(artifacts_path)]),
-                LoopConfig(provider=provider, session_id=f"eval-{manifest.identifier}", use_streaming=False),
+                LoopContext(tools=[_write_file_tool(artifacts_path, tool_faults=tool_faults)]),
+                LoopConfig(
+                    provider=provider,
+                    session_id=f"eval-{manifest.identifier}",
+                    use_streaming=False,
+                ),
+                signal=cancellation,
             ):
                 recorder.record(event.type, _agent_event_payload(event))
+                if isinstance(event, ToolExecutionStartEvent) and _should_interrupt(manifest, event, recorder.events):
+                    cancellation.cancel()
+                    recorder.record("interrupt_requested", {"after_tool_calls": manifest.interrupt_after_tool_calls})
                 if isinstance(event, MessageEndEvent) and event.message is not None and event.message.role == "assistant":
                     final_delivery = event.message.content
                 if isinstance(event, AgentEndEvent) and not final_delivery:
@@ -135,6 +163,8 @@ async def run_offline_case(
     except Exception as exc:  # noqa: BLE001 - failures must be recorded for verifier evidence.
         failure = f"{type(exc).__name__}: {exc}"
         recorder.record("runtime_exception", {"kind": type(exc).__name__, "message": str(exc)})
+        if "network_guard" not in {str(event.get("type")) for event in recorder.events}:
+            recorder.record("network_guard", {"attempts": network_guard.attempts})
 
     artifacts_after = _snapshot_artifacts(artifacts_path)
     recorder.record("artifacts", _artifact_diff(baseline_artifacts, artifacts_after))
@@ -143,16 +173,17 @@ async def run_offline_case(
         "run_completed",
         {
             "provider_calls": provider.calls,
-            "tool_calls": sum(len(entry.tool_calls) for entry in manifest.provider_tape),
+            "tool_calls": sum(event.get("type") == "tool_execution_start" for event in recorder.events),
             "elapsed_ms": round((time.monotonic() - started_at) * 1000, 3),
-            "compaction_events": 0,
-            "recovery_events": [],
+            "compaction_events": sum(event.get("type") == "context_compaction" for event in recorder.events),
+            "recovery_events": _recovery_summary(recorder.events),
             "failure": failure,
         },
     )
     trace_path = recorder.write()
     verification = verify_run(manifest, trace_path, artifacts_path)
-    scorecard = build_scorecard(verification, trace_path)
+    comparison = compare_scorecards(baseline_scorecard, build_scorecard(verification, trace_path)) if baseline_scorecard is not None else None
+    scorecard = build_scorecard(verification, trace_path, comparison=comparison)
     scorecard_path = run_dir / "scorecard.json"
     scorecard_path.write_text(_json(scorecard), encoding="utf-8")
     return RunResult(
@@ -163,10 +194,15 @@ async def run_offline_case(
     )
 
 
-def run_case_sync(case_path: str | Path, output_dir: str | Path) -> RunResult:
+def run_case_sync(
+    case_path: str | Path,
+    output_dir: str | Path,
+    *,
+    baseline_scorecard: dict[str, Any] | None = None,
+) -> RunResult:
     """Small synchronous convenience wrapper for the command-line interface."""
 
-    return asyncio.run(run_offline_case_path(case_path, output_dir))
+    return asyncio.run(run_offline_case_path(case_path, output_dir, baseline_scorecard=baseline_scorecard))
 
 
 def _prepare_artifacts(manifest: CaseManifest, *, case_path: str | Path | None, artifacts_path: Path) -> None:
@@ -181,8 +217,9 @@ def _prepare_artifacts(manifest: CaseManifest, *, case_path: str | Path | None, 
     shutil.copytree(fixture_path, artifacts_path)
 
 
-def _write_file_tool(artifacts_path: Path) -> Tool:
+def _write_file_tool(artifacts_path: Path, *, tool_faults: dict[str, str] | None = None) -> Tool:
     root = artifacts_path.resolve()
+    configured_faults = tool_faults or {}
 
     def write_file(path: str, content: str) -> ToolResult:
         if not isinstance(path, str) or not isinstance(content, str):
@@ -192,6 +229,17 @@ def _write_file_tool(artifacts_path: Path) -> Tool:
             relative = target.relative_to(root)
         except ValueError:
             return make_error_result("write_file", "path escapes the fixture workspace")
+        fault = configured_faults.get(path)
+        if fault == "timeout":
+            return make_error_result("write_file", "tool timeout injected", fault="timeout", timed_out=True)
+        if fault == "failure":
+            return make_error_result("write_file", "tool failure injected", fault="failure")
+        if fault == "interrupt":
+            token = current_cancellation_token()
+            if token is not None:
+                token.cancel()
+                token.raise_if_cancelled()
+            return make_error_result("write_file", "tool interruption probe has no cancellation context", fault="interrupt")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         return make_text_result("write_file", f"wrote {relative.as_posix()}", path=relative.as_posix(), bytes=len(content.encode("utf-8")))
@@ -224,6 +272,12 @@ def _agent_event_payload(event: object) -> dict[str, Any]:
             "tool_name": event.tool_name,
             "result": _tool_result_payload(event.result),
             "is_error": event.is_error,
+        }
+    if isinstance(event, ToolExecutionUpdateEvent):
+        return {
+            "tool_call_id": event.tool_call_id,
+            "tool_name": event.tool_name,
+            "lifecycle": str(event.partial_result),
         }
     message = getattr(event, "message", None)
     if message is not None:
@@ -276,7 +330,50 @@ def _tool_result_payload(result: object) -> dict[str, object]:
         "content_sha256": _digest(result.content),
         "has_error": result.error is not None,
         "data_keys": sorted(result.data),
+        "fault": result.data.get("fault"),
+        "timed_out": result.data.get("timed_out", False),
     }
+
+
+def _record_compaction_probe(recorder: TraceRecorder) -> None:
+    """Record an explicit no-op probe without changing the runtime API."""
+
+    recorder.record(
+        "context_compaction",
+        {
+            "trigger": "evaluation_probe",
+            "status": "success",
+            "reason": "evaluation_probe",
+            "before_tokens": 0,
+            "after_tokens": 0,
+            "changed_parts": 0,
+            "noop": True,
+        },
+    )
+
+
+def _should_interrupt(manifest: CaseManifest, event: ToolExecutionStartEvent, events: list[dict[str, object]]) -> bool:
+    threshold = manifest.interrupt_after_tool_calls
+    if threshold is None:
+        return False
+    starts = sum(item.get("type") == "tool_execution_start" for item in events)
+    return starts >= threshold and not any(item.get("type") == "interrupt_requested" for item in events)
+
+
+def _recovery_summary(events: list[dict[str, object]]) -> list[dict[str, object]]:
+    summary: list[dict[str, object]] = []
+    for event in events:
+        event_type = event.get("type")
+        data = event.get("data")
+        if event_type == "provider_error" and isinstance(data, dict):
+            summary.append({"kind": "provider", "error": data.get("kind"), "provider_error_kind": data.get("provider_error_kind")})
+        elif event_type == "tool_execution_end" and isinstance(data, dict) and data.get("is_error"):
+            summary.append({"kind": "tool", "tool_name": data.get("tool_name"), "fault": (data.get("result") or {}).get("fault")})
+        elif event_type == "tool_execution_update" and isinstance(data, dict) and data.get("lifecycle") == "interrupted":
+            summary.append({"kind": "interrupt", "tool_call_id": data.get("tool_call_id")})
+        elif event_type == "context_compaction":
+            summary.append({"kind": "compaction", "status": data.get("status") if isinstance(data, dict) else None})
+    return summary
 
 
 def _json(value: object) -> str:

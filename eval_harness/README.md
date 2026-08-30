@@ -29,6 +29,30 @@ The command writes:
 The command exits non-zero when a hard gate fails. It refuses an existing
 output directory so each invocation creates an auditable fresh trace.
 
+## Fault and recovery probes
+
+Offline manifests may add deterministic probes without changing runtime turn
+semantics:
+
+```json
+{
+  "provider_tape": [{"fault": "timeout"}, {"content": "Recovered.", "tool_calls": []}],
+  "tool_faults": {"call-id": "timeout"},
+  "interrupt_after_tool_calls": 1,
+  "enable_compaction": true
+}
+```
+
+Supported provider faults are `malformed_response`, `timeout`,
+`prompt_too_long`, and `network_error`; tool faults are `timeout`, `failure`,
+and `interrupt`;
+`failure`. Faults are recorded as portable `provider_error`, tool result, or
+`context_compaction` facts. The recovery gate checks that tool starts are
+closed by an end or an interruption and reports provider/tool/compaction
+categories in the scorecard. The compaction option is an explicitly labelled
+deterministic no-op probe in the harness; it is not a substitute for a real
+model compaction run.
+
 ## Golden replay
 
 Timestamps, elapsed time, provider request IDs, and trace digests are not
@@ -45,6 +69,17 @@ venv/bin/python -m eval_harness canonicalize \
 provider tape drives the current `lanscoder.core.agent_loop`. The case schema
 also reserves `fresh_model` for the later canary/statistical mode; it is not an
 offline gate and is intentionally not executed by this first runner.
+
+Compare a fresh scorecard with a baseline; a lost passing hard gate is a
+regression and numeric metrics are reported as deltas:
+
+```sh
+venv/bin/python -m eval_harness compare \
+  --baseline /tmp/baseline/scorecard.json \
+  --current /tmp/current/scorecard.json
+```
+
+`run` also accepts `--baseline` and embeds the comparison in its scorecard.
 
 ## Case and trace boundary
 
