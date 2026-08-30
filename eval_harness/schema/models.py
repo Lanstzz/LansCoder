@@ -96,9 +96,10 @@ def load_case_manifest(
     if not isinstance(runtime, str) or runtime not in SUPPORTED_RUNTIME_MODES:
         raise ManifestError(f"runtime must be one of {sorted(SUPPORTED_RUNTIME_MODES)}")
 
-    tape_raw = raw.get("provider_tape")
-    if not isinstance(tape_raw, list) or not tape_raw:
-        raise ManifestError("provider_tape must be a non-empty list")
+    tape_raw = raw.get("provider_tape", [])
+    if not isinstance(tape_raw, list) or (mode == "interaction_replay" and not tape_raw):
+        expected = "a non-empty list" if mode == "interaction_replay" else "a list"
+        raise ManifestError(f"provider_tape must be {expected}")
     tape = tuple(_load_tape_response(item, index) for index, item in enumerate(tape_raw, start=1))
 
     expected_artifacts_raw = raw.get("expected_artifacts", {})

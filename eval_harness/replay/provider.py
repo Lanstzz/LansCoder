@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from lanscoder.providers.base import ChatProvider
-from lanscoder.providers.errors import ProviderError, ProviderErrorKind
+from lanscoder.providers.errors import ProviderError, ProviderErrorKind, classify_provider_exception
 from lanscoder.providers.types import ChatRequest, ChatResponse, ProviderCapabilities, ToolCall
 
 from eval_harness.schema.models import ProviderTapeResponse
@@ -86,6 +86,62 @@ class ScriptedProvider(ChatProvider):
             self.on_interaction(event_type, data)
 
 
+class RecordingProvider(ChatProvider):
+    """Record a real provider's request/outcome without retaining raw request metadata."""
+
+    def __init__(self, provider: ChatProvider, *, on_interaction: Callable[[str, dict[str, Any]], None]) -> None:
+        self._provider = provider
+        self._on_interaction = on_interaction
+
+    @property
+    def name(self) -> str:
+        return self._provider.name
+
+    @property
+    def model(self) -> str:
+        return self._provider.model
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return self._provider.capabilities
+
+    def complete(self, request: ChatRequest) -> ChatResponse:
+        self._emit("provider_request", _request_payload(request))
+        try:
+            response = self._provider.complete(request)
+        except ProviderError as exc:
+            self._emit(
+                "provider_error",
+                {
+                    "kind": exc.kind.value,
+                    "provider_error_kind": exc.kind.value,
+                    "message": exc.message,
+                    "recoverable": exc.retryable,
+                },
+            )
+            raise
+        except Exception as exc:  # noqa: BLE001 - preserve provider failures in the trace.
+            kind = classify_provider_exception(exc)
+            self._emit(
+                "provider_error",
+                {
+                    "kind": kind.value,
+                    "provider_error_kind": kind.value,
+                    "message": str(exc),
+                    "recoverable": False,
+                },
+            )
+            raise
+        self._emit("provider_response", _response_payload(response))
+        return response
+
+    def astream(self, request: ChatRequest):
+        raise RuntimeError("RecordingProvider requires non-streaming execution")
+
+    def _emit(self, event_type: str, data: dict[str, Any]) -> None:
+        self._on_interaction(event_type, data)
+
+
 def _request_payload(request: ChatRequest) -> dict[str, Any]:
     return {
         "messages": [_request_message_payload(message) for message in request.messages],
@@ -102,6 +158,23 @@ def _request_payload(request: ChatRequest) -> dict[str, Any]:
         ],
         "tool_choice": str(request.tool_choice),
     }
+
+
+def _response_payload(response: ChatResponse) -> dict[str, Any]:
+    payload = {
+        "provider": response.provider,
+        "model": response.model,
+        "content": response.content,
+        "finish_reason": response.finish_reason or "unknown",
+        "tool_calls": [_tool_call_payload(call) for call in response.tool_calls],
+    }
+    if response.usage is not None:
+        payload["usage"] = {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+            "total_tokens": response.usage.total_tokens,
+        }
+    return payload
 
 
 def _request_message_payload(message: Any) -> dict[str, Any]:

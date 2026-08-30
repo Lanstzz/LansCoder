@@ -81,8 +81,43 @@ venv/bin/python -m eval_harness canonicalize \
 
 `interaction_replay` is the implemented deterministic mode: an explicit
 provider tape drives the current `lanscoder.core.agent_loop`. The case schema
-also reserves `fresh_model` for the later canary/statistical mode; it is not an
-offline gate and is intentionally not executed by this first runner.
+also supports `fresh_model` for direct live-provider canary runs; it is not an
+offline gate and does not use Harbor.
+
+The live-model design is documented in
+[`docs/superpowers/specs/2026-08-31-eval-live-canary-regression-matrix-design.md`](../docs/superpowers/specs/2026-08-31-eval-live-canary-regression-matrix-design.md).
+It defines `fresh_model` as a direct statistical runner with the same five hard
+gates, and keeps Harbor as a separate external regression matrix. Do not treat
+Harbor reward, provider failures, Docker failures, and missing verifier results
+as the same signal: only task-level pass/fail contributes to capability rates.
+
+`fresh_model` is now implemented as a direct provider path. It reads the selected
+model from LansCoder's normal catalog, takes the API key from the configured
+`api_key` or `api_key_env`, and writes a new redacted trace/scorecard. A single
+case can be run with:
+
+```sh
+venv/bin/python -m eval_harness run \
+  --case eval_harness/cases/canary/write_greeting.json \
+  --project . \
+  --model provider/model \
+  --output /tmp/lanscoder-live-smoke
+```
+
+For repeated canary runs, use the checked-in configuration (the model may also
+be supplied with `--model`):
+
+```sh
+venv/bin/python -m eval_harness canary \
+  --config eval_harness/canary.json \
+  --project . \
+  --output /tmp/lanscoder-live-canary
+```
+
+These commands require a configured real provider and may access its endpoint;
+they are never part of the offline test gate. The output directory is intended
+to stay outside the repository and contains one trace/scorecard per repetition
+plus `summary.json`.
 
 Compare a fresh scorecard with a baseline; a lost passing hard gate is a
 regression and numeric metrics are reported as deltas:
@@ -154,3 +189,12 @@ Harbor remains an optional external regression/canary adapter, now located in
 [`eval_harness/harbor/`](harbor/README.md). It is not used by the offline
 smoke or golden gate and therefore does not add a Harbor dependency to the
 runtime.
+
+The planned Harbor cells are: provider smoke, fixed Aider regression tasks,
+fixed SWE-bench Pro regression tasks, and a scheduled provider × model × runtime
+configuration matrix. Each cell records dataset/task versions, model and
+runtime identity, repetitions, repair policy, Harbor/container details, and a
+separate result taxonomy. The adapter already accepts real provider settings
+through `LANSCODER_PROVIDER_NAME`, `LANSCODER_MODEL`, `LANSCODER_BASE_URL`, and
+`LANSCODER_API_KEY`; this is an external Harbor run, not an implementation of
+`eval_harness run --mode fresh_model`.

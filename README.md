@@ -125,6 +125,10 @@ capsule 和口令环境变量。
 
 Harbor 作为可选的外部 regression/canary adapter，位于
 [`eval_harness/harbor/`](eval_harness/harbor/README.md)，不参与离线 golden 门禁。
+live model canary 与 Harbor regression matrix 的分层、门禁、指标和结果分类
+见 [设计文档](docs/superpowers/specs/2026-08-31-eval-live-canary-regression-matrix-design.md)；
+`fresh_model` 已实现为直接调用 provider 的 canary 路径，不依赖 Harbor；Harbor
+仍作为真实仓库 regression/canary 的独立外部 adapter。
 
 ---
 
