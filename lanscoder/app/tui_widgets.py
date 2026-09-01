@@ -209,6 +209,13 @@ class LansCoderScreen(Screen[None]):
 
     def get_widget_and_offset_at(self, x: int, y: int):
         widget, offset = super().get_widget_and_offset_at(x, y)
+        if widget is not None and widget.parent is None:
+            # 命中地图里无父节点的 widget 是"已 detach 仍残留"的 stale 块:它在
+            # 流式替换的移除语义与下一帧 layout 之间被 prune,parent 链已断,
+            # _selection_is_blocked_by_streaming_markdown 的向上遍历无法识别它,
+            # _forward_event 在文本选择分支取 container = content_widget.parent
+            # 会得 None 并崩溃(textual screen.py:1914)。整体判为不可选。
+            return None, None
         if widget is not None and self._selection_is_blocked_by_streaming_markdown(widget):
             return None, None
         return widget, offset
