@@ -184,6 +184,7 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         self._stream_rendered_text = ""
         self._stream_flush_timer: Timer | None = None
         self._stream_markdown_update = None
+        self._stream_header_appended = False
         self._stream_finalizations: dict[LansCoderMarkdown, object] = {}
         # 每块已增量挂载的 children 计数(流式挂载只处理新增条目)
         self._stream_mounted_child_counts: dict[int, int] = {}

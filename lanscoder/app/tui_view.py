@@ -156,6 +156,7 @@ class LansCoderViewMixin:
         self._stream_rendered_text = ""
         self._stream_flush_timer = None
         self._stream_markdown_update = None
+        self._stream_header_appended = False
         with self._stream_event_lock:
             self._stream_event_generation += 1
             stream_generation = self._stream_event_generation
@@ -1050,6 +1051,7 @@ class LansCoderViewMixin:
         self._stream_rendered_text = ""
         self._stream_flush_timer = None
         self._stream_markdown_update = None
+        self._stream_header_appended = False
         self._stream_segment_closed_for_tool = False
 
     def _schedule_stream_flush(self) -> None:
@@ -1067,14 +1069,25 @@ class LansCoderViewMixin:
         self._stream_flush_timer = None
         if self._stream_text_widget is None:
             return False
-        if self._stream_rendered_text == self._stream_text_buffer:
-            return False
+        buffer = self._stream_text_buffer
         if self._stream_markdown_update is not None:
             return False
-        self._stream_rendered_text = self._stream_text_buffer
+        delta_content = buffer[len(self._stream_rendered_text) :]
+        if not delta_content:
+            return False
+        if self._stream_header_appended:
+            delta = delta_content
+        else:
+            # 首个 flush 交付 header+首段内容;之后只 append 尾部增量。
+            # 旧实现每次整篇 update() 重解析全部历史并 remove/remount 所有块,
+            # 是 O(n^2) 且制造"已 detach 仍残留命中地图"的替换窗口(见 screen
+            # 层的 parent-None 兜底);append 只解析最后一块之后的新行。
+            delta = f"LansCoder:\n\n{delta_content}"
+            self._stream_header_appended = True
+        self._stream_rendered_text = buffer
         output = self.query_one("#output")
         was_pinned = self._is_output_pinned_to_bottom(output)
-        update_result = self._stream_text_widget.update(f"LansCoder:\n\n{self._stream_rendered_text}")
+        update_result = self._stream_text_widget.append(delta)
         self._track_stream_markdown_update(update_result)
         _observe_markdown_update(update_result)
         if was_pinned:

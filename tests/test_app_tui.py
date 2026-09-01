@@ -103,7 +103,11 @@ class FakeOutput:
             def update(markdown: str) -> None:
                 widget.updates.append(markdown)  # type: ignore[attr-defined]
 
+            def append(markdown: str) -> None:
+                widget.updates.append(markdown)  # type: ignore[attr-defined]
+
             widget.update = update  # type: ignore[method-assign]
+            widget.append = append  # type: ignore[method-assign]
 
     def scroll_end(self, animate: bool = False) -> None:
         self.scroll_end_calls += 1
@@ -2192,6 +2196,66 @@ async def test_screen_rejects_all_leaves_inside_unstable_streaming_markdown() ->
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_lanscoder_app_click_on_detached_stale_markdown_block_does_not_crash_selection_path() -> None:
+    """流式替换窗口内点击 stale 块不崩:命中"已 detach 但残留在命中地图"的块。
+
+    流式更新整篇 rebuild 时,块被 prune(detach,parent=None)到下一帧 layout 刷新之间,
+    compositor 命中地图仍返回这个块。screen._forward_event 的文本选择分支取
+    ``container = content_widget.parent`` 得 None,旧代码在 ``container.region`` 上抛
+    AttributeError。屏幕命中层必须以 parent 为 None 判定不可选,整个选择分支不进入。
+    """
+    app = LansCoderApp()
+    async with app.run_test() as pilot:
+        output = app.query_one("#output")
+        markdown = LansCoderMarkdown(selectable=False)
+        await output.mount(markdown)
+        await markdown.update("first paragraph\n\nsecond paragraph")
+        await pilot.pause()
+
+        blocks = list(markdown.query("MarkdownBlock"))
+        stale = next(b for b in blocks if type(b).__name__ == "LansCoderMarkdownParagraph")
+        region = stale.region
+        assert stale.parent is not None
+
+        # 复刻真实替换状态:块从 DOM detach(parent 置 None),layout 尚未刷新,
+        # 因此 compositor 原始命中地图仍返回它。
+        await stale.remove()
+
+        screen = app.screen
+        assert isinstance(screen, LansCoderScreen)
+        # 前提:原始命中确实命中 stale 块——替换窗口状态为真
+        raw_widget, _ = screen.get_widget_at(region.x + 1, region.y)
+        assert raw_widget is stale
+        assert stale.parent is None
+
+        # 契约:文本选择命中层必须把无父节点的 stale 块整体判为不可选,
+        # 使 _forward_event 的选择分支完全不进入(旧代码在此由
+        # get_widget_and_offset_at 返回该块,进而在 container.region 上崩溃)。
+        hit_widget, hit_offset = screen.get_widget_and_offset_at(region.x + 1, region.y)
+        assert hit_widget is None
+        assert hit_offset is None
+
+        mouse = events.MouseDown(
+            None,
+            x=region.x + 1,
+            y=region.y,
+            delta_x=0,
+            delta_y=0,
+            button=1,
+            shift=False,
+            meta=False,
+            ctrl=False,
+            screen_x=region.x + 1,
+            screen_y=region.y,
+        )
+        screen._forward_event(mouse)
+        await pilot.pause()
+
+        assert app.is_running
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_streaming_markdown_becomes_selectable_only_after_final_update() -> None:
     app = LansCoderApp()
 
@@ -2470,7 +2534,43 @@ def test_lanscoder_app_paces_stream_markdown_updates(monkeypatch) -> None:
 
     app._flush_stream_text()
 
-    assert markdown.updates[-1] == "LansCoder:\n\n我在这里"
+    # append 契约:首帧交付 header+首段,之后只 flush 尾部增量
+    assert markdown.updates == ["LansCoder:\n\n我", "在这里"]
+    assert "".join(markdown.updates) == "LansCoder:\n\n我在这里"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_lanscoder_app_streaming_cross_boundary_markdown_finalizes_correctly() -> None:
+    """流式 append 跨块边界(未闭合代码围栏/列表)不崩,最终快照与整篇等价。
+
+    旧整篇 update 每次重解析所有历史并重建全部块;改为 append 后只解析增量,
+    对跨 flush 的围栏分块由 textual 续接合并最后一块。finalize 的整篇 update
+    兜底,保证最终源串与缓冲精确一致。
+    """
+    app = LansCoderApp()
+    async with app.run_test() as pilot:
+        app._stream_text_started = True
+        chunks = ["```python\n", "print(", "'ok'", ")\n```\n\n", "- a\n- b\n\n", "tail"]
+        for chunk in chunks:
+            app._append_stream_text(chunk)
+            app._flush_stream_text()
+            for _ in range(100):
+                if app._stream_markdown_update is None:
+                    break
+                await pilot.pause()
+            else:
+                raise AssertionError("stream markdown append did not settle")
+            await pilot.pause()
+
+        markdown = app.query_one("LansCoderMarkdown.streaming", LansCoderMarkdown)
+        app._close_stream_segment_for_tool()
+        await app.wait_for_stream_finalization(markdown)
+        await pilot.pause()
+
+        assert app.is_running
+        assert markdown.allow_select is True
+        assert markdown._markdown == f"LansCoder:\n\n{''.join(chunks)}"
 
 
 def test_lanscoder_app_coalesces_stream_chunks_into_one_ui_callback(
@@ -2529,7 +2629,7 @@ def test_lanscoder_app_discards_coalesced_stream_chunks_after_interrupt(
     assert appended == []
 
 
-def test_lanscoder_app_stream_markdown_update_uses_latest_snapshot(monkeypatch) -> None:
+def test_lanscoder_app_stream_markdown_append_uses_latest_delta(monkeypatch) -> None:
     output = FakeOutput()
     app = LansCoderApp()
     updates: list[str] = []
@@ -2540,13 +2640,13 @@ def test_lanscoder_app_stream_markdown_update_uses_latest_snapshot(monkeypatch) 
         output.mounted.append(widget)
         if isinstance(widget, Markdown):
 
-            def update(markdown: str) -> FakeMarkdownUpdateResult:
+            def append(markdown: str) -> FakeMarkdownUpdateResult:
                 updates.append(markdown)
                 result = FakeMarkdownUpdateResult(None)
                 update_results.append(result)
                 return result
 
-            widget.update = update  # type: ignore[method-assign]
+            widget.append = append  # type: ignore[method-assign]
 
     monkeypatch.setattr(output, "mount", mount)
     monkeypatch.setattr(app, "query_one", lambda *args, **kwargs: output)
@@ -2568,7 +2668,7 @@ def test_lanscoder_app_stream_markdown_update_uses_latest_snapshot(monkeypatch) 
     update_results[0].finish()
     timers[-1]()
 
-    assert updates == ["LansCoder:\n\n我", "LansCoder:\n\n我在这里"]
+    assert updates == ["LansCoder:\n\n我", "在这里"]
 
 
 def test_lanscoder_app_does_not_scroll_stream_when_render_is_deferred(
@@ -2673,6 +2773,9 @@ def test_lanscoder_app_auto_scroll_fires_during_stream_when_layout_grows_max_scr
                 _future = None
 
             return _Result()
+
+        def append(self, text: str):
+            return self.update(text)
 
     app._stream_text_widget = _GrowingWidget(output)  # type: ignore[attr-defined]
     app._stream_text_buffer = "delta"
