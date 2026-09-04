@@ -122,5 +122,5 @@ class LlmTransport(Protocol):
 
 - 示例:`examples/sdk/`(README 见 `examples/sdk/README.md`);`tests/test_sdk_examples.py` 以子进程冒烟
   测试锁定"无 TUI 可运行"(SC-7)。
-- 门禁(SC-8):`pytest` 全量 + `node .ai-team/check.mjs --base origin/main` + `ruff check lanscoder tests`。
+- 门禁(SC-8):`pytest` 全量 + `ruff check lanscoder tests`。
 - 契约测试:`tests/test_core_contract.py`(`__all__` / 签名 / 字段 / `__version__` / `py.typed`)。

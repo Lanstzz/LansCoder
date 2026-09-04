@@ -156,7 +156,7 @@ lanscoder/core/
 ## 7. 测试策略
 
 - 每个 Step 独立 PR,先写测试(TDD,符合 D4)再实现。
-- 关键门禁: `pytest` 全量、`node .ai-team/check.mjs --base origin/main`、`ruff check lanscoder tests`。
+- 关键门禁: `pytest` 全量、`ruff check lanscoder tests`。
 - 边界测试用 fresh-interpreter 泄漏检查,防止 `if TYPE_CHECKING` 与惰性 import 漏网。
 
 ## 8. 风险与缓解

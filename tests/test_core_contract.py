@@ -118,6 +118,11 @@ def test_version_is_semver_shaped() -> None:
     assert all(part.isdigit() for part in parts[:2])
 
 
+def test_core_requires_anyio_version_with_to_thread_support() -> None:
+    pyproject = tomllib.loads((PROJECT_ROOT / "packages" / "lanscoder-core" / "pyproject.toml").read_text(encoding="utf-8"))
+    assert "anyio>=4,<4.15" in pyproject["project"]["dependencies"]
+
+
 def test_agent_loop_signature_pinned() -> None:
     assert _param_snapshot(agent_loop) == (
         ("prompts", "POSITIONAL_OR_KEYWORD", True, "<required>"),

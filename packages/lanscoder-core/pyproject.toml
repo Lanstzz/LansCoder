@@ -9,7 +9,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dynamic = ["version"]
 dependencies = [
-    "anyio",
+    "anyio>=4,<4.15",
     "portalocker",
     "PyYAML",
 ]

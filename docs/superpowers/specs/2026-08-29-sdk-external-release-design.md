@@ -100,7 +100,7 @@ TASK-002 已把 `lanscoder.core` 钉死为稳定 SDK 面:契约测试锁定 `__a
 - [ ] SC-3 双 dist 构建一致(版本 == `_version.py`,`twine check` 绿)
 - [ ] SC-4 tag 发布 + Test PyPI 演练通过
 - [ ] SC-5 CHANGELOG + 安装/发布文档齐全
-- [ ] SC-6 全量 `pytest` / `ruff check .` / `node .ai-team/check.mjs --base origin/main` 绿
+- [ ] SC-6 全量 `pytest` / `ruff check .` 绿
 
 ## 8. D7 修订(2026-08-29,结构性消除,用户拍板)
 

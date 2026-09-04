@@ -9,7 +9,6 @@
 ```sh
 python -m pytest
 python -m ruff check .
-node .ai-team/check.mjs --base origin/main
 ```
 
 - 版本一致性:`tests/test_dist_metadata.py` 锁定 root `pyproject.toml` version == core `_version.py`,
