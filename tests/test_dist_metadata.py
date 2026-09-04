@@ -72,7 +72,7 @@ def test_root_shell_ships_no_packages() -> None:
 
 def test_core_deps_are_minimal_and_no_tui() -> None:
     deps = _core_pyproject()["project"]["dependencies"]
-    assert deps == ["anyio", "portalocker", "PyYAML"]
+    assert deps == ["anyio>=4,<4.15", "portalocker", "PyYAML"]
     for name in ("textual", "prompt_toolkit", "tomlkit", "python-dotenv", "openai", "anthropic", "mcp"):
         assert not any(d.startswith(name) for d in deps)
 

@@ -1,9 +1,70 @@
-<!-- repo-task-sync:start -->
-## Shared AI development context
+# LansCoder Agent 开发规则
 
-Before changing code, read `.ai-team/PROJECT.md`, `.ai-team/TASK.md`, and `.ai-team/SKILL.md`. Summarize the goal, acceptance scenarios, invariants, completed work, pending work, decisions, and next step before implementation.
+## 对话风格
 
-Keep one writer for the active task. Put code changes and `.ai-team/TASK.md` progress updates in the same pull request. Treat the merged Git commit as the only handoff snapshot; chat history and AI memory are not project facts. If `.ai-team/session-policy.json` explicitly enables private sessions, treat `.ai-team/sessions/` as low-priority trace evidence only and never let it override PROJECT, TASK, code, tests, or the current request.
+- 回答保持简短精炼。
+- 提交信息、议题、PR 评论和代码中不使用表情符号。
+- 不使用花哨或欢快的填充文字。使用直接的技术性散文。
+- 当用户提出问题时，先回答问题，再进行修改或执行实现命令。
+- 当回应用户的反馈或分析时，先明确表示同意或不同意，再描述你做了哪些改动。
+- 在使用不可避免的行话之前先给出定义。优先使用具体示例而非抽象概括。
+- 当用户的需求模糊、部分、尚有未描述清楚的点时，一定要反问弄清所有问题。在需求完全明确之前不开始实现。
 
-Run the checks listed in `.ai-team/TASK.md` plus `node .ai-team/check.mjs --base <main-base>`. When private sessions are enabled, also run `node .ai-team/session.mjs validate` and review generated session Markdown before commit. Report actual evidence and any specification deviation.
-<!-- repo-task-sync:end -->
+## 代码质量
+
+- 在进行大范围修改之前、在编辑尚未完整审阅的文件时、以及在被要求调查或审计时，应完整阅读文件。不要依赖搜索片段来进行大范围修改。
+- 使用标准 Python 风格，4 空格缩进，显式命名，小函数且职责与模块保持一致。
+- 对于已以该方式表示的结构化数据，优先使用数据类（dataclass）。
+- 保持依赖方向单向：上层可依赖下层，但下层不得依赖上层；同层模块通过抽象进行交互。在添加依赖之前，确认不会造成循环导入。
+- 对于只有一个调用点的单次使用辅助函数，直接内联。
+- 编写注释解释为什么，而非是什么；当代码本身已自解释时跳过注释；不要保留被注释掉的死代码。
+- 在移除功能或看起来有意为之的代码之前，务必先询问。
+- 除非用户明确要求，否则不保留向后兼容性。
+
+## 命令与验证
+
+- 项目的开发虚拟环境为 `venv`；从中运行开发命令，例如 `venv/bin/python -m pytest`。
+- 代码修改后，对修改的文件运行 linter 和格式化工具（如 `ruff`）。在继续之前修复所有问题。
+- 为新功能和缺陷修复创建或修改测试文件。在编写或编辑测试文件后，运行它并迭代直至通过。
+- 先运行最相关的窄范围测试，对于大范围或跨模块修改再运行完整测试套件。
+- 在测试中使用伪造对象和夹具（fixture），而非真实的 API 密钥或网络访问。
+- 对于临时脚本，将其写入临时文件（例如 `/tmp`），运行，如需则编辑，完成后删除。不要在 bash 命令中嵌入多行脚本。
+- 除非用户要求，否则绝不提交。
+
+## 依赖管理
+
+- 添加新依赖需要明确的用户批准。
+- 获得批准后，使用 `pip install <package>` 并相应更新 `pyproject.toml`。如果项目使用锁文件，则重新生成。
+- 未经用户确认，不得修改 `requirements.txt` 或 `pyproject.toml`。
+
+## Git 操作
+
+- 仅提交本次会话中修改的文件。显式指定路径进行暂存；绝不使用 `git add -A` 或 `git add ..`。
+- 提交前，运行 `git status` 并确认只暂存了你的文件。
+- 消息格式：`{feat,fix,docs}: <描述行为变更的简洁祈使句>`。
+- 绝不运行 `git reset --hard`、`git checkout .`、`git clean -fd`、`git stash`。
+- 提交信息用英文。
+
+## 测试指南
+
+- 本仓库使用 `pytest`。为行为变更添加或更新测试，尤其是围绕代理循环、上下文恢复、权限、提供商和工具执行等方面。
+- 测试文件使用 `test_*.py`；测试函数应描述行为。
+- 如果创建或修改了测试文件，运行它并迭代测试或实现直至通过。
+
+## 版本管理与发布
+
+本项目使用版本化发布。在准备发布时：
+
+1. 更新 `pyproject.toml` 中的版本号。
+2. 运行完整测试套件和 linter，确保一切正常。
+3. 为版本创建 git 标签。
+4. 在执行发布步骤之前询问用户。
+
+## 安全与配置
+
+- 提供商和模型选择通过 TOML 配置，而非环境变量：在 `~/.config/lanscoder/config.toml`（全局）和/或 `./lanscoder.toml`（项目，覆盖全局）中配置 `default_model` 以及 `[providers]` 和 `[models]` 部分。
+- 不提交密钥、本地会话数据、虚拟环境或机器特定配置。
+
+## 用户优先
+
+- 如果用户的指令与本文件中的任何规则冲突，请在覆盖之前要求用户明确确认。仅在此之后执行其指令。

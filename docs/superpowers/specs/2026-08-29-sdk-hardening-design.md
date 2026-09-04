@@ -125,12 +125,12 @@ class AgentSessionHandle:
 验收:
 - SC-6 `py.typed` 存在且契约测试绿;泄漏检查仍绿。
 - SC-7 示例在无 TUI 环境可运行(headless smoke)。
-- SC-8 全量 `pytest` / `node .ai-team/check.mjs --base origin/main` / `ruff check lanscoder tests` 绿。
+- SC-8 全量 `pytest` / `ruff check lanscoder tests` 绿。
 
 ## 5. 测试策略
 
 - 每 Step 独立 PR,先写测试(TDD,D4)再实现。
-- 关键门禁: `pytest` 全量、`node .ai-team/check.mjs --base origin/main`、`ruff check lanscoder tests`。
+- 关键门禁: `pytest` 全量、`ruff check lanscoder tests`。
 - 泄漏检查延续既有 fresh-interpreter 模式。
 
 ## 6. 风险与缓解
