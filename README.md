@@ -12,7 +12,7 @@
 
 LansCoder 是一个在终端里运行的 AI 编程代理。像 Claude Code 或 Aider 一样，它能理解你的代码库、编辑文件、运行命令；但它的代码只有 **约 2.9 万行 Python**，分布在 15 个职责清晰的模块里——从入口、代理循环到工具系统，你可以完整地读一遍，并看懂每一层在做什么。
 
-它不是玩具：**33 个内置工具**、OpenAI 兼容 + Anthropic 双模型适配、MCP 集成、会话恢复与分支、L1–L3 上下文压缩管线，并具备可离线重放、脱敏 trace 和确定性 verifier 的评测闭环；历史 Harbor 结果属于外部 canary 证据，不是离线门禁。
+它不是玩具：**33 个内置工具**、OpenAI 兼容 + Anthropic 双模型适配、MCP 集成、会话恢复与分支，以及 L1–L3 上下文压缩管线。历史 Harbor 结果仅是特定本地锁定配置下的外部 benchmark 证据。
 
 **核心承诺**：目标不是比一个更大的 agent 功能更多，而是保持系统真实可用的同时，小到足以通读——理解每个子系统为什么存在。
 
@@ -110,25 +110,7 @@ await agent.prompt("你好")  # 需在 async 上下文中运行;完整可运行�
 
 ## 评测与回归
 
-[`eval_harness/`](eval_harness/README.md) 是独立于运行时的评测层。首个
-`interaction_replay` case 使用 scripted provider 和人工小型 fixture，经公开
-`lanscoder.core.agent_loop` 生成 fresh `trace.jsonl`、`scorecard.json` 和 artifacts；
-不创建网络 provider，也不调用真实模型。trace 使用稳定序号与 schema version，写入前脱敏，
-golden 比较会忽略时间戳和运行时 ID；离线 case 还可注入 provider/tool
-故障、取消和压缩探针，并通过 `eval_harness compare` 比较 scorecard 基线。
-`runtime: "session"` case 还会通过无 TUI 的 `create_agent_session` 真实采集
-持久化 resume 与 L3 compaction；`eval_harness/cases/redteam/` 提供秘密输出、
-超大工具结果、重复 tool ID 和越权路径的最小异常集。
-历史 LansCoder session 或 Harbor job 可用 `eval_harness extract` 生成脱敏
-portable case；完整 replay material 只存放在仓库外加密 capsule，运行时需显式提供
-capsule 和口令环境变量。
-
-Harbor 作为可选的外部 regression/canary adapter，位于
-[`eval_harness/harbor/`](eval_harness/harbor/README.md)，不参与离线 golden 门禁。
-live model canary 与 Harbor regression matrix 的分层、门禁、指标和结果分类
-见 [设计文档](docs/superpowers/specs/2026-08-31-eval-live-canary-regression-matrix-design.md)；
-`fresh_model` 已实现为直接调用 provider 的 canary 路径，不依赖 Harbor；Harbor
-仍作为真实仓库 regression/canary 的独立外部 adapter。
+旧的独立评测 harness 已移除；它不再是本仓库支持的评测或回归路径。
 
 ---
 
@@ -199,7 +181,6 @@ live model canary 与 Harbor regression matrix 的分层、门禁、指标和结
 - [快速开始](docs/getting-started/) — 安装、配置、5 分钟跑通
 - [能力指南](docs/guides/) — 权限模型、上下文压缩、会话管理
 - [架构](docs/architecture/) — 分层设计与依赖规则
-- [评测与回归](eval_harness/README.md) — 离线 smoke、golden replay、trace 与 scorecard
 - [FAQ](docs/faq.md) — 常见问题
 - [发布检查](docs/publishing.md) — `LansCoder` + `lanscoder-core` 双 dist 发布清单(Test PyPI → 真实 PyPI)
 
@@ -261,8 +242,6 @@ venv/bin/python -m ruff check .
 ## 项目声明
 
 - 这是可运行的个人工程项目，不代表已完成的规模化市场验证。
-- 历史 Harbor 分数仅是特定本地锁定配置下的外部 canary 证据，不能替代
-  [`eval_harness/`](eval_harness/README.md) 的离线确定性门禁。
 - 仓库不包含生产环境密钥；请从示例配置创建本地配置。
 
 ## License
