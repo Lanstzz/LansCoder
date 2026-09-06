@@ -65,6 +65,47 @@
 - 提供商和模型选择通过 TOML 配置，而非环境变量：在 `~/.config/lanscoder/config.toml`（全局）和/或 `./lanscoder.toml`（项目，覆盖全局）中配置 `default_model` 以及 `[providers]` 和 `[models]` 部分。
 - 不提交密钥、本地会话数据、虚拟环境或机器特定配置。
 
+## 子代理协作
+
+用户偏好主 session 作为 orchestrator，子代理执行边界清晰的独立任务。
+
+### 工具使用
+
+- 创建、等待、补充指令和关闭子代理时，必须直接使用当前环境提供的协作工具。
+- 不得使用 `exec_command`、shell、脚本或其他命令模拟子代理管理。
+- 不得把协作工具调用嵌套在 `functions.exec` 或其他非协作工具中。
+- 如果当前环境没有可用的子代理工具，应明确说明工具不可用，不要尝试替代执行。
+- 创建子代理后保存返回的 agent id；等待和后续操作必须使用该 id。
+
+### 委托原则
+
+- 先分析主任务，区分关键路径和可并行的旁支任务。
+- 只委托边界清晰、可独立完成、能实质推进的工作。
+- 不要委托当前下一步立即依赖的关键工作。
+- 多个编码子任务必须使用互不重叠的文件范围。
+- 子任务描述必须包含目标、范围、限制、输出和验证方式。
+- 子代理完成后，主代理负责检查报告、代码变更和测试结果。
+
+### 协作工具调用硬性约束
+
+- 协作工具必须作为顶层工具直接调用：
+  - 创建：`collaboration.spawn_agent`
+  - 等待：`collaboration.wait_agent`
+  - 查看：`collaboration.list_agents`
+  - 中断：`collaboration.interrupt_agent`
+  - 通信：`collaboration.send_message` 或 `collaboration.followup_task`
+- 严禁通过 `functions.exec`、`tools.exec`、`exec_command`、shell、脚本或 JavaScript 包装、转发或模拟任何 `collaboration.*` 调用。
+- 等待子代理时不得执行 `true`、`sleep`、轮询 shell 命令或其他无意义命令；必须直接调用 `collaboration.wait_agent`。
+- 协作工具不可用时，必须明确报告不可用，不得用 shell 或其他工具替代。
+- 每次协作调用前，先确认调用目标是 `collaboration.*`；如果不是，停止并改用正确工具。
+
+### 前后台行为
+
+- 创建子代理后，主代理应继续处理不依赖其结果的工作。
+- 不要连续轮询一个子代理。
+- 子代理完成后，检查其报告和代码变更，再由主代理整合和测试。
+- 不再需要的子代理应及时清除。
+
 ## 用户优先
 
 - 如果用户的指令与本文件中的任何规则冲突，请在覆盖之前要求用户明确确认。仅在此之后执行其指令。
