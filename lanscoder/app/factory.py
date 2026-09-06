@@ -42,6 +42,7 @@ from lanscoder.session.fork import ForkSessionService
 from lanscoder.session.new import NewSessionService
 from lanscoder.session.resume import ResumeService
 from lanscoder.session.share import SessionShareService
+from lanscoder.storage import LansCoderPaths
 from lanscoder.tools.builtin import create_builtin_registry
 from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.tools.types import Tool
@@ -107,7 +108,7 @@ class McpToolProvider:
 def create_lanscoder_app(
     *,
     project_root: str | Path = ".",
-    data_root: str | Path | None = None,
+    storage_root: str | Path | None = None,
     provider: ChatProvider | None = None,
     session_id: str | None = None,
     resume_session: bool = False,
@@ -123,9 +124,9 @@ def create_lanscoder_app(
     """应用工厂:解析配置、装配全部组件并返回可运行的 LansCoderApp。"""
 
     project_path = Path(project_root)
-    resolved_data_root = Path(data_root) if data_root is not None else project_path / ".lanscoder"
+    paths = LansCoderPaths(storage_root=storage_root, project_root=project_path)
     resolved_app_config = app_config or load_config(project_root=project_path)
-    model_state_store = ModelStateStore(resolved_data_root / "model_state.json")
+    model_state_store = ModelStateStore(paths.model_state)
     model_catalog = resolved_app_config.model_catalog()
     selected_profile: ModelProfile | None = None
     if provider is None:
@@ -164,7 +165,7 @@ def create_lanscoder_app(
     handle = create_agent_session(
         provider=resolved_provider,
         project_root=project_path,
-        data_root=resolved_data_root,
+        storage_root=paths.storage_root,
         tools=current_tools,
         session_id=session_id,
         resume=resume_session,
@@ -192,19 +193,16 @@ def create_lanscoder_app(
     bootstrap = SessionBootstrap(
         store=store,
         project_root=project_path,
-        data_root=resolved_data_root,
+        paths=paths,
         tools=current_tools,
         sandbox_access=sandbox_access,
     )
     compact_summarizer = context_manager.l3_service.summarizer
-    catalog = SessionCatalog(resolved_data_root)
-    from lanscoder.session.index import SessionIndex
-
-    SessionIndex(resolved_data_root).prune_empty(exclude={session.session_id})
+    catalog = SessionCatalog(paths.storage_root)
     resume_service = ResumeService(
         store=store,
         project_root=project_path,
-        data_root=resolved_data_root,
+        paths=paths,
         tools_provider=tool_provider,
         sandbox_access=sandbox_access,
         catalog=catalog,
@@ -212,14 +210,14 @@ def create_lanscoder_app(
     new_service = NewSessionService(
         store=store,
         project_root=project_path,
-        data_root=resolved_data_root,
+        paths=paths,
         tools_provider=tool_provider,
         sandbox_access=sandbox_access,
     )
     fork_service = ForkSessionService(
         store=store,
         project_root=project_path,
-        data_root=resolved_data_root,
+        paths=paths,
         tools_provider=tool_provider,
         sandbox_access=sandbox_access,
         catalog=catalog,

@@ -59,7 +59,7 @@ def audit_tool_events(event: ToolExecutionEvent) -> None:
 
 async def main() -> None:
     workdir = Path(tempfile.mkdtemp(prefix="lanscoder-sdk-l3-"))
-    data_root = workdir / "data"
+    storage_root = workdir / "storage"
     session_id = "sdk-headless-demo"
     tools = [lookup_knowledge_tool()]
 
@@ -86,7 +86,7 @@ async def main() -> None:
     handle = create_agent_session(
         provider=provider,
         project_root=workdir,
-        data_root=data_root,
+        storage_root=storage_root,
         tools=tools,
         session_id=session_id,
     )
@@ -106,7 +106,7 @@ async def main() -> None:
     resumed = create_agent_session(
         provider=provider2,
         project_root=workdir,
-        data_root=data_root,
+        storage_root=storage_root,
         tools=tools,
         session_id=session_id,
         resume=True,

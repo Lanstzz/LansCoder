@@ -37,6 +37,7 @@ from lanscoder.utils.sandbox_access import SandboxAccess
 from lanscoder.skills.discovery import discover_all_skills
 from lanscoder.skills.catalog import render_skill_catalog
 from lanscoder.skills.models import SkillCatalog
+from lanscoder.storage import LansCoderPaths
 
 if TYPE_CHECKING:
     from lanscoder.agent.permission import PermissionCoordinator
@@ -135,7 +136,7 @@ class AgentSession:
             runtime_state=runtime_state,
             tools=tools,
             known_message_ids=known_message_ids,
-            archive_root=store.root,
+            paths=LansCoderPaths(storage_root=store.root),
             current_turn=lambda: writer.current_turn,
             store=store,
             writer=writer,
@@ -223,7 +224,7 @@ class AgentSession:
             runtime_state=runtime_state,
             tools=tools,
             known_message_ids=known_message_ids,
-            archive_root=store.root,
+            paths=LansCoderPaths(storage_root=store.root),
             current_turn=lambda: writer.current_turn,
             store=store,
             writer=writer,

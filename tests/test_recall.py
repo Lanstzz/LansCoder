@@ -10,7 +10,9 @@ import pytest
 from lanscoder.app.recall_commands import RecallCommandHandler
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.types import ChatResponse
+from lanscoder.session.access import project_id_for_path
 from lanscoder.session.bootstrap import SessionBootstrap
+from lanscoder.storage import LansCoderPaths
 
 
 def _write_session_jsonl(path: Path, events: list[dict]) -> None:
@@ -28,6 +30,15 @@ def _make_event(session_id: str, event_id: str, event_type: str, payload: dict) 
         "type": event_type,
         "payload": payload,
         "created_at": "2026-08-18T12:00:00Z",
+    }
+
+
+def _make_session_created_payload(session_id: str, project_root: Path) -> dict[str, str]:
+    return {
+        "session_id": session_id,
+        "context_event_schema_version": "v2",
+        "project_id": project_id_for_path(project_root),
+        "kind": "primary",
     }
 
 
@@ -430,7 +441,7 @@ class TestRecallCommandHandler:
         store = JsonlSessionStore(tmp_path)
         sid = "sess_recall_test"
         events = [
-            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_event(sid, "evt_01", "session_created", _make_session_created_payload(sid, tmp_path)),
             _make_user_message_event(sid, "msg_01", "turn 1", 1),
             _make_assistant_message_event(sid, "msg_02", "response 1"),
             _make_user_message_event(sid, "msg_03", "turn 2", 2),
@@ -441,7 +452,7 @@ class TestRecallCommandHandler:
         bootstrap = SessionBootstrap(
             store=store,
             project_root=tmp_path,
-            data_root=tmp_path,
+            paths=LansCoderPaths(storage_root=tmp_path, project_root=tmp_path),
         )
         session = bootstrap.resume(sid)
 
@@ -476,7 +487,7 @@ class TestRecallCommandHandler:
         store = JsonlSessionStore(tmp_path)
         sid = "sess_recall_test"
         events = [
-            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_event(sid, "evt_01", "session_created", _make_session_created_payload(sid, tmp_path)),
             _make_user_message_event(sid, "msg_01", "turn 1", 1),
             _make_assistant_message_event(sid, "msg_02", "response 1"),
             _make_user_message_event(sid, "msg_03", "turn 2", 2),
@@ -486,14 +497,12 @@ class TestRecallCommandHandler:
         ]
         _write_session_jsonl(store._session_path(sid), events)
 
-        # Build a real AgentSession so we can resume it
+        # Resume the pre-written session through the real bootstrap boundary.
         bootstrap = SessionBootstrap(
             store=store,
             project_root=tmp_path,
-            data_root=tmp_path,
+            paths=LansCoderPaths(storage_root=tmp_path, project_root=tmp_path),
         )
-        session = bootstrap.create(session_id=sid)
-        # Rebuild the session from the pre-written events
         session = bootstrap.resume(sid)
 
         swapped_session = None
@@ -527,7 +536,7 @@ class TestRecallCommandHandler:
         store = JsonlSessionStore(tmp_path)
         sid = "sess_recall_single"
         events = [
-            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_event(sid, "evt_01", "session_created", _make_session_created_payload(sid, tmp_path)),
             _make_user_message_event(sid, "msg_01", "only turn", 1),
             _make_assistant_message_event(sid, "msg_02", "only response"),
         ]
@@ -536,7 +545,7 @@ class TestRecallCommandHandler:
         bootstrap = SessionBootstrap(
             store=store,
             project_root=tmp_path,
-            data_root=tmp_path,
+            paths=LansCoderPaths(storage_root=tmp_path, project_root=tmp_path),
         )
         session = bootstrap.resume(sid)
 
@@ -593,7 +602,7 @@ class TestRecallWithCompaction:
         store = JsonlSessionStore(tmp_path)
         sid = "sess_compacted"
         events = [
-            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_event(sid, "evt_01", "session_created", _make_session_created_payload(sid, tmp_path)),
             _make_user_message_event(sid, "msg_01", "hello", 1),
             _make_assistant_message_event(sid, "msg_02", "hi there"),
             _make_user_message_event(sid, "msg_03", "what are you", 2),
@@ -608,7 +617,11 @@ class TestRecallWithCompaction:
         ]
         _write_session_jsonl(store._session_path(sid), events)
 
-        bootstrap = SessionBootstrap(store=store, project_root=tmp_path, data_root=tmp_path)
+        bootstrap = SessionBootstrap(
+            store=store,
+            project_root=tmp_path,
+            paths=LansCoderPaths(storage_root=tmp_path, project_root=tmp_path),
+        )
         session = bootstrap.resume(sid)
 
         handler = RecallCommandHandler(
@@ -631,14 +644,18 @@ class TestRecallWithCompaction:
         store = JsonlSessionStore(tmp_path)
         sid = "sess_compacted_id"
         events = [
-            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_event(sid, "evt_01", "session_created", _make_session_created_payload(sid, tmp_path)),
             _make_user_message_event(sid, "msg_01", "hello", 1),
             _make_assistant_message_event(sid, "msg_02", "hi there"),
             self._compact_event(sid, [self._blank_part("msg_01", "part_msg_01", 1)]),
         ]
         _write_session_jsonl(store._session_path(sid), events)
 
-        bootstrap = SessionBootstrap(store=store, project_root=tmp_path, data_root=tmp_path)
+        bootstrap = SessionBootstrap(
+            store=store,
+            project_root=tmp_path,
+            paths=LansCoderPaths(storage_root=tmp_path, project_root=tmp_path),
+        )
         session = bootstrap.resume(sid)
 
         swapped = None
@@ -668,7 +685,7 @@ def test_recall_to_uses_resume_service(tmp_path):
     store = JsonlSessionStore(tmp_path)
     sid = "sess_recall_svc"
     events = [
-        _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+        _make_event(sid, "evt_01", "session_created", _make_session_created_payload(sid, tmp_path)),
         _make_user_message_event(sid, "msg_01", "turn 1", 1),
         _make_assistant_message_event(sid, "msg_02", "response 1"),
         _make_user_message_event(sid, "msg_03", "turn 2", 2),
@@ -676,12 +693,16 @@ def test_recall_to_uses_resume_service(tmp_path):
     ]
     _write_session_jsonl(store._session_path(sid), events)
 
-    bootstrap = SessionBootstrap(store=store, project_root=tmp_path, data_root=tmp_path)
+    bootstrap = SessionBootstrap(
+        store=store,
+        project_root=tmp_path,
+        paths=LansCoderPaths(storage_root=tmp_path, project_root=tmp_path),
+    )
     session = bootstrap.resume(sid)
     resume_service = ResumeService(
         store=store,
         project_root=tmp_path,
-        data_root=tmp_path,
+        paths=LansCoderPaths(storage_root=tmp_path, project_root=tmp_path),
         catalog=SessionCatalog(tmp_path),
     )
 
@@ -719,7 +740,7 @@ class TestRecallIntegration:
         store = JsonlSessionStore(tmp_path)
         sid = "sess_integration"
         events = [
-            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_event(sid, "evt_01", "session_created", _make_session_created_payload(sid, tmp_path)),
             _make_user_message_event(sid, "msg_01", "first turn", 1),
             _make_assistant_message_event(sid, "msg_02", "first response"),
             _make_user_message_event(sid, "msg_03", "second turn", 2),
@@ -730,7 +751,11 @@ class TestRecallIntegration:
         _write_session_jsonl(store._session_path(sid), events)
 
         # Bootstrap and resume
-        bootstrap = SessionBootstrap(store=store, project_root=tmp_path, data_root=tmp_path)
+        bootstrap = SessionBootstrap(
+            store=store,
+            project_root=tmp_path,
+            paths=LansCoderPaths(storage_root=tmp_path, project_root=tmp_path),
+        )
         session = bootstrap.resume(sid)
 
         # Verify all 3 turns are present
@@ -764,7 +789,7 @@ class TestRecallIntegration:
         store = JsonlSessionStore(tmp_path)
         sid = "sess_continue"
         events = [
-            _make_event(sid, "evt_01", "session_created", {"session_id": sid, "context_event_schema_version": "v2"}),
+            _make_event(sid, "evt_01", "session_created", _make_session_created_payload(sid, tmp_path)),
             _make_user_message_event(sid, "msg_01", "first turn", 1),
             _make_assistant_message_event(sid, "msg_02", "first response"),
             _make_user_message_event(sid, "msg_03", "second turn", 2),
@@ -772,7 +797,11 @@ class TestRecallIntegration:
         ]
         _write_session_jsonl(store._session_path(sid), events)
 
-        bootstrap = SessionBootstrap(store=store, project_root=tmp_path, data_root=tmp_path)
+        bootstrap = SessionBootstrap(
+            store=store,
+            project_root=tmp_path,
+            paths=LansCoderPaths(storage_root=tmp_path, project_root=tmp_path),
+        )
         session = bootstrap.resume(sid)
 
         swapped = None

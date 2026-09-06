@@ -42,6 +42,8 @@ from lanscoder.tools.background import (
 )
 from lanscoder.tools.delegate import create_delegate_tool
 from lanscoder.tools.types import Tool
+from lanscoder.observability.models import TraceScope
+from lanscoder.observability.protocol import TraceRecorder
 
 __all__ = [
     "register_loop_tools",
@@ -92,6 +94,9 @@ def create_agent_loop(
     stream_event_handler=None,
     tool_event_handler=None,
     enable_delegate_tool=True,
+    trace_recorder: TraceRecorder | None = None,
+    trace_id: str | None = None,
+    trace_scope: TraceScope | None = None,
     **_,
 ) -> AgentLoop:
     """装配一次 AgentLoop:注册工具、构造子代理引擎、请求构建器、观察者、工具执行器与权限恢复器。"""
@@ -161,7 +166,12 @@ def create_agent_loop(
             stream_event_handler=stream_event_handler,
             tool_event_handler=tool_event_handler,
             foreground_progress_provider=lambda: engine.foreground_progress,
+            trace_recorder=trace_recorder,
+            trace_id=trace_id,
+            trace_scope=trace_scope,
         )
+    elif trace_recorder is not None:
+        observer.set_trace_context(trace_recorder, trace_id, trace_scope)
     if background_tool_names is None:
         background_tool_names = DEFAULT_BACKGROUND_TOOL_NAMES
     tool_executor = ToolExecutor(
@@ -208,6 +218,8 @@ def create_agent_loop(
         cancellation_token=cancellation_token,
         stream_event_handler=stream_event_handler,
         tool_event_handler=tool_event_handler,
+        trace_recorder=trace_recorder,
+        trace_id=trace_id,
     )
     permission_resume.set_tool_round_callback(loop._record_resumed_tool_round)
     return loop
@@ -269,11 +281,13 @@ class AgentChatRunner:
     stream_event_handler: Callable[[ChatStreamEvent], None] | None = None
     tool_event_handler: Callable[[ToolExecutionEvent], None] | None = None
     background_manager: BackgroundJobManager | None = None
+    trace_recorder: TraceRecorder | None = None
     pending_guidance: list[str] = field(default_factory=list)
     _guidance_lock: threading.Lock = field(default_factory=threading.Lock)
     _cancellation_lock: threading.Lock = field(default_factory=threading.Lock)
     _active_cancellation_token: CancellationToken | None = None
     _pending_permission_loop: AgentLoop | None = None
+    _active_trace_id: str | None = None
     # 本回合按序的 (reasoning 文本, 秒数, 消息是否以 tool_call 收尾)；
     # 供 TUI 收尾 reconcile 把 store 里的时长回填到 live thinking 子行。
     # 合并边界是 tool_call 而非 text:replay/live 的 append_thinking 只查末位
@@ -350,6 +364,7 @@ class AgentChatRunner:
         before_count = len(self.current_session.rebuild_view().messages)
         self.last_pending_input = None
         token = self._begin_cancellable_turn()
+        self._start_trace()
         if streaming:
             self.last_display_lines = []
             self.last_stream_events = []
@@ -360,11 +375,19 @@ class AgentChatRunner:
         before_count = len(self.current_session.rebuild_view().messages)
         self.last_pending_input = None
         token = self._begin_cancellable_turn()
+        if self._active_trace_id is None:
+            self._start_trace()
+        elif self.trace_recorder is not None:
+            try:
+                self.trace_recorder.resume_trace(self._active_trace_id)
+            except Exception:
+                pass
         loop = self._pending_permission_loop
         if loop is None or loop.session is not self.current_session.session:
             loop = self._create_loop(token, streaming=streaming)
         else:
             loop.replace_cancellation_token(token)
+            loop.set_trace_context(self.trace_recorder, self._active_trace_id)
             loop.stream_event_handler = self.stream_event_handler if streaming else None
             loop.tool_event_handler = self.tool_event_handler
             if streaming:
@@ -436,6 +459,9 @@ class AgentChatRunner:
                     streaming=self.use_streaming,
                 ),
             )
+        except BaseException as error:
+            self._end_trace(error=error)
+            raise
         finally:
             self._finish_cancellable_turn(cancellation_token)
         return self._finish_agent_result(before_count, loop, result)
@@ -449,6 +475,9 @@ class AgentChatRunner:
                 _run_coroutine_in_thread,
                 loop.run_nudge_turn(streaming=self.use_streaming),
             )
+        except BaseException as error:
+            self._end_trace(error=error)
+            raise
         finally:
             self._finish_cancellable_turn(cancellation_token)
         if result.response is None:
@@ -468,6 +497,9 @@ class AgentChatRunner:
                     streaming=self.use_streaming,
                 ),
             )
+        except BaseException as error:
+            self._end_trace(error=error)
+            raise
         finally:
             self._finish_cancellable_turn(cancellation_token)
         return self._finish_agent_result(before_count, loop, result)
@@ -477,11 +509,65 @@ class AgentChatRunner:
         self.last_pending_input = result.pending_input
         self._remember_pending_permission_loop(loop)
         self._refresh_turn_output(before_count, loop)
+        if result.pending_input is not None:
+            self._pause_trace(result.pending_input)
+        else:
+            self._end_trace(final_output=result.response)
         if result.response is not None:
             if result.response.content and not self.last_display_lines:
                 self.last_display_lines.append(result.response.content)
             return result.response
         return self._waiting_for_input_response(result.pending_input)
+
+    def _trace_scope(self) -> TraceScope:
+        metadata = self.current_session.rebuild_view().metadata
+        branch_id = str(
+            metadata.get("active_branch_id")
+            or metadata.get("root_branch_id")
+            or metadata.get("branch_id")
+            or "root"
+        )
+        return TraceScope(session_id=self.current_session.session_id, branch_id=branch_id)
+
+    def _start_trace(self) -> None:
+        if self.trace_recorder is None or self._active_trace_id is not None:
+            return
+        try:
+            self._active_trace_id = self.trace_recorder.start_trace(
+                self._trace_scope(),
+                data={"operation": "agent_turn", "provider": self.provider.name, "model": self.provider.model},
+            )
+        except Exception:
+            self._active_trace_id = None
+
+    def _pause_trace(self, pending: UserInputRequest) -> None:
+        if self.trace_recorder is None or self._active_trace_id is None:
+            return
+        try:
+            self.trace_recorder.pause_trace(
+                self._active_trace_id,
+                pending={
+                    "request_id": pending.id,
+                    "question": pending.question,
+                    "kind": pending.kind,
+                },
+            )
+        except Exception:
+            return
+
+    def _end_trace(self, *, final_output: ChatResponse | None = None, error: BaseException | None = None) -> None:
+        if self.trace_recorder is None or self._active_trace_id is None:
+            return
+        trace_id = self._active_trace_id
+        self._active_trace_id = None
+        try:
+            if error is not None:
+                status = "cancelled" if self._active_cancellation_token is not None and self._active_cancellation_token.is_cancelled else "failed"
+                self.trace_recorder.end_trace(trace_id, status=status, error=error)
+            else:
+                self.trace_recorder.end_trace(trace_id, status="completed", final_output=_trace_output(final_output), no_generation=final_output is None)
+        except Exception:
+            return
 
     def _current_tools(self) -> list[Tool] | None:
         """返回当前生效的工具集(优先走 tools_provider 以支持热更新)。"""
@@ -523,6 +609,8 @@ class AgentChatRunner:
             "guidance_provider": self.drain_guidance,
             "cancellation_token": cancellation_token,
             "background_manager": self.background_manager,
+            "trace_recorder": self.trace_recorder,
+            "trace_id": self._active_trace_id,
         }
         if streaming:
             kwargs["stream_event_handler"] = self.stream_event_handler
@@ -618,3 +706,16 @@ def _tool_lines(parts: list[MessagePart]) -> list[str]:
         content = ellipsis_truncate(part.content, 400, normalize_ws=True)
         lines.append(f"Tool result: {name} {status}: {content}")
     return lines
+
+
+def _trace_output(response: ChatResponse | None) -> dict[str, Any] | None:
+    if response is None:
+        return None
+    return {
+        "content": response.content,
+        "finish_reason": response.finish_reason,
+        "tool_calls": [
+            {"id": call.id, "name": call.name, "arguments": call.arguments}
+            for call in response.tool_calls
+        ],
+    }

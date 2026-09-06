@@ -20,6 +20,7 @@ from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import MainRequestOptions
 from lanscoder.session.bootstrap import SessionBootstrap
+from lanscoder.storage import LansCoderPaths
 from lanscoder.tools.builtin import create_builtin_registry
 from lanscoder.tools.types import Tool
 from lanscoder.utils.sandbox_access import SandboxAccess
@@ -39,7 +40,7 @@ def create_agent_session(
     *,
     provider: ChatProvider,
     project_root: str | Path,
-    data_root: str | Path | None = None,
+    storage_root: str | Path | None = None,
     tools: list[Tool] | None = None,
     session_id: str | None = None,
     resume: bool = False,
@@ -57,10 +58,8 @@ def create_agent_session(
     """
 
     project_path = Path(project_root)
-    resolved_data_root = (
-        Path(data_root) if data_root is not None else project_path / ".lanscoder"
-    )
-    store = JsonlSessionStore(resolved_data_root)
+    paths = LansCoderPaths(storage_root=storage_root, project_root=project_path)
+    store = JsonlSessionStore(paths.storage_root)
     sandbox_access = SandboxAccess()
     resolved_tools = (
         tools
@@ -76,7 +75,7 @@ def create_agent_session(
     bootstrap = SessionBootstrap(
         store=store,
         project_root=project_path,
-        data_root=resolved_data_root,
+        paths=paths,
         tools=resolved_tools,
         sandbox_access=sandbox_access,
         user_memory_root=user_memory_root,

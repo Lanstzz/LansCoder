@@ -4,21 +4,22 @@
 from pathlib import Path
 
 from lanscoder.context.store import JsonlSessionStore
-from lanscoder.memory.manager import project_memory_root
 from lanscoder.session.bootstrap import SessionBootstrap
+from lanscoder.storage import LansCoderPaths
 
 
 def test_memory_lifecycle_end_to_end(tmp_path: Path) -> None:
     project_path = tmp_path / "project"
     project_path.mkdir()
-    data_root = tmp_path / "data"
+    paths = LansCoderPaths(storage_root=tmp_path / "storage", project_root=project_path)
     user_memory_root = tmp_path / "user-memory"
-    store = JsonlSessionStore(data_root)
+    store = JsonlSessionStore(paths.storage_root)
 
     # 第一次会话：写一条项目记忆
     bootstrap = SessionBootstrap(
         store=store,
         project_root=project_path,
+        paths=paths,
         user_memory_root=user_memory_root,
     )
     session = bootstrap.from_project()
@@ -28,7 +29,7 @@ def test_memory_lifecycle_end_to_end(tmp_path: Path) -> None:
     )
     assert result.ok
 
-    memory_file = project_memory_root(data_root, project_path) / "build-commands.md"
+    memory_file = paths.project_memory / "build-commands.md"
     assert memory_file.read_text(encoding="utf-8").startswith("---\n")
     index_file = memory_file.parent / "MEMORY.md"
     assert "build-commands" in index_file.read_text(encoding="utf-8")

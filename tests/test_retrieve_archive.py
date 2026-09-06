@@ -4,17 +4,26 @@ import json
 
 import pytest
 
-from lanscoder.agent.session import AgentSession
 from lanscoder.agent.tool_flow import tool_result_to_part
 from lanscoder.context.archive import ToolResultArchive
 from lanscoder.context.models import MessagePart
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.types import ToolCall
+from lanscoder.session.bootstrap import SessionBootstrap
 from lanscoder.session.fork import ForkSessionService
 from lanscoder.tools import create_builtin_registry
 from lanscoder.tools.retrieve_archive import create_retrieve_archive_tool
 from lanscoder.tools.session_registry import create_session_tool_registry
 from lanscoder.tools.think import create_think_tool
+from lanscoder.storage import LansCoderPaths
+
+
+def _paths(tmp_path):
+    return LansCoderPaths(storage_root=tmp_path / "storage", project_root=tmp_path)
+
+
+def _storage_root(tmp_path):
+    return _paths(tmp_path).storage_root
 
 
 def _seed(tmp_path, content: str, *, session_id: str = "sess_test") -> str:
@@ -25,11 +34,11 @@ def _seed(tmp_path, content: str, *, session_id: str = "sess_test") -> str:
         content=content,
         metadata={"tool_name": "shell"},
     )
-    return ToolResultArchive(tmp_path).store_original(session_id, part).archive_id
+    return ToolResultArchive(_storage_root(tmp_path)).store_original(session_id, part).archive_id
 
 
 def _tool(tmp_path, turn=lambda: 7, *, session_id: str = "sess_test"):
-    return create_retrieve_archive_tool(session_id=session_id, archive_root=tmp_path, current_turn=turn)
+    return create_retrieve_archive_tool(session_id=session_id, archive_root=_storage_root(tmp_path), current_turn=turn)
 
 
 def test_schema_and_full_retrieval_are_bounded_and_protected(tmp_path) -> None:
@@ -139,7 +148,7 @@ def test_missing_tampered_or_cross_session_archive_fails_without_path(tmp_path) 
 
     cross_session = other_session.executor(archive_id=archive_id)
     missing = _tool(tmp_path).executor(archive_id="ar_missing")
-    metadata_path = tmp_path / "archives" / "sess_test" / f"{archive_id}.json"
+    metadata_path = _storage_root(tmp_path) / "archives" / "sess_test" / f"{archive_id}.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     metadata["content_sha256"] = "0" * 64
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
@@ -152,13 +161,14 @@ def test_missing_tampered_or_cross_session_archive_fails_without_path(tmp_path) 
 
 
 def test_session_registry_injects_retrieve_and_rejects_override(tmp_path) -> None:
-    registry = create_session_tool_registry(session_id="sess_test", archive_root=tmp_path)
+    archive_root = _storage_root(tmp_path)
+    registry = create_session_tool_registry(session_id="sess_test", archive_root=archive_root)
 
     assert "retrieve_archive" in registry.names()
     with pytest.raises(ValueError, match="reserved"):
         create_session_tool_registry(
             session_id="sess_test",
-            archive_root=tmp_path,
+            archive_root=archive_root,
             tools=[create_think_tool()] + [_tool(tmp_path, session_id="other")],
         )
 
@@ -168,13 +178,15 @@ def test_builtin_registry_does_not_include_session_bound_retrieval(tmp_path) -> 
 
 
 def test_session_create_and_resume_have_dynamic_retrieval_turn(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    created = AgentSession.create(store=store, session_id="sess_test")
+    paths = _paths(tmp_path)
+    store = JsonlSessionStore(paths.storage_root)
+    bootstrap = SessionBootstrap(store=store, project_root=tmp_path, paths=paths)
+    created = bootstrap.create(session_id="sess_test")
     assert "retrieve_archive" in created.tool_registry.names()
     created.writer.append_user_message("first turn")
     assert created.tool_registry.execute("retrieve_archive", {"archive_id": "ar_missing"}).ok is False
 
-    resumed = AgentSession.resume(store=store, session_id="sess_test")
+    resumed = bootstrap.resume("sess_test")
     archive_id = _seed(tmp_path, "payload")
     result = resumed.tool_registry.execute("retrieve_archive", {"archive_id": archive_id, "full": True})
     assert result.ok is True
@@ -182,12 +194,13 @@ def test_session_create_and_resume_have_dynamic_retrieval_turn(tmp_path) -> None
 
 
 def test_forked_session_retrieves_copied_v2_archive_and_keeps_archives_session_local(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    source = AgentSession.create(store=store, session_id="sess_source")
+    paths = _paths(tmp_path)
+    store = JsonlSessionStore(paths.storage_root)
+    source = SessionBootstrap(store=store, project_root=tmp_path, paths=paths).create(session_id="sess_source")
     raw_content = "original archive content\nwith an important detail"
     archive_id = _seed(tmp_path, raw_content, session_id=source.session_id)
 
-    forked = ForkSessionService(store=store, project_root=tmp_path).fork(source.session_id)
+    forked = ForkSessionService(store=store, project_root=tmp_path, paths=paths).fork(source.session_id)
     forked_session = forked.session
     forked_id = forked_session.session_id
 
@@ -201,8 +214,8 @@ def test_forked_session_retrieves_copied_v2_archive_and_keeps_archives_session_l
     assert retrieved.content == raw_content
     assert retrieved.data["archive_id"] == archive_id
 
-    source_archive_dir = tmp_path / "archives" / source.session_id
-    fork_archive_dir = tmp_path / "archives" / forked_id
+    source_archive_dir = paths.storage_root / "archives" / source.session_id
+    fork_archive_dir = paths.storage_root / "archives" / forked_id
     assert source_archive_dir != fork_archive_dir
     assert (source_archive_dir / f"{archive_id}.txt").read_text(encoding="utf-8") == raw_content
     assert (fork_archive_dir / f"{archive_id}.txt").read_text(encoding="utf-8") == raw_content

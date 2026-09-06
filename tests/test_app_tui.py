@@ -65,6 +65,7 @@ from lanscoder.input.attachments import UserAttachment
 from lanscoder.session.catalog import SessionCatalog
 from lanscoder.session.new import NewSessionService
 from lanscoder.session.resume import ResumeService
+from lanscoder.storage import LansCoderPaths
 from lanscoder.providers.types import (
     ChatResponse,
     ChatStreamEvent,
@@ -118,6 +119,18 @@ def _static_output_text(app: LansCoderApp) -> str:
     static_text = "\n".join(str(getattr(widget, "content", getattr(widget, "renderable", ""))) for widget in app.query_one("#output").query("Static"))
     markdown_text = "\n".join(str(getattr(widget, "source", "") or "\n".join(getattr(widget, "updates", []) or [])) for widget in app.query_one("#output").query("LansCoderMarkdown"))
     return "\n".join(part for part in [static_text, markdown_text] if part)
+
+
+def _session_paths(tmp_path) -> LansCoderPaths:
+    return LansCoderPaths(storage_root=tmp_path / "storage", project_root=tmp_path)
+
+
+def _session_catalog(tmp_path) -> SessionCatalog:
+    return SessionCatalog(_session_paths(tmp_path).storage_root)
+
+
+def _append_primary_session_created(writer: SessionEventWriter, paths: LansCoderPaths, *, title: str) -> None:
+    writer.append_session_created(title=title, project_id=paths.project_id, kind="primary")
 
 
 def _markdown_widget_text(widget) -> str:
@@ -1861,9 +1874,10 @@ async def test_lanscoder_app_queues_input_when_chat_is_running() -> None:
 async def test_lanscoder_app_resume_picker_replays_selected_session_history(
     tmp_path,
 ) -> None:
-    store = JsonlSessionStore(tmp_path)
+    paths = _session_paths(tmp_path)
+    store = JsonlSessionStore(paths.storage_root)
     writer_one = SessionEventWriter(store=store, session_id="sess_one")
-    writer_one.append_session_created(title="第一个")
+    _append_primary_session_created(writer_one, paths, title="第一个")
     writer_one.append_user_message("旧问题")
     writer_one.append_assistant_response(ChatResponse(provider="fake", model="fake", content="旧回答"))
     tool_call = ToolCall(id="call_resume", name="grep", arguments={"pattern": "needle"})
@@ -1873,14 +1887,14 @@ async def test_lanscoder_app_resume_picker_replays_selected_session_history(
         result=ToolResult(name="grep", ok=True, content="result " + "x" * 300),
     )
     writer_two = SessionEventWriter(store=store, session_id="sess_two")
-    writer_two.append_session_created(title="第二个")
+    _append_primary_session_created(writer_two, paths, title="第二个")
     writer_two.append_user_message("新问题")
     current = AgentSession.resume(store=store, session_id="sess_one", agents_md="")
     state = CurrentSessionState(current)
     handler = SessionCommandHandler(
-        catalog=SessionCatalog(tmp_path),
+        catalog=_session_catalog(tmp_path),
         current_session=state.session,
-        resume_service=ResumeService(store=store, project_root=tmp_path),
+        resume_service=ResumeService(store=store, project_root=tmp_path, paths=paths),
         on_resume=state.set_session,
     )
     app = LansCoderApp(command_handler=handler, current_session=state)
@@ -1916,17 +1930,18 @@ async def test_lanscoder_app_resume_picker_replays_selected_session_history(
 async def test_lanscoder_app_resume_picker_renders_twenty_visible_rows_and_scrolls(
     tmp_path,
 ) -> None:
-    store = JsonlSessionStore(tmp_path)
+    paths = _session_paths(tmp_path)
+    store = JsonlSessionStore(paths.storage_root)
     for index in range(25):
         writer = SessionEventWriter(store=store, session_id=f"sess_{index:02d}")
-        writer.append_session_created(title=f"标题{index:02d}")
+        _append_primary_session_created(writer, paths, title=f"标题{index:02d}")
         writer.append_user_message(f"问题{index:02d}")
     current = AgentSession.resume(store=store, session_id="sess_00", agents_md="")
     state = CurrentSessionState(current)
     handler = SessionCommandHandler(
-        catalog=SessionCatalog(tmp_path),
+        catalog=_session_catalog(tmp_path),
         current_session=state.session,
-        resume_service=ResumeService(store=store, project_root=tmp_path),
+        resume_service=ResumeService(store=store, project_root=tmp_path, paths=paths),
         on_resume=state.set_session,
     )
     app = LansCoderApp(command_handler=handler, current_session=state)
@@ -2031,16 +2046,17 @@ async def test_lanscoder_app_skill_picker_references_selected_skill_in_input() -
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_lanscoder_app_new_command_clears_previous_output(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    paths = _session_paths(tmp_path)
+    store = JsonlSessionStore(paths.storage_root)
     writer = SessionEventWriter(store=store, session_id="sess_old")
-    writer.append_session_created(title="旧会话")
+    _append_primary_session_created(writer, paths, title="旧会话")
     writer.append_user_message("旧问题")
     current = AgentSession.resume(store=store, session_id="sess_old", agents_md="")
     state = CurrentSessionState(current)
     handler = SessionCommandHandler(
-        catalog=SessionCatalog(tmp_path),
+        catalog=_session_catalog(tmp_path),
         current_session=state.session,
-        new_service=NewSessionService(store=store, project_root=tmp_path),
+        new_service=NewSessionService(store=store, project_root=tmp_path, paths=paths),
         on_resume=state.set_session,
     )
     app = LansCoderApp(command_handler=handler, current_session=state)

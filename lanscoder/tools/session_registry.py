@@ -10,6 +10,7 @@ from lanscoder.context.writer import SessionEventWriter
 from lanscoder.memory.manager import MemoryManager
 from lanscoder.planning.service import TaskPlanService
 from lanscoder.skills.models import SkillCatalog
+from lanscoder.storage import LansCoderPaths
 from lanscoder.tools.load_skill import create_load_skill_tool
 from lanscoder.tools.memory_tools import create_memory_tools
 from lanscoder.tools.retrieve_archive import create_retrieve_archive_tool
@@ -41,6 +42,7 @@ def create_session_tool_registry(
     tools: list[Tool] | None = None,
     known_message_ids: Collection[str] | None = None,
     archive_root: str | Path | None = None,
+    paths: LansCoderPaths | None = None,
     current_turn: Callable[[], int] | None = None,
     store: JsonlSessionStore | None = None,
     writer: SessionEventWriter | None = None,
@@ -48,6 +50,11 @@ def create_session_tool_registry(
     get_skill_catalog: Callable[[], SkillCatalog] | None = None,
     memory_manager: MemoryManager | None = None,
 ) -> ToolRegistryLike:
+
+    if paths is not None:
+        if archive_root is not None:
+            raise ValueError("archive_root and paths are mutually exclusive")
+        archive_root = paths.archives.parent
 
     supplied_tools = tools or []
     reserved_names = {

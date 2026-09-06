@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import asdict
 from collections.abc import Callable
 from functools import partial
 from typing import Any, Literal
@@ -42,6 +43,8 @@ from lanscoder.providers.errors import ProviderError, ProviderErrorKind
 from lanscoder.providers.types import ChatResponse, ChatStreamEvent, MainRequestOptions, ToolCall
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from lanscoder.tools.types import ToolResult
+from lanscoder.observability.models import ObservationType
+from lanscoder.observability.protocol import TraceRecorder
 
 
 class AgentLoop:
@@ -69,6 +72,8 @@ class AgentLoop:
         context_window: int | None = None,
         background_manager: BackgroundJobManager | None = None,
         background_tool_names: frozenset[str] | None = None,
+        trace_recorder: TraceRecorder | None = None,
+        trace_id: str | None = None,
     ) -> None:
         """注入循环依赖:会话、provider、请求构建、护栏、观察者、工具执行器与权限恢复处理器。"""
         self.session = session
@@ -102,6 +107,8 @@ class AgentLoop:
         self._observer = observer
         self.tool_executor = tool_executor
         self.permission_resume = permission_resume
+        self.trace_recorder = trace_recorder
+        self.trace_id = trace_id
 
     @property
     def stream_event_handler(self) -> Callable[[ChatStreamEvent], None] | None:
@@ -120,6 +127,13 @@ class AgentLoop:
     def tool_event_handler(self, value: Callable[[ToolExecutionEvent], None] | None) -> None:
         self._tool_event_handler = value
         self._observer.set_tool_event_handler(value)
+
+    def set_trace_context(self, recorder: TraceRecorder | None, trace_id: str | None) -> None:
+        """Update recorder state when a paused loop continues on a new turn."""
+
+        self.trace_recorder = recorder
+        self.trace_id = trace_id
+        self._observer.set_trace_context(recorder, trace_id, None)
 
     async def run_user_turn(
         self,
@@ -333,9 +347,14 @@ class AgentLoop:
         self.guardrails.reserve_call()
         self.guardrails.check_timeout()
         self._check_cancelled()
+        generation_id = self._start_generation(prepared, streaming=streaming, tool_choice=tool_choice)
         if not streaming:
             started_at = time.monotonic()
-            response = await anyio.to_thread.run_sync(self.provider.complete, prepared.request)
+            try:
+                response = await anyio.to_thread.run_sync(self.provider.complete, prepared.request)
+            except BaseException as error:
+                self._end_generation(generation_id, outcome="failed", error=error)
+                raise
             if response.diagnostics.reasoning:
                 response.diagnostics.reasoning_seconds = max(0.0, time.monotonic() - started_at)
         else:
@@ -361,15 +380,72 @@ class AgentLoop:
                         ProviderErrorKind.API_ERROR,
                         "provider stream ended without message_completed event",
                     )
-            except ProviderError:
+            except BaseException as error:
                 del self.last_stream_events[start_event_count:]
+                self._end_generation(generation_id, outcome="failed", error=error)
                 raise
             if reasoning_seconds is not None and final_response.diagnostics.reasoning:
                 final_response.diagnostics.reasoning_seconds = reasoning_seconds
             response = final_response
+        self._end_generation(generation_id, outcome="succeeded", response=response, streaming=streaming)
         self._record_projection_consumed(prepared)
         self._report_progress(response)
         return response
+
+    def _start_generation(self, prepared: PreparedMainRequest, *, streaming: bool, tool_choice: object) -> str | None:
+        if self.trace_recorder is None or self.trace_id is None:
+            return None
+        try:
+            return self.trace_recorder.start_observation(
+                self.trace_id,
+                ObservationType.GENERATION,
+                data={
+                    "operation": "compaction" if prepared.request_id.startswith("compact_") else "chat",
+                    "request_id": prepared.request_id,
+                    "provider": self.provider.name,
+                    "model": self.provider.model,
+                    "streaming": streaming,
+                    "tool_choice": tool_choice,
+                    "normalized_request": asdict(prepared.request),
+                },
+            )
+        except Exception:
+            return None
+
+    def _end_generation(
+        self,
+        observation_id: str | None,
+        *,
+        outcome: str,
+        response: ChatResponse | None = None,
+        streaming: bool = False,
+        error: BaseException | None = None,
+    ) -> None:
+        if self.trace_recorder is None or observation_id is None:
+            return
+        data: dict[str, Any] = {}
+        if response is not None:
+            data.update(
+                {
+                    "provider": response.provider,
+                    "model": response.model,
+                    "finish_reason": response.finish_reason,
+                    "normalized_response": _normalized_response(response),
+                    "usage": asdict(response.usage) if response.usage is not None else {},
+                    "streaming": streaming,
+                }
+            )
+            if streaming:
+                data["stream_summary"] = _stream_summary(self.last_stream_events)
+        try:
+            self.trace_recorder.end_observation(
+                observation_id,
+                outcome=outcome,
+                data=data,
+                error=error,
+            )
+        except Exception:
+            return
 
     async def _complete_once_with_recovery(
         self,
@@ -755,3 +831,23 @@ class AgentLoop:
         """构造触达工具轮次上限时的响应。"""
 
         return self.guardrails.limit_response(AgentLoopStopReason.TOOL_ROUND_LIMIT, raw=response.raw)
+
+
+def _normalized_response(response: ChatResponse) -> dict[str, Any]:
+    """Return provider-neutral response evidence without persisting raw payloads."""
+
+    return {
+        "content": response.content,
+        "tool_calls": [asdict(tool_call) for tool_call in response.tool_calls],
+        "finish_reason": response.finish_reason,
+        "diagnostics": asdict(response.diagnostics),
+    }
+
+
+def _stream_summary(events: list[ChatStreamEvent]) -> dict[str, int]:
+    """Summarize stream deltas while deliberately dropping their text."""
+
+    counts: dict[str, int] = {}
+    for event in events:
+        counts[event.kind] = counts.get(event.kind, 0) + 1
+    return counts

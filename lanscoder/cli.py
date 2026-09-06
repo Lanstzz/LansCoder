@@ -22,7 +22,7 @@ class CliConfig:
     """一次命令行调用的全部参数;由 main 组装并传给 create_cli_app。"""
 
     project_root: Path
-    data_root: Path | None
+    storage_root: Path | None
     session_id: str | None
     message: str
     model_spec: str | None = None
@@ -72,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     remove_parser.add_argument("name")
 
     parser.add_argument("--project", default=".", help="Project root for tools and AGENTS.md.")
-    parser.add_argument("--data-root", default=None, help="Directory for LansCoder session data.")
+    parser.add_argument("--storage-root", default=None, help="Directory for LansCoder runtime data (default: ~/.lanscoder).")
     parser.add_argument("--session-id", default=None, help="Session id to create or reuse.")
     parser.add_argument(
         "--resume-session",
@@ -125,7 +125,7 @@ def main(
     if args.tui or (args.message is None and stdin_text is None and sys.stdin.isatty() and not args.interactive):
         config = CliConfig(
             project_root=Path(args.project),
-            data_root=Path(args.data_root) if args.data_root is not None else None,
+            storage_root=Path(args.storage_root) if args.storage_root is not None else None,
             session_id=args.session_id,
             message="",
             model_spec=args.model,
@@ -149,7 +149,7 @@ def main(
     if args.interactive:
         config = CliConfig(
             project_root=Path(args.project),
-            data_root=Path(args.data_root) if args.data_root is not None else None,
+            storage_root=Path(args.storage_root) if args.storage_root is not None else None,
             session_id=args.session_id,
             message="",
             model_spec=args.model,
@@ -178,7 +178,7 @@ def main(
 
     config = CliConfig(
         project_root=Path(args.project),
-        data_root=Path(args.data_root) if args.data_root is not None else None,
+        storage_root=Path(args.storage_root) if args.storage_root is not None else None,
         session_id=args.session_id,
         message=message,
         model_spec=args.model,
@@ -231,7 +231,7 @@ def create_cli_app(config: CliConfig):
     """经应用工厂组装应用,再套用 CLI 的工具轮次上限与 reasoning_effort 覆盖。"""
     app = create_lanscoder_app(
         project_root=config.project_root,
-        data_root=config.data_root,
+        storage_root=config.storage_root,
         session_id=config.session_id,
         model_spec=config.model_spec,
         resume_session=config.resume_session,

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lanscoder.context.events import SessionEvent
-from lanscoder.context.identity import new_event_id, new_session_id
+from lanscoder.context.identity import new_event_id
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.writer import SessionEventWriter
 from lanscoder.session.bootstrap import SessionBootstrap
@@ -14,6 +14,7 @@ from lanscoder.session.catalog import SessionCatalog, require_usable_record
 from lanscoder.session.errors import SessionNotFoundError
 from lanscoder.session.models import ResumeResult
 from lanscoder.session.resume import validate_session_schema
+from lanscoder.storage import LansCoderPaths
 from lanscoder.tools.types import Tool
 from lanscoder.utils.sandbox_access import SandboxAccess
 
@@ -23,7 +24,7 @@ class ForkSessionService:
 
     store: JsonlSessionStore
     project_root: str | Path
-    data_root: str | Path | None = None
+    paths: LansCoderPaths | None = None
     tools: list[Tool] | None = None
     tools_provider: Callable[[], list[Tool]] | None = None
     sandbox_access: SandboxAccess | None = None
@@ -33,24 +34,31 @@ class ForkSessionService:
         validate_session_schema(self.store, source_session_id)
         catalog = self.catalog or SessionCatalog(self.store.root)
         record = require_usable_record(catalog.get_session(source_session_id))
+        paths = self.paths or LansCoderPaths(storage_root=self.store.root, project_root=self.project_root)
+        policy = SessionBootstrap(
+            store=self.store,
+            project_root=self.project_root,
+            paths=paths,
+        ).access_policy()
+        target = policy.fork_primary(source_session_id)
 
         events = self.store.list_events(source_session_id)
         if not events:
             raise SessionNotFoundError(f"session not found: {source_session_id}")
 
-        forked_session_id = new_session_id()
+        forked_session_id = target.session_id
         for event in events:
             self.store.append_event(_fork_event(event, source_session_id, forked_session_id))
         SessionEventWriter(store=self.store, session_id=forked_session_id).append_session_metadata_updated(
             forked_from=source_session_id,
             title=title or f"Fork of {record.title}",
         )
-        self._copy_archives(source_session_id, forked_session_id)
+        self._copy_archives(source_session_id, forked_session_id, paths=paths)
 
         bootstrap = SessionBootstrap(
             store=self.store,
             project_root=self.project_root,
-            data_root=self.data_root,
+            paths=paths,
             tools=self.tools,
             tools_provider=self.tools_provider,
             sandbox_access=self.sandbox_access,
@@ -59,11 +67,11 @@ class ForkSessionService:
         session.restore_pending_permission_execution()
         return ResumeResult(session=session, record=catalog.get_session(forked_session_id))
 
-    def _copy_archives(self, source_session_id: str, forked_session_id: str) -> None:
-        source = self.store.root / "archives" / source_session_id
+    def _copy_archives(self, source_session_id: str, forked_session_id: str, *, paths: LansCoderPaths) -> None:
+        source = paths.archives / source_session_id
         if not source.exists():
             return
-        destination = self.store.root / "archives" / forked_session_id
+        destination = paths.archives / forked_session_id
         shutil.copytree(source, destination, dirs_exist_ok=True)
 
 

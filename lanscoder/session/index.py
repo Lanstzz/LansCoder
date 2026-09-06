@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from lanscoder.context.events import SessionEvent
+from lanscoder.session.access import PRIMARY_KIND
 from lanscoder.session.catalog import session_sort_key
 from lanscoder.session.models import SessionRecord
 from lanscoder.utils.text import optional_str
@@ -17,32 +18,41 @@ _INDEX_LOCK = threading.RLock()
 
 class SessionIndex:
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, journal: Any | None = None, project_id: str | None = None) -> None:
         self.root = Path(root)
         self.path = self.root / "session_index.json"
+        self.journal = journal
+        self.project_id = project_id
 
-    def update_event(self, event: SessionEvent) -> None:
-        from lanscoder.session.catalog import build_record_from_events
-
+    def update_event(self, event: Any) -> None:
         with _INDEX_LOCK:
             data = self._load_data()
-            events = self._load_session_events(event.session_id)
+            session_id = _event_session_id(event)
+            events = self._load_session_events(session_id)
             if not events:
                 return
             try:
-                record = build_record_from_events(session_id=event.session_id, events=events)
+                record = _build_record(session_id, events)
             except Exception as exc:  # noqa: BLE001 - index must not block event persistence.
-                record = SessionRecord(session_id=event.session_id, title=event.session_id, status="corrupt", error=str(exc))
-            data["sessions"][event.session_id] = _record_to_dict(record)
+                record = SessionRecord(session_id=session_id, title=session_id, status="corrupt", error=str(exc))
+            if _record_is_primary(record, project_id=self.project_id):
+                data["sessions"][session_id] = _record_to_dict(record)
+            else:
+                data["sessions"].pop(session_id, None)
             self._write_data(data)
 
-    def list_records(self) -> list[SessionRecord]:
+    def list_records(self, *, project_id: str | None = None, kind: str = PRIMARY_KIND) -> list[SessionRecord]:
         if not self.path.exists():
             self.rebuild()
-        else:
+        elif self.journal is None:
             self._reconcile_missing_files()
         data = self._load_data()
-        records = [_record_from_dict(item) for item in data.get("sessions", {}).values() if isinstance(item, dict)]
+        resolved_project_id = self.project_id if project_id is None else project_id
+        records = [
+            _record_from_dict(item)
+            for item in data.get("sessions", {}).values()
+            if isinstance(item, dict) and _record_matches(item, project_id=resolved_project_id, kind=kind)
+        ]
         return sorted(records, key=session_sort_key, reverse=True)
 
     def rebuild_session(self, session_id: str) -> None:
@@ -59,7 +69,10 @@ class SessionIndex:
         record = record_from_path(path)
         with _INDEX_LOCK:
             data = self._load_data()
-            data["sessions"][session_id] = _record_to_dict(record)
+            if _record_is_primary(record, project_id=self.project_id):
+                data["sessions"][session_id] = _record_to_dict(record)
+            else:
+                data["sessions"].pop(session_id, None)
             self._write_data(data)
 
     def prune_empty(self, exclude: set[str] | None = None) -> int:
@@ -95,15 +108,27 @@ class SessionIndex:
             return len(to_prune)
 
     def rebuild(self) -> None:
-        from lanscoder.session.catalog import record_from_path
-
         with _INDEX_LOCK:
             sessions_dir = self.root / "sessions"
             data = _empty_data()
-            if sessions_dir.exists():
+            if self.journal is not None:
+                for session_id in self._journal_session_ids():
+                    events = self._load_session_events(session_id)
+                    if not events:
+                        continue
+                    try:
+                        record = _build_record(session_id, events)
+                    except Exception as exc:  # noqa: BLE001 - a bad session is indexed as corrupt.
+                        record = SessionRecord(session_id=session_id, title=session_id, status="corrupt", error=str(exc))
+                    if _record_is_primary(record, project_id=self.project_id):
+                        data["sessions"][session_id] = _record_to_dict(record)
+            elif sessions_dir.exists():
+                from lanscoder.session.catalog import record_from_path
+
                 for path in sessions_dir.glob("*.jsonl"):
                     record = record_from_path(path)
-                    data["sessions"][record.session_id] = _record_to_dict(record)
+                    if _record_is_primary(record, project_id=self.project_id):
+                        data["sessions"][record.session_id] = _record_to_dict(record)
             self._write_data(data)
 
     def _reconcile_missing_files(self) -> None:
@@ -120,8 +145,9 @@ class SessionIndex:
                 if path.stem in sessions:
                     continue
                 record = record_from_path(path)
-                sessions[record.session_id] = _record_to_dict(record)
-                changed = True
+                if _record_is_primary(record, project_id=self.project_id):
+                    sessions[record.session_id] = _record_to_dict(record)
+                    changed = True
             if changed:
                 self._write_data(data)
 
@@ -145,7 +171,19 @@ class SessionIndex:
         tmp_path.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
         tmp_path.replace(self.path)
 
-    def _load_session_events(self, session_id: str) -> list[SessionEvent]:
+    def _load_session_events(self, session_id: str) -> list[Any]:
+        if self.journal is not None:
+            if isinstance(self.journal, dict):
+                value = self.journal.get(session_id, [])
+            else:
+                for name in ("list_events", "read_events", "events_for"):
+                    method = getattr(self.journal, name, None)
+                    if method is not None:
+                        value = method(session_id)
+                        break
+                else:
+                    value = []
+            return list(value or [])
         path = self.root / "sessions" / f"{session_id}.jsonl"
         if not path.exists():
             return []
@@ -155,6 +193,21 @@ class SessionIndex:
                 if line.strip():
                     events.append(SessionEvent.from_dict(json.loads(line)))
         return events
+
+    def _journal_session_ids(self) -> list[str]:
+        if isinstance(self.journal, dict):
+            return sorted(str(session_id) for session_id in self.journal)
+        for name in ("session_ids", "list_session_ids", "sessions"):
+            value = getattr(self.journal, name, None)
+            if callable(value):
+                value = value()
+            if value is not None:
+                return sorted(str(session_id) for session_id in value)
+        paths = getattr(self.journal, "paths", None)
+        sessions_dir = getattr(paths, "sessions", None)
+        if sessions_dir is not None:
+            return sorted(path.stem for path in Path(sessions_dir).glob("*.jsonl"))
+        return []
 
 
 def _empty_data() -> dict[str, Any]:
@@ -185,3 +238,92 @@ def _record_from_dict(data: dict[str, Any]) -> SessionRecord:
         error=optional_str(data.get("error")),
         metadata=dict(data.get("metadata") or {}),
     )
+
+
+def _event_session_id(event: Any) -> str:
+    if isinstance(event, dict):
+        return str(event.get("session_id") or event.get("data", {}).get("session_id") or "")
+    return str(getattr(event, "session_id", ""))
+
+
+def _build_record(session_id: str, events: list[Any]) -> SessionRecord:
+    if all(isinstance(event, SessionEvent) for event in events):
+        from lanscoder.session.catalog import build_record_from_events
+
+        return build_record_from_events(session_id=session_id, events=events)
+
+    from lanscoder.session.projection import active_projection
+
+    projected = active_projection(events)
+    metadata: dict[str, Any] = {}
+    user_turn_count = 0
+    message_count = 0
+    latest_user_input: str | None = None
+    for event in projected:
+        kind = _event_value(event, "kind", "type")
+        data = _event_mapping(event, "data", "payload")
+        if kind in {"session.created", "session.metadata_updated", "session_created", "session_metadata_updated"}:
+            metadata.update(data)
+        if kind in {"message.appended", "user_message", "assistant_message", "tool_result"}:
+            message_count += 1
+        if kind in {"message.appended", "user_message"} and (
+            data.get("role") == "user" or kind == "user_message"
+        ):
+            user_turn_count += 1
+            latest_user_input = _message_preview(data)
+    metadata.setdefault("session_id", session_id)
+    title = str(metadata.get("title") or latest_user_input or session_id)
+    return SessionRecord(
+        session_id=session_id,
+        title=title,
+        created_at=_event_value(events[0], "occurred_at", "created_at"),
+        updated_at=_event_value(events[-1], "occurred_at", "created_at"),
+        workspace=_optional_text(metadata.get("workspace")),
+        message_count=message_count,
+        user_turn_count=user_turn_count,
+        latest_user_input=latest_user_input,
+        status="ok",
+        metadata=metadata,
+    )
+
+
+def _record_is_primary(record: SessionRecord, *, project_id: str | None) -> bool:
+    return _record_matches(_record_to_dict(record), project_id=project_id, kind=PRIMARY_KIND)
+
+
+def _record_matches(data: dict[str, Any], *, project_id: str | None, kind: str) -> bool:
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    actual_kind = metadata.get("kind", PRIMARY_KIND)
+    actual_project = metadata.get("project_id")
+    return actual_kind == kind and (project_id is None or actual_project == project_id)
+
+
+def _event_value(event: Any, *names: str) -> str | None:
+    for name in names:
+        value = event.get(name) if isinstance(event, dict) else getattr(event, name, None)
+        if value is not None:
+            return str(value)
+    return None
+
+
+def _event_mapping(event: Any, *names: str) -> dict[str, Any]:
+    for name in names:
+        value = event.get(name) if isinstance(event, dict) else getattr(event, name, None)
+        if isinstance(value, dict):
+            return dict(value)
+    return {}
+
+
+def _message_preview(data: dict[str, Any]) -> str | None:
+    if isinstance(data.get("content"), str):
+        return data["content"]
+    parts = data.get("parts")
+    if isinstance(parts, list):
+        for part in parts:
+            if isinstance(part, dict) and part.get("kind") == "text":
+                return str(part.get("content") or "")
+    return None
+
+
+def _optional_text(value: Any) -> str | None:
+    return str(value) if value is not None else None

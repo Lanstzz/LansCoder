@@ -77,7 +77,7 @@ def test_main_runs_single_message_with_injected_runner(tmp_path: Path, capsys):
         [
             "--project",
             str(tmp_path),
-            "--data-root",
+            "--storage-root",
             str(tmp_path / ".fc"),
             "--session-id",
             "cli_test",
@@ -92,7 +92,7 @@ def test_main_runs_single_message_with_injected_runner(tmp_path: Path, capsys):
     assert seen == [
         CliConfig(
             project_root=tmp_path,
-            data_root=tmp_path / ".fc",
+            storage_root=tmp_path / ".fc",
             session_id="cli_test",
             message="solve it",
             max_tool_rounds=None,
@@ -272,7 +272,7 @@ def test_main_tui_runs_textual_app(monkeypatch, tmp_path: Path):
         [
             "--project",
             str(tmp_path),
-            "--data-root",
+            "--storage-root",
             str(tmp_path / ".fc"),
             "--session-id",
             "tui_test",
@@ -287,7 +287,7 @@ def test_main_tui_runs_textual_app(monkeypatch, tmp_path: Path):
     assert seen == [
         CliConfig(
             project_root=tmp_path,
-            data_root=tmp_path / ".fc",
+            storage_root=tmp_path / ".fc",
             session_id="tui_test",
             message="",
             max_tool_rounds=3,
@@ -561,7 +561,7 @@ def test_main_parses_benchmark_mode_for_single_message(tmp_path: Path):
         [
             "--project",
             str(tmp_path),
-            "--data-root",
+            "--storage-root",
             str(tmp_path / ".fc-bench"),
             "--session-id",
             "terminal_task",
@@ -578,7 +578,7 @@ def test_main_parses_benchmark_mode_for_single_message(tmp_path: Path):
     assert seen == [
         CliConfig(
             project_root=tmp_path,
-            data_root=tmp_path / ".fc-bench",
+            storage_root=tmp_path / ".fc-bench",
             session_id="terminal_task",
             message="solve it",
             max_tool_rounds=120,
@@ -627,7 +627,7 @@ def test_run_benchmark_turn_uses_harbor_runtime_without_eval_adapter(tmp_path: P
     output = cli.run_benchmark_turn(
         CliConfig(
             project_root=tmp_path,
-            data_root=tmp_path / ".fc-bench",
+            storage_root=tmp_path / ".fc-bench",
             session_id="harbor-task",
             message="solve it",
             max_tool_rounds=120,
