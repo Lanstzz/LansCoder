@@ -89,8 +89,21 @@ class JournalStore:
 
     def read_events(self, session_id: str | None = None) -> list[JournalEnvelope]:
         resolved_session_id = self._resolve_session_id(session_id)
-        with self._lock(resolved_session_id):
-            return self._read_locked(resolved_session_id, recover_tail=True)
+        try:
+            with self._lock(resolved_session_id, shared=True):
+                events = self._read_locked(resolved_session_id, recover_tail=False)
+        except JournalCorruptError as error:
+            if "incomplete record" not in str(error):
+                raise
+            with self._lock(resolved_session_id):
+                return self._read_locked(resolved_session_id, recover_tail=True)
+
+        path = self.paths.session(resolved_session_id)
+        raw = path.read_bytes() if path.exists() else b""
+        if raw and not raw.endswith(b"\n"):
+            with self._lock(resolved_session_id):
+                return self._read_locked(resolved_session_id, recover_tail=True)
+        return events
 
     def list_events(self, session_id: str | None = None) -> list[JournalEnvelope]:
         return self.read_events(session_id)
@@ -105,8 +118,8 @@ class JournalStore:
         _validate_session_id(resolved)
         return resolved
 
-    def _lock(self, session_id: str) -> AdvisoryLock:
-        return AdvisoryLock(self.paths.session_lock(session_id))
+    def _lock(self, session_id: str, *, shared: bool = False) -> AdvisoryLock:
+        return AdvisoryLock(self.paths.session_lock(session_id), shared=shared)
 
     def _read_locked(self, session_id: str, *, recover_tail: bool) -> list[JournalEnvelope]:
         path = self.paths.session(session_id)
@@ -145,10 +158,11 @@ class JournalStore:
                 except (KeyError, TypeError, ValueError) as error:
                     raise JournalCorruptError(session_id, f"invalid schema in final record: {error}") from error
                 self._validate_sequence(tail_event, session_id, len(events) + 1)
-                with path.open("ab") as handle:
-                    handle.write(b"\n")
-                    handle.flush()
-                    os.fsync(handle.fileno())
+                if recover_tail:
+                    with path.open("ab") as handle:
+                        handle.write(b"\n")
+                        handle.flush()
+                        os.fsync(handle.fileno())
                 events.append(tail_event)
                 return events
             if not recover_tail:

@@ -87,6 +87,30 @@ class JournalEnvelope:
                 value[key] = optional_value
         return value
 
+    @property
+    def id(self) -> str:
+        return self.event_id
+
+    @property
+    def type(self) -> str:
+        if self.kind == "message.appended":
+            role = self.data.get("role")
+            return {
+                "user": "user_message",
+                "assistant": "assistant_message",
+                "tool": "tool_result",
+                "notification": "background_notification",
+            }.get(role, "message_appended")
+        return self.kind.replace(".", "_")
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return self.data
+
+    @property
+    def created_at(self) -> str:
+        return self.occurred_at
+
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "JournalEnvelope":
         if not isinstance(value, dict):

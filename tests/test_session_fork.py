@@ -6,7 +6,7 @@ from lanscoder.context.events import SessionEvent
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.writer import SessionEventWriter
 from lanscoder.session.access import project_id_for_path
-from lanscoder.session.errors import SessionUnsupportedSchemaError
+from lanscoder.session.errors import SessionCorruptError, SessionUnsupportedSchemaError
 from lanscoder.session.fork import ForkSessionService
 from lanscoder.storage import LansCoderPaths
 
@@ -94,7 +94,7 @@ def test_fork_accepts_v2_session_and_copies_events_and_archives(tmp_path: Path) 
     assert copied_archive.read_text(encoding="utf-8") == "source archive"
 
 
-def test_fork_rejects_future_schema_before_parsing_later_events(tmp_path: Path) -> None:
+def test_fork_rejects_legacy_disk_records_without_writing_or_copying(tmp_path: Path) -> None:
     paths = LansCoderPaths(storage_root=tmp_path / "storage", project_root=tmp_path)
     store = JsonlSessionStore(paths.storage_root)
     path = store.sessions_dir / "sess_future.jsonl"
@@ -104,9 +104,8 @@ def test_fork_rejects_future_schema_before_parsing_later_events(tmp_path: Path) 
     )
     before = path.read_bytes()
 
-    with pytest.raises(SessionUnsupportedSchemaError) as caught:
+    with pytest.raises(SessionCorruptError, match="invalid schema"):
         ForkSessionService(store=store, project_root=tmp_path, paths=paths).fork("sess_future")
 
-    assert caught.value.actual_version == "v3"
     assert path.read_bytes() == before
     assert list(store.sessions_dir.glob("*.jsonl")) == [path]

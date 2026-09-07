@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Literal
@@ -38,6 +38,8 @@ from lanscoder.skills.discovery import discover_all_skills
 from lanscoder.skills.catalog import render_skill_catalog
 from lanscoder.skills.models import SkillCatalog
 from lanscoder.storage import LansCoderPaths
+from lanscoder.observability.models import TraceScope
+from lanscoder.observability.protocol import TraceRecorder
 
 if TYPE_CHECKING:
     from lanscoder.agent.permission import PermissionCoordinator
@@ -58,6 +60,7 @@ class PendingPermissionExecution:
     deferred_tool_calls: list[ToolCall] = field(default_factory=list)
     kind: Literal["permission_confirmation", "ask_user"] = "permission_confirmation"
     ask_user_request: UserInputRequest | None = None
+    trace_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -92,6 +95,15 @@ class AgentSession:
     pending_permission_execution: PendingPermissionExecution | None = None
     _tool_result_lock: RLock = field(default_factory=RLock, repr=False)
     _tool_result_message_ids: dict[str, str] = field(default_factory=dict, repr=False)
+
+    def set_trace_context(
+        self,
+        recorder: TraceRecorder | None,
+        trace_id: str | None,
+        scope: TraceScope | None,
+    ) -> None:
+        """Attach optional event observations to the active session writer."""
+        self.writer.set_trace_context(recorder, trace_id, scope)
 
     @classmethod
     def create(
@@ -242,25 +254,30 @@ class AgentSession:
             return None
 
         tool_call, deferred_tool_calls, persisted_review_only = pending[0]
+        persisted_metadata = self._pending_part_metadata(tool_call.id)
+        persisted_request_id = persisted_metadata.get("request_id")
         preflight = self.permission_coordinator.preflight(tool_call)
         if preflight is None:
             ask_user_request = _ask_user_request_from_tool_call(tool_call)
             if ask_user_request is None:
                 return None
+            request_id = str(persisted_request_id or ask_user_request.id)
             restored = PendingPermissionExecution(
-                request_id=ask_user_request.id,
+                request_id=request_id,
                 tool_call=tool_call,
                 kind="ask_user",
                 deferred_tool_calls=deferred_tool_calls,
-                ask_user_request=ask_user_request,
+                ask_user_request=replace(ask_user_request, id=request_id),
+                trace_id=self._pending_trace_id(tool_call.id),
             )
             self.pending_permission_execution = restored
             return restored
 
+        request_id = str(persisted_request_id or preflight.request.id)
         restored = PendingPermissionExecution(
-            request_id=preflight.request.id,
+            request_id=request_id,
             tool_call=tool_call,
-            permission_request=preflight.request,
+            permission_request=replace(preflight.request, id=request_id),
             prewrite_review=(
                 build_prewrite_review(
                     self.permission_coordinator.permission_manager.policy.project_root,
@@ -272,6 +289,7 @@ class AgentSession:
             ),
             review_only=(persisted_review_only if persisted_review_only is not None else preflight.decision.kind == PermissionDecisionKind.ALLOW),
             deferred_tool_calls=deferred_tool_calls,
+            trace_id=self._pending_trace_id(tool_call.id),
         )
         self.pending_permission_execution = restored
         return restored
@@ -291,6 +309,51 @@ class AgentSession:
                     message_id=message.id,
                     part_id=part.id,
                     metadata={"prewrite_review_only": review_only},
+                )
+            return
+
+    def persist_pending_trace(self, trace_id: str | None) -> None:
+        """Persist identity needed to reconnect a paused trace after restart."""
+        pending = self.pending_permission_execution
+        if pending is None:
+            return
+        pending.trace_id = trace_id
+        self._update_pending_part_metadata(
+            pending.tool_call.id,
+            {
+                "trace_id": trace_id,
+                "tool_call_id": pending.tool_call.id,
+                "pending_kind": pending.kind,
+                "request_id": pending.request_id,
+            },
+        )
+
+    def _pending_trace_id(self, tool_call_id: str) -> str | None:
+        value = self._pending_part_metadata(tool_call_id).get("trace_id")
+        return str(value) if value else None
+
+    def _pending_part_metadata(self, tool_call_id: str) -> dict[str, object]:
+        for message in reversed(self.rebuild_view().messages):
+            if message.role != "assistant":
+                continue
+            for part in message.parts:
+                if part.kind == "tool_call" and str(part.metadata.get("tool_call_id") or "") == tool_call_id:
+                    return dict(part.metadata)
+        return {}
+
+    def _update_pending_part_metadata(self, tool_call_id: str, metadata: dict[str, object]) -> None:
+        for message in reversed(self.rebuild_view().messages):
+            if message.role != "assistant":
+                continue
+            part = next(
+                (item for item in message.parts if item.kind == "tool_call" and str(item.metadata.get("tool_call_id") or "") == tool_call_id),
+                None,
+            )
+            if part is not None:
+                self.writer.append_message_part_metadata_updated(
+                    message_id=message.id,
+                    part_id=part.id,
+                    metadata=metadata,
                 )
             return
 
@@ -351,7 +414,6 @@ class AgentSession:
         return entry.messages
 
     def set_benchmark_task(self, task: str) -> None:
-
         self.benchmark_task = task.strip()
 
     def _skill_protocol(self) -> str:

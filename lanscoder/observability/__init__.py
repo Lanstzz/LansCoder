@@ -2,6 +2,7 @@
 
 from .context import (
     TraceResumeLookup,
+    JournalTraceResumeLookup,
     active_observation_id,
     active_trace_id,
     active_trace_scope,
@@ -14,13 +15,15 @@ from .context import (
     trace_context,
 )
 from .git import GitSnapshot, get_git_snapshot, snapshot_git
-from .models import Observation, ObservationOutcome, ObservationType, Trace, TraceRecord, TraceScope, TraceStatus, project_trace
+from .index import JournalTraceIndex
+from .models import Observation, ObservationOutcome, ObservationType, Trace, TraceRecord, TraceScope, TraceStatus, TraceSummary, project_trace
 from .protocol import NoOpRecorder, NoOpTraceRecorder, NullTraceRecorder, TraceIndex, TraceRecorder
 from .recorder import JournalTraceRecorder
 
 __all__ = [
     "GitSnapshot",
     "JournalTraceRecorder",
+    "JournalTraceIndex",
     "NoOpTraceRecorder",
     "NoOpRecorder",
     "NullTraceRecorder",
@@ -32,8 +35,10 @@ __all__ = [
     "Trace",
     "TraceRecorder",
     "TraceResumeLookup",
+    "JournalTraceResumeLookup",
     "TraceScope",
     "TraceStatus",
+    "TraceSummary",
     "active_observation_id",
     "active_trace_id",
     "active_trace_scope",

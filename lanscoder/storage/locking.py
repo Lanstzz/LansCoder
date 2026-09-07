@@ -61,6 +61,11 @@ def session_lock(paths: object, session_id: str, *, shared: bool = False) -> Adv
     return AdvisoryLock(paths.session_lock(session_id), shared=shared)  # type: ignore[attr-defined]
 
 
+def index_lock(paths: object) -> AdvisoryLock:
+    """Build the independent global materialized-index lock."""
+    return AdvisoryLock(paths.index_lock)  # type: ignore[attr-defined]
+
+
 def _lock_file(handle: object, *, shared: bool) -> None:
     if os.name == "nt":
         import msvcrt

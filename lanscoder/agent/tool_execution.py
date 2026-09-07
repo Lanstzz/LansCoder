@@ -79,6 +79,7 @@ class ToolExecutionEvent:
     result: ToolResult | None = None
     permission_request: PermissionRequest | None = None
     prewrite_review: dict[str, object] | None = None
+    original_arguments: dict[str, object] | str | None = None
 
 
 @dataclass(slots=True)
@@ -113,6 +114,7 @@ class ToolExecutor:
         self._background_manager = background_manager
         self._background_tool_names = background_tool_names
         self._background_request: dict[str, tuple[str | None, str | None]] = {}
+        self._original_arguments: dict[str, dict[str, object] | str] = {}
         self._prepare_cache: dict[str, PreparedPermission] = {}
 
     def _check_cancelled(self) -> None:
@@ -135,6 +137,7 @@ class ToolExecutor:
         result: ToolResult | None = None,
         permission_request: PermissionRequest | None = None,
         prewrite_review: dict[str, object] | None = None,
+        original_arguments: dict[str, object] | str | None = None,
     ) -> None:
         """构造并派发单个工具执行事件到事件出口。"""
         self._event_sink.on_tool_event(
@@ -144,6 +147,7 @@ class ToolExecutor:
                 result=result,
                 permission_request=permission_request,
                 prewrite_review=prewrite_review,
+                original_arguments=original_arguments or self._original_arguments.get(tool_call.id),
             )
         )
 
@@ -174,6 +178,13 @@ class ToolExecutor:
                 continue
             permission = self._prepare_for_tool_call(tool_call, tool_calls[index + 1 :])
             if permission.result is not None:
+                if permission.prewrite_review is not None:
+                    self._emit_event(
+                        "prewrite_review",
+                        tool_call,
+                        permission_request=permission.permission_request,
+                        prewrite_review=permission.prewrite_review,
+                    )
                 self._emit_event(
                     "denied",
                     tool_call,
@@ -184,6 +195,13 @@ class ToolExecutor:
                 index += 1
                 continue
             if permission.pending_input is not None:
+                if permission.prewrite_review is not None:
+                    self._emit_event(
+                        "prewrite_review",
+                        tool_call,
+                        permission_request=permission.permission_request,
+                        prewrite_review=permission.prewrite_review,
+                    )
                 self._emit_event(
                     "permission_requested",
                     tool_call,
@@ -195,6 +213,7 @@ class ToolExecutor:
                 self._emit_event(
                     "prewrite_review",
                     tool_call,
+                    permission_request=permission.permission_request,
                     prewrite_review=permission.prewrite_review,
                 )
 
@@ -242,6 +261,11 @@ class ToolExecutor:
 
         cleaned: list[ToolCall] = []
         requested: dict[str, tuple[str | None, str | None]] = {}
+        self._original_arguments = {
+            tool_call.id: deepcopy(tool_call.arguments)
+            for tool_call in tool_calls
+            if isinstance(tool_call.arguments, (dict, str))
+        }
         for tool_call in tool_calls:
             if not has_background_control_fields(tool_call.arguments):
                 cleaned.append(tool_call)
@@ -262,32 +286,37 @@ class ToolExecutor:
         """把工具调用派发为后台任务,返回占位结果。"""
 
         if self._background_manager is None:
-            return make_error_result(
+            return self._reject_background(
                 tool_call.name,
                 "后台执行未启用；请去掉 run_in_background 后重试。",
                 background_rejected="disabled",
+                tool_call=tool_call,
             )
         observed_revision = self._validate_background_task_id(tool_call.name, task_id)
         if isinstance(observed_revision, ToolResult):
+            self._emit_event("denied", tool_call, result=observed_revision)
             return observed_revision
         allowed = self._background_tool_names
         if allowed is not None and tool_call.name not in allowed:
-            return make_error_result(
+            return self._reject_background(
                 tool_call.name,
                 f"工具 {tool_call.name} 不支持后台执行；请去掉 run_in_background 后重试。",
                 background_rejected="not_allowed",
+                tool_call=tool_call,
             )
         if tool_call.name == "delegate" and not self._delegate_call_allows_background(tool_call):
-            return make_error_result(
+            return self._reject_background(
                 tool_call.name,
                 "delegate 该角色不支持后台执行；仅 researcher/reviewer/tester/coder 可后台运行。",
                 background_rejected="role_not_allowed",
+                tool_call=tool_call,
             )
         if tool_call.name == "delegate" and self._delegate_call_requires_worktree(tool_call) and not self._worktree_isolation_available():
-            return make_error_result(
+            return self._reject_background(
                 tool_call.name,
                 "后台 coder 需要 git worktree 隔离，但当前项目不是 git 仓库；请在 git 仓库内使用，或改用前台 coder。",
                 background_rejected="worktree_unavailable",
+                tool_call=tool_call,
             )
         trusted_arguments = deepcopy(tool_call.arguments)
         if tool_call.name == "delegate" and self._delegate_call_requires_worktree(tool_call):
@@ -318,13 +347,21 @@ class ToolExecutor:
                 on_completed=complete_task_plan if task_id is not None else None,
             )
         except BackgroundCapacityError as exc:
-            return make_error_result(
+            return self._reject_background(
                 tool_call.name,
                 str(exc),
                 background_rejected="capacity",
+                tool_call=tool_call,
             )
         self._emit_event("background_started", tool_call)
         return make_background_placeholder_result(job)
+
+    def _reject_background(self, tool_name: str, message: str, *, tool_call: ToolCall, **data: object) -> ToolResult:
+        """Return a rejected dispatch result and preserve its lifecycle observation."""
+
+        result = make_error_result(tool_name, message, **data)
+        self._emit_event("denied", tool_call, result=result)
+        return result
 
     def _task_plan_service(self) -> TaskPlanService:
         return TaskPlanService(store=self.session.store, writer=self.session.writer)
@@ -449,6 +486,7 @@ class ToolExecutor:
                 deferred_tool_calls=deferred_tool_calls or [],
                 user_input_request=pending_input,
             )
+            self._emit_event("permission_requested", tool_call, result=result)
             return pending_input
         self.session.append_tool_result(tool_call=tool_call, result=result)
         if self._observe_tool_result is not None:
@@ -503,7 +541,8 @@ class ToolExecutor:
         self._emit_event("started", tool_call)
         with cancellation_context(self.cancellation_token):
             result = self.session.execute_tool_call(tool_call)
-        self._emit_event("finished", tool_call, result=result)
+        if user_input_request_from_tool_result(result, tool_call_id=tool_call.id, tool_name=tool_call.name) is None:
+            self._emit_event("finished", tool_call, result=result)
         self._check_cancelled()
         return result
 

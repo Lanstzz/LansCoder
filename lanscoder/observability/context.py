@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
+from inspect import signature
 from typing import Any, Protocol
 
 from .models import TraceScope
@@ -47,8 +48,61 @@ class TraceResumeLookup(Protocol):
         *,
         tool_call_id: str | None = None,
         pending_kind: str | None = None,
+    ) -> str | None: ...
+
+
+class JournalTraceResumeLookup:
+    """Find a paused trace from the append-only journal after a restart."""
+
+    def __init__(self, journal: Any) -> None:
+        self.journal = journal
+
+    def find_resumable_trace(
+        self,
+        session_id: str,
+        branch_id: str,
+        *,
+        tool_call_id: str | None = None,
+        pending_kind: str | None = None,
     ) -> str | None:
-        ...
+        events = self._events(session_id)
+        pending_by_trace: dict[str, dict[str, Any]] = {}
+        active: set[str] = set()
+        for event in events:
+            if _event_value(event, "branch_id") != branch_id:
+                continue
+            kind = _event_value(event, "kind")
+            trace_id = _event_value(event, "trace_id")
+            if not isinstance(trace_id, str):
+                continue
+            data = _event_data(event)
+            if kind == "trace.paused":
+                pending_by_trace[trace_id] = data.get("pending") if isinstance(data.get("pending"), dict) else data
+                active.add(trace_id)
+            elif kind in {"trace.resumed", "trace.ended"}:
+                active.discard(trace_id)
+                pending_by_trace.pop(trace_id, None)
+        candidates = [trace_id for trace_id in active if _pending_matches(pending_by_trace[trace_id], tool_call_id, pending_kind)]
+        return candidates[0] if len(set(candidates)) == 1 else None
+
+    def _events(self, session_id: str) -> list[Any]:
+        method = getattr(self.journal, "read_events", None) or getattr(self.journal, "list_events", None)
+        if method is None:
+            return []
+        return list(method(session_id) or [])
+
+
+def _event_value(event: Any, name: str) -> Any:
+    return event.get(name) if isinstance(event, dict) else getattr(event, name, None)
+
+
+def _event_data(event: Any) -> dict[str, Any]:
+    value = _event_value(event, "data")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _pending_matches(pending: dict[str, Any], tool_call_id: str | None, pending_kind: str | None) -> bool:
+    return (tool_call_id is None or pending.get("tool_call_id") == tool_call_id) and (pending_kind is None or pending.get("pending_kind") == pending_kind)
 
 
 def lookup_resume_trace(
@@ -64,14 +118,16 @@ def lookup_resume_trace(
     if method is None:
         return None
     try:
-        return method(
-            scope.session_id,
-            scope.branch_id,
-            tool_call_id=tool_call_id,
-            pending_kind=pending_kind,
-        )
-    except TypeError:
-        return method(scope.session_id, scope.branch_id)
+        call_signature = signature(method)
+    except (TypeError, ValueError):
+        call_signature = None
+    if call_signature is not None:
+        try:
+            call_signature.bind(scope.session_id, scope.branch_id, tool_call_id=tool_call_id, pending_kind=pending_kind)
+        except TypeError:
+            # An unsupported legacy lookup cannot satisfy the identity-aware contract.
+            return None
+    return method(scope.session_id, scope.branch_id, tool_call_id=tool_call_id, pending_kind=pending_kind)
 
 
 def set_trace_context(scope: TraceScope, *, trace_id: str | None = None, observation_id: str | None = None) -> tuple[Token[Any], Token[Any], Token[Any]]:
@@ -89,6 +145,7 @@ def reset_trace_context(tokens: tuple[Token[Any], Token[Any], Token[Any]]) -> No
 
 __all__ = [
     "TraceResumeLookup",
+    "JournalTraceResumeLookup",
     "active_observation_id",
     "active_trace_id",
     "active_trace_scope",

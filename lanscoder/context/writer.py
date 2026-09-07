@@ -11,21 +11,72 @@ from lanscoder.context.metadata import metadata_without_reserved_keys
 from lanscoder.context.models import MessagePart, utc_now_iso
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.versions import CONTEXT_EVENT_SCHEMA_VERSION
+from lanscoder.session.branch import SessionBranchContext, build_branch_topology
+from lanscoder.journal.models import new_branch_id
 from lanscoder.input.attachments import PreparedAttachment
 from lanscoder.planning.models import TaskPlan
 from lanscoder.planning.validation import validate_plan
 from lanscoder.providers.types import ChatResponse, ToolCall
 from lanscoder.tools.types import ToolResult
+from lanscoder.observability.models import ObservationType, TraceScope
+from lanscoder.observability.protocol import TraceRecorder
 
 
 class SessionEventWriter:
 
-    def __init__(self, *, store: JsonlSessionStore, session_id: str, current_turn: int = 0) -> None:
+    def __init__(
+        self,
+        *,
+        store: JsonlSessionStore,
+        session_id: str,
+        current_turn: int = 0,
+        branch_context: SessionBranchContext | None = None,
+        trace_recorder: TraceRecorder | None = None,
+        trace_id: str | None = None,
+        trace_scope: TraceScope | None = None,
+        allow_inactive_branch: bool = False,
+    ) -> None:
         self.store = store
         self.session_id = session_id
         self.current_turn = current_turn
+        self.trace_recorder = trace_recorder
+        self.trace_id = trace_id
+        self.trace_scope = trace_scope
+        self.allow_inactive_branch = allow_inactive_branch
+        self.branch_context = None
+        if branch_context is not None:
+            self._validate_branch_context(branch_context)
+            self.branch_context = branch_context
+        elif hasattr(self.store, "journal"):
+            self.branch_context = self._existing_branch_context()
 
     def append_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        kind_map = {
+            "session_created": "session.created",
+            "session_metadata_updated": "session.metadata_updated",
+            "user_message": "message.appended",
+            "assistant_message": "message.appended",
+            "tool_result": "message.appended",
+            "background_notification": "message.appended",
+        }
+        kind = kind_map.get(event_type, event_type.replace("_", "."))
+        if hasattr(self.store, "journal"):
+            branch_context = self.branch_context
+            if kind == "session.created":
+                root = str(payload.get("root_branch_id") or new_branch_id())
+                payload = {**payload, "root_branch_id": root}
+                branch_context = SessionBranchContext(self.session_id, root, root)
+            elif branch_context is None:
+                branch_context = self._existing_branch_context()
+                if branch_context is None:
+                    raise ValueError("session.created must be appended before context events")
+            if kind == "message.appended":
+                role = {"user_message": "user", "assistant_message": "assistant", "tool_result": "tool", "background_notification": "notification"}[event_type]
+                payload = {**payload, "role": role}
+            self.store.append_journal_event(session_id=self.session_id, kind=kind, data=payload, branch_id=branch_context.branch_id)
+            self.branch_context = branch_context
+            self._record_event_observation(event_type, payload)
+            return
         self.store.append_event(
             SessionEvent(
                 id=new_event_id(),
@@ -34,6 +85,41 @@ class SessionEventWriter:
                 payload=payload,
             )
         )
+        self._record_event_observation(event_type, payload)
+
+    def set_trace_context(
+        self,
+        recorder: TraceRecorder | None,
+        trace_id: str | None,
+        scope: TraceScope | None,
+    ) -> None:
+        self.trace_recorder = recorder
+        self.trace_id = trace_id
+        self.trace_scope = scope
+
+    def _record_event_observation(self, event_type: str, payload: dict[str, Any]) -> None:
+        if self.trace_recorder is None or self.trace_id is None:
+            return
+        scope = self.trace_scope
+        if scope is None and self.branch_context is not None:
+            scope = TraceScope(self.session_id, self.branch_context.branch_id)
+        if scope is None:
+            return
+        observation_id = None
+        try:
+            observation_id = self.trace_recorder.start_observation(
+                self.trace_id,
+                ObservationType.EVENT,
+                scope=scope,
+                data={"event": event_type, **{key: value for key, value in payload.items() if key in {"trigger", "operation", "skill_name", "server", "job_id", "status"}}},
+            )
+            self.trace_recorder.end_observation(
+                observation_id,
+                outcome="succeeded",
+                data={"event": event_type},
+            )
+        except Exception:
+            return
 
     def append_session_created(self, **metadata: Any) -> None:
         payload = {"session_id": self.session_id}
@@ -358,6 +444,37 @@ class SessionEventWriter:
     def _attach_turn_metadata(self, parts: list[MessagePart]) -> None:
         for part in parts:
             part.metadata = self._part_metadata(part.metadata)
+
+    def _existing_branch_context(self) -> SessionBranchContext | None:
+        topology = self._persisted_branch_topology()
+        if topology is None:
+            return None
+        return SessionBranchContext(self.session_id, topology.active_branch_id or topology.root_branch_id, topology.root_branch_id)
+
+    def _validate_branch_context(self, branch_context: SessionBranchContext) -> None:
+        if branch_context.session_id != self.session_id:
+            raise ValueError("branch context session_id does not match writer session")
+        topology = self._persisted_branch_topology()
+        if topology is None:
+            raise ValueError("branch context requires a persisted session.created")
+        if branch_context.root_branch_id != topology.root_branch_id or branch_context.branch_id not in topology.branches:
+            raise ValueError("branch context does not match the persisted root or active branch")
+        if not self.allow_inactive_branch and branch_context.branch_id != topology.active_branch_id:
+            raise ValueError("branch context does not match the persisted root or active branch")
+
+    def _persisted_branch_topology(self):
+        events = self.store.list_events(self.session_id)
+        if not any(
+            event.kind == "session.created"
+            and isinstance(event.data.get("root_branch_id"), str)
+            and event.data["root_branch_id"]
+            and isinstance(event.branch_id, str)
+            and event.branch_id
+            and event.data["root_branch_id"] == event.branch_id
+            for event in events
+        ):
+            return None
+        return build_branch_topology(events)
 
 
 def tool_call_to_part(*, message_id: str, tool_call: ToolCall) -> MessagePart:

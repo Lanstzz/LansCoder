@@ -146,6 +146,7 @@ def test_create_agent_session_signature_pinned() -> None:
         ("background_manager", "KEYWORD_ONLY", False, None),
         ("user_memory_root", "KEYWORD_ONLY", False, None),
         ("compaction_strategy", "KEYWORD_ONLY", False, "l1_l2_l3"),
+        ("trace_recorder", "KEYWORD_ONLY", False, None),
     )
 
 

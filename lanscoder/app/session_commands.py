@@ -10,6 +10,7 @@ from lanscoder.app.commands import CommandResult
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.writer import SessionEventWriter
 from lanscoder.session.fork import ForkSessionService
+from lanscoder.session.access import SessionAccessError, SessionAccessPolicy
 from lanscoder.session.catalog import SessionCatalog
 from lanscoder.session.errors import SessionError
 from lanscoder.session.models import SessionRecord, ShareOptions
@@ -28,6 +29,7 @@ class SessionRuntimeLike(Protocol):
 class SessionCommandHandler:
 
     catalog: SessionCatalog
+    access_policy: SessionAccessPolicy | None = None
     current_session: SessionRuntimeLike | None = None
     new_service: NewSessionService | None = None
     fork_service: ForkSessionService | None = None
@@ -80,7 +82,7 @@ class SessionCommandHandler:
                 return CommandResult(handled=True, output=self._share(args))
             if name == "/rename":
                 return CommandResult(handled=True, output=self._rename(args))
-        except SessionError as exc:
+        except (SessionError, SessionAccessError) as exc:
             return CommandResult(handled=True, output=f"Session error: {exc}")
 
         return CommandResult(handled=False)
@@ -121,6 +123,8 @@ class SessionCommandHandler:
     def _show_session(self, args: list[str]) -> str:
         if len(args) != 1:
             return "Usage: /session <session_id>"
+        policy = self.access_policy or SessionAccessPolicy(self.catalog.root.parent, journal=self.catalog, project_id=self.catalog.project_id)
+        policy.open_primary(args[0])
         return _render_session_record(self.catalog.get_session(args[0]))
 
     def _resume(self, args: list[str]) -> CommandResult:

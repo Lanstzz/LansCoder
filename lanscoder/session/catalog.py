@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any
 
-from lanscoder.context.events import SessionEvent
 from lanscoder.context.metadata import merge_metadata_patch
+from lanscoder.journal.models import JournalEnvelope
+from lanscoder.journal.store import JournalStore
 from lanscoder.session.errors import (
     SessionCorruptError,
     SessionEmptyError,
@@ -14,9 +14,10 @@ from lanscoder.session.errors import (
     SessionNotFoundError,
 )
 from lanscoder.session.models import SessionRecord
+from lanscoder.storage.paths import LansCoderPaths
 from lanscoder.utils.text import optional_str
 
-MESSAGE_EVENT_TYPES = {"user_message", "assistant_message", "tool_result"}
+MESSAGE_EVENT_TYPES = {"message.appended"}
 PREVIEW_CHARS = 80
 SAFE_SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -31,9 +32,14 @@ def require_usable_record(record: SessionRecord) -> SessionRecord:
 
 class SessionCatalog:
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, project_id: str | None = None, project_root: str | Path | None = None) -> None:
         self.root = Path(root)
         self.sessions_dir = self.root / "sessions"
+        if project_id is not None and project_root is not None:
+            raise ValueError("provide project_id or project_root, not both")
+        self.project_id = project_id
+        if project_root is not None:
+            self.project_id = LansCoderPaths(storage_root=self.root, project_root=project_root).project_id
 
     def list_sessions(self) -> list[SessionRecord]:
         if not self.sessions_dir.exists():
@@ -41,7 +47,7 @@ class SessionCatalog:
 
         from lanscoder.session.index import SessionIndex
 
-        return SessionIndex(self.root).list_records()
+        return SessionIndex(self.root, project_id=self.project_id).list_records()
 
     def get_session(self, session_id: str) -> SessionRecord:
         _validate_session_id(session_id)
@@ -53,7 +59,10 @@ class SessionCatalog:
     def exists(self, session_id: str) -> bool:
         if not is_safe_session_id(session_id):
             return False
-        return (self.sessions_dir / f"{session_id}.jsonl").exists()
+        path = self.sessions_dir / f"{session_id}.jsonl"
+        if not path.exists():
+            return False
+        return record_from_path(path).status != "corrupt"
 
 
 def record_from_path(path: Path) -> SessionRecord:
@@ -74,17 +83,9 @@ def record_from_path(path: Path) -> SessionRecord:
     return build_record_from_events(session_id=session_id, events=events)
 
 
-def _load_events(path: Path) -> list[SessionEvent]:
-    events: list[SessionEvent] = []
-    with path.open("r", encoding="utf-8") as file:
-        for line_number, line in enumerate(file, start=1):
-            if not line.strip():
-                continue
-            try:
-                events.append(SessionEvent.from_dict(json.loads(line)))
-            except Exception as exc:  # noqa: BLE001 - 记录行号，给用户一个可诊断摘要。
-                raise ValueError(f"invalid event at line {line_number}: {exc}") from exc
-    return events
+def _load_events(path: Path) -> list[JournalEnvelope]:
+    paths = LansCoderPaths(storage_root=path.parent.parent)
+    return JournalStore(paths, path.stem).read_events()
 
 
 def is_safe_session_id(session_id: str) -> bool:
@@ -97,7 +98,7 @@ def _validate_session_id(session_id: str) -> None:
         raise SessionInvalidIdError(f"invalid session_id: {session_id!r}")
 
 
-def build_record_from_events(*, session_id: str, events: list[SessionEvent]) -> SessionRecord:
+def build_record_from_events(*, session_id: str, events: list[JournalEnvelope]) -> SessionRecord:
     metadata: dict[str, Any] = {}
     message_count = 0
     user_turn_count = 0
@@ -110,39 +111,39 @@ def build_record_from_events(*, session_id: str, events: list[SessionEvent]) -> 
     model: str | None = None
 
     for event in events:
-        if event.type in {"session_created", "session_metadata_updated"}:
-            metadata = merge_metadata_patch(metadata, event.payload)
+        if event.kind in {"session.created", "session.metadata_updated"}:
+            metadata = merge_metadata_patch(metadata, event.data)
 
-        if event.type in MESSAGE_EVENT_TYPES:
+        if event.kind in MESSAGE_EVENT_TYPES:
             message_count += 1
 
-        if event.type == "user_message":
+        if event.kind == "message.appended" and event.data.get("role") == "user":
             user_turn_count += 1
-            latest_user_input = _preview(_first_text_part_content(event.payload))
+            latest_user_input = _preview(_first_text_part_content(event.data))
 
-        if event.type == "assistant_message":
-            latest_assistant_output = _preview(_first_text_part_content(event.payload))
-            message_metadata = _payload_metadata(event.payload)
+        if event.kind == "message.appended" and event.data.get("role") == "assistant":
+            latest_assistant_output = _preview(_first_text_part_content(event.data))
+            message_metadata = _payload_metadata(event.data)
             provider = optional_str(message_metadata.get("provider")) or provider
             model = optional_str(message_metadata.get("model")) or model
 
-        if event.type == "tool_result":
-            _collect_archive_ids(event.payload, archive_ids)
+        if event.kind == "message.appended" and event.data.get("role") == "tool":
+            _collect_archive_ids(event.data, archive_ids)
 
-        if event.type == "compaction_completed":
-            _collect_compaction_archive_ids(event.payload, archive_ids)
+        if event.kind == "compaction.completed":
+            _collect_compaction_archive_ids(event.data, archive_ids)
 
-        if event.type == "checkpoint_created":
+        if event.kind == "checkpoint.created":
             checkpoint_count += 1
-            latest_checkpoint_id = optional_str(event.payload.get("id")) or latest_checkpoint_id
+            latest_checkpoint_id = optional_str(event.data.get("id")) or latest_checkpoint_id
 
     title = optional_str(metadata.get("title")) or latest_user_input or session_id
     metadata["session_id"] = session_id
     return SessionRecord(
         session_id=session_id,
         title=title,
-        created_at=events[0].created_at,
-        updated_at=events[-1].created_at,
+        created_at=events[0].occurred_at,
+        updated_at=events[-1].occurred_at,
         workspace=optional_str(metadata.get("workspace")),
         provider=provider,
         model=model,

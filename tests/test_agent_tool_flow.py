@@ -32,6 +32,7 @@ def test_agent_reexports_context_tool_call_conversion() -> None:
 def test_assistant_tool_calls_are_persisted_as_tool_call_parts(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     writer = SessionEventWriter(store=store, session_id="sess_test")
+    writer.append_session_created()
     response = ChatResponse(
         provider="fake",
         model="fake-model",
@@ -60,6 +61,7 @@ def test_assistant_tool_calls_are_persisted_as_tool_call_parts(tmp_path) -> None
 def test_tool_results_are_persisted_with_matching_tool_call_id(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     writer = SessionEventWriter(store=store, session_id="sess_test")
+    writer.append_session_created()
     tool_call = ToolCall(id="call_1", name="grep", arguments={"pattern": "TODO"})
     result = ToolResult(name="grep", ok=True, content="found", data={"count": 1})
 

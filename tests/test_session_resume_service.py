@@ -176,7 +176,7 @@ def test_resume_rejects_unsupported_schema_before_bootstrap_side_effects(
     assert calls == []
 
 
-def test_resume_rejects_future_schema_before_parsing_later_events(tmp_path: Path) -> None:
+def test_resume_rejects_legacy_disk_records(tmp_path: Path) -> None:
     store = _store(tmp_path)
     path = store.sessions_dir / "sess_future.jsonl"
     path.write_text(
@@ -184,10 +184,8 @@ def test_resume_rejects_future_schema_before_parsing_later_events(tmp_path: Path
         encoding="utf-8",
     )
 
-    with pytest.raises(SessionUnsupportedSchemaError) as caught:
+    with pytest.raises(SessionCorruptError, match="invalid schema"):
         ResumeService(store=store, project_root=tmp_path).resume("sess_future")
-
-    assert caught.value.actual_version == "v3"
 
 
 @pytest.mark.parametrize(
@@ -209,7 +207,7 @@ def test_resume_rejects_corrupt_log_without_valid_session_created(
         ResumeService(store=store, project_root=tmp_path).resume("sess_corrupt")
 
 
-def test_schema_validation_rejects_corrupt_json_after_valid_session_created(
+def test_schema_validation_rejects_legacy_record_before_corrupt_tail(
     tmp_path: Path,
 ) -> None:
     store = _store(tmp_path)
@@ -219,7 +217,7 @@ def test_schema_validation_rejects_corrupt_json_after_valid_session_created(
         encoding="utf-8",
     )
 
-    with pytest.raises(SessionCorruptError, match="invalid JSON"):
+    with pytest.raises(SessionCorruptError, match="invalid schema"):
         validate_session_schema(store, "sess_corrupt_tail")
 
 

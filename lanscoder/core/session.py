@@ -24,6 +24,8 @@ from lanscoder.storage import LansCoderPaths
 from lanscoder.tools.builtin import create_builtin_registry
 from lanscoder.tools.types import Tool
 from lanscoder.utils.sandbox_access import SandboxAccess
+from lanscoder.observability.context import JournalTraceResumeLookup
+from lanscoder.observability.protocol import TraceRecorder
 
 from lanscoder.core.runtime import AgentChatRunner, CurrentSessionState
 
@@ -50,6 +52,7 @@ def create_agent_session(
     background_manager: BackgroundJobManager | None = None,
     user_memory_root: str | Path | None = None,
     compaction_strategy: str = "l1_l2_l3",
+    trace_recorder: TraceRecorder | None = None,
 ) -> AgentSessionHandle:
     """headless 唯一装配源;持久化、内置工具、权限、上下文压缩都在这里落地。
 
@@ -82,15 +85,19 @@ def create_agent_session(
     )
     if resume and session_id is not None:
         session = bootstrap.resume(session_id)
+        session.restore_pending_permission_execution()
     else:
         session = bootstrap.create(session_id=session_id)
 
+    if trace_recorder is None:
+        trace_recorder = bootstrap.create_trace_recorder()
     context_manager = ContextWindowManager(
         store=store,
         strategy=CompactionStrategy(compaction_strategy),
+        trace_recorder=trace_recorder,
         l3_service=LlmCompactService(
             store=store,
-            summarizer=ProviderLlmCompactSummarizer(provider),
+            summarizer=ProviderLlmCompactSummarizer(provider, trace_recorder=trace_recorder),
         ),
     )
     current = CurrentSessionState(session)
@@ -104,5 +111,7 @@ def create_agent_session(
         request_options=request_options or MainRequestOptions(),
         context_window=context_window,
         background_manager=background_manager,
+        trace_recorder=trace_recorder,
+        trace_resume_lookup=JournalTraceResumeLookup(store.journal),
     )
     return AgentSessionHandle(session=session, runner=runner)

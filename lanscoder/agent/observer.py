@@ -9,7 +9,7 @@ from lanscoder.observability.protocol import TraceRecorder
 
 if TYPE_CHECKING:
     from lanscoder.agent.tool_execution import ToolExecutionEvent
-    from lanscoder.providers.types import ChatStreamEvent
+    from lanscoder.providers.types import ChatStreamEvent, ToolCall
 
 
 class ToolEventSink(Protocol):
@@ -63,6 +63,41 @@ class TurnObserver:
             return
         self._stream_event_handler(event)
 
+    def record_permission_decision(
+        self,
+        *,
+        tool_call: ToolCall,
+        permission_request_id: str,
+        decision: str,
+    ) -> None:
+        """Record the user's permission choice as a child event when possible."""
+        parent_observation_id = self._parent_tool_observation(tool_call.id)
+        self._record_event_data(
+            {
+                "event": "permission_decision",
+                "tool_call_id": tool_call.id,
+                "tool_name": tool_call.name,
+                "permission_request_id": permission_request_id,
+                "permission_decision": decision,
+            },
+            outcome="succeeded",
+            parent_observation_id=parent_observation_id,
+        )
+
+    def record_user_input(self, *, tool_call: ToolCall, request_id: str, event: str) -> None:
+        """Record an ask_user answer without persisting the answer text."""
+        self._record_event_data(
+            {
+                "event": event,
+                "tool_call_id": tool_call.id,
+                "tool_name": tool_call.name,
+                "request_id": request_id,
+                "answer_recorded": True,
+            },
+            outcome="succeeded",
+            parent_observation_id=self._parent_tool_observation(tool_call.id),
+        )
+
     def foreground_progress(self) -> dict[str, Any] | None:
         if self._foreground_progress_provider is None:
             return None
@@ -103,20 +138,30 @@ class TurnObserver:
 
         tool_call_id = str(event.tool_call.id)
         if event.kind in {"started", "background_started"}:
-            observation_id = self._safe_start_observation(ObservationType.TOOL, _tool_start_data(event))
-            if observation_id is None:
-                return
-            self._tool_observations.setdefault(tool_call_id, []).append(observation_id)
+            if not self._tool_observations.get(tool_call_id):
+                observation_id = self._safe_start_observation(ObservationType.TOOL, _tool_start_data(event))
+                if observation_id is None:
+                    return
+                self._tool_observations.setdefault(tool_call_id, []).append(observation_id)
             if event.kind == "background_started":
-                self._end_tool_observation(tool_call_id, outcome="scheduled")
+                self._record_event_observation(event, outcome="scheduled", parent_observation_id=self._tool_observations[tool_call_id][0])
+                self._end_tool_observation(tool_call_id, outcome="scheduled", event=event)
             return
 
-        if event.kind == "prewrite_review":
-            self._record_event_observation(event, outcome="succeeded")
-            return
-
-        if event.kind == "permission_requested":
-            self._record_event_observation(event, outcome="waiting_for_input")
+        if event.kind in {"prewrite_review", "permission_requested"}:
+            observation_ids = self._tool_observations.get(tool_call_id)
+            if not observation_ids:
+                observation_id = self._safe_start_observation(ObservationType.TOOL, _tool_start_data(event))
+                if observation_id is None:
+                    return
+                observation_ids = self._tool_observations.setdefault(tool_call_id, [])
+                observation_ids.append(observation_id)
+            outcome = "skipped" if event.kind == "permission_requested" else _prewrite_outcome(event)
+            self._record_event_observation(event, outcome=outcome, parent_observation_id=observation_ids[0])
+            if event.kind == "permission_requested":
+                # Close the paused execution so a legal waiting trace remains
+                # complete; a resumed execution starts a continuation record.
+                self._end_tool_observation(tool_call_id, outcome="skipped", event=event)
             return
 
         if event.kind in {"denied", "interrupted", "finished"}:
@@ -125,20 +170,56 @@ class TurnObserver:
                 outcome = "cancelled"
             if event.kind == "denied":
                 outcome = "failed"
-            if self._tool_observations.get(tool_call_id):
+            observation_ids = self._tool_observations.get(tool_call_id)
+            if not observation_ids:
+                observation_id = self._safe_start_observation(ObservationType.TOOL, _tool_start_data(event))
+                if observation_id is not None:
+                    observation_ids = self._tool_observations.setdefault(tool_call_id, [])
+                    observation_ids.append(observation_id)
+            if observation_ids:
+                self._record_event_observation(event, outcome=outcome, parent_observation_id=observation_ids[0])
                 self._end_tool_observation(tool_call_id, outcome=outcome, event=event)
             else:
                 self._record_event_observation(event, outcome=outcome)
 
-    def _record_event_observation(self, event: ToolExecutionEvent, *, outcome: str) -> None:
+    def _record_event_observation(
+        self,
+        event: ToolExecutionEvent,
+        *,
+        outcome: str,
+        parent_observation_id: str | None = None,
+    ) -> None:
+        self._record_event_data(
+            _tool_start_data(event),
+            outcome=outcome,
+            parent_observation_id=parent_observation_id,
+            event=event,
+        )
+
+    def _record_event_data(
+        self,
+        data: dict[str, Any],
+        *,
+        outcome: str,
+        parent_observation_id: str | None = None,
+        event: ToolExecutionEvent | None = None,
+    ) -> None:
         recorder = self._trace_recorder
         trace_id = self._trace_id
         if recorder is None or trace_id is None:
             return
-        observation_id = self._safe_start_observation(ObservationType.EVENT, _tool_start_data(event))
+        observation_id = self._safe_start_observation(
+            ObservationType.EVENT,
+            data,
+            parent_observation_id=parent_observation_id,
+        )
         if observation_id is None:
             return
         self._safe_end_observation(observation_id, outcome=outcome, event=event)
+
+    def _parent_tool_observation(self, tool_call_id: str) -> str | None:
+        observation_ids = self._tool_observations.get(tool_call_id)
+        return observation_ids[0] if observation_ids else None
 
     def _end_tool_observation(self, tool_call_id: str, *, outcome: str, event: ToolExecutionEvent | None = None) -> None:
         recorder = self._trace_recorder
@@ -152,13 +233,25 @@ class TurnObserver:
         if not observation_ids:
             self._tool_observations.pop(tool_call_id, None)
 
-    def _safe_start_observation(self, observation_type: ObservationType, data: dict[str, Any]) -> str | None:
+    def _safe_start_observation(
+        self,
+        observation_type: ObservationType,
+        data: dict[str, Any],
+        *,
+        parent_observation_id: str | None = None,
+    ) -> str | None:
         recorder = self._trace_recorder
         trace_id = self._trace_id
         if recorder is None or trace_id is None:
             return None
         try:
-            return recorder.start_observation(trace_id, observation_type, data=data)
+            return recorder.start_observation(
+                trace_id,
+                observation_type,
+                data=data,
+                parent_observation_id=parent_observation_id,
+                scope=self._trace_scope,
+            )
         except Exception:
             return None
 
@@ -182,9 +275,8 @@ def _tool_start_data(event: ToolExecutionEvent) -> dict[str, Any]:
         "tool_call_id": event.tool_call.id,
         "tool_name": event.tool_call.name,
         "event": event.kind,
+        "arguments": event.original_arguments if event.original_arguments is not None else event.tool_call.arguments,
     }
-    if event.kind == "started":
-        data["arguments"] = event.tool_call.arguments
     if event.permission_request is not None:
         data["permission_request_id"] = event.permission_request.id
     if event.prewrite_review is not None:
@@ -192,15 +284,37 @@ def _tool_start_data(event: ToolExecutionEvent) -> dict[str, Any]:
     return data
 
 
+def _prewrite_outcome(event: ToolExecutionEvent) -> str:
+    review = event.prewrite_review
+    if isinstance(review, dict) and review.get("error"):
+        return "failed"
+    return "succeeded"
+
+
 def _tool_end_data(event: ToolExecutionEvent | None) -> dict[str, Any] | None:
     if event is None or event.result is None:
         return None
-    return {
+    data = {
         "tool_call_id": event.tool_call.id,
         "tool_name": event.tool_call.name,
         "ok": event.result.ok,
         "result_type": type(event.result).__name__,
     }
+    result_data = event.result.data or {}
+    for key in (
+        "request_id",
+        "permission_request_id",
+        "permission_decision",
+        "request_type",
+        "prewrite_review",
+    ):
+        if key in result_data:
+            data[key] = result_data[key]
+    if event.permission_request is not None:
+        data["permission_request_id"] = event.permission_request.id
+    if event.prewrite_review is not None:
+        data["prewrite_review"] = event.prewrite_review
+    return data
 
 
 def _tool_error(event: ToolExecutionEvent | None) -> dict[str, str] | None:

@@ -65,14 +65,17 @@ def merge_usage(
         input_tokens = _add_usage_value(left.input_tokens, right.input_tokens)
         output_tokens = _add_usage_value(left.output_tokens, right.output_tokens)
         right_total = right.total_tokens
-        if right_total is None and right.input_tokens is not None and right.output_tokens is not None:
-            right_total = right.input_tokens + right.output_tokens
+        if right_total is None and (right.input_tokens is not None or right.output_tokens is not None):
+            right_total = (right.input_tokens or 0) + (right.output_tokens or 0)
         total_tokens = _add_usage_value(left.total_tokens, right_total)
         usage_details = _merge_usage_details(left.usage_details, right.usage_details, is_delta=True)
     else:
         input_tokens = right.input_tokens if right.input_tokens is not None else left.input_tokens
         output_tokens = right.output_tokens if right.output_tokens is not None else left.output_tokens
         total_tokens = right.total_tokens if right.total_tokens is not None else left.total_tokens
+        if right.total_tokens is None and (right.input_tokens is not None or right.output_tokens is not None):
+            if input_tokens is not None and output_tokens is not None:
+                total_tokens = input_tokens + output_tokens
         usage_details = _merge_usage_details(left.usage_details, right.usage_details, is_delta=False)
 
     return token_usage(

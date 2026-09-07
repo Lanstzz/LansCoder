@@ -9,9 +9,15 @@ from lanscoder.providers.types import ChatResponse, ToolCall
 from lanscoder.tools.types import ToolResult
 
 
+def _writer_with_session(store: JsonlSessionStore, session_id: str) -> SessionEventWriter:
+    writer = SessionEventWriter(store=store, session_id=session_id)
+    writer.append_session_created()
+    return writer
+
+
 def test_writer_appends_user_assistant_tool_messages_with_valid_parts(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    writer = SessionEventWriter(store=store, session_id="sess_test")
+    writer = _writer_with_session(store, "sess_test")
 
     user_id = writer.append_user_message("你好")
     assistant_id = writer.append_assistant_response(
@@ -48,7 +54,7 @@ def test_writer_appends_user_assistant_tool_messages_with_valid_parts(tmp_path) 
 
 def test_writer_advances_turn_on_user_messages(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    writer = SessionEventWriter(store=store, session_id="sess_test")
+    writer = _writer_with_session(store, "sess_test")
 
     writer.append_user_message("第一轮")
     writer.append_user_message("第二轮")
@@ -61,7 +67,7 @@ def test_writer_advances_turn_on_user_messages(tmp_path) -> None:
 
 def test_writer_can_patch_message_part_metadata(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    writer = SessionEventWriter(store=store, session_id="sess_test")
+    writer = _writer_with_session(store, "sess_test")
     message_id = writer.append_user_message("第一任务")
     part_id = store.rebuild_session_view("sess_test").messages[0].parts[0].id
 
@@ -89,29 +95,29 @@ def test_writer_stamps_current_schema_version_on_session_created(tmp_path) -> No
 
     writer.append_session_created(context_event_schema_version="v1")
 
-    event = store.list_events("sess_test")[0]
+    event = store.list_events("sess_test")[-1]
     assert CONTEXT_EVENT_SCHEMA_VERSION == "v2"
     assert event.payload["context_event_schema_version"] == "v2"
 
 
 def test_writer_appends_session_metadata_update_event(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    writer = SessionEventWriter(store=store, session_id="sess_test")
+    writer = _writer_with_session(store, "sess_test")
 
     writer.append_session_metadata_updated(title="renamed")
 
-    event = store.list_events("sess_test")[0]
+    event = store.list_events("sess_test")[-1]
     assert event.type == "session_metadata_updated"
     assert event.payload == {"title": "renamed"}
 
 
 def test_writer_applies_a_consistent_event_envelope(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    writer = SessionEventWriter(store=store, session_id="sess_event")
+    writer = _writer_with_session(store, "sess_event")
 
     writer.append_session_metadata_updated(title="Demo")
 
-    event = store.list_events("sess_event")[0]
+    event = store.list_events("sess_event")[-1]
     assert event.id
     assert event.session_id == "sess_event"
     assert event.type == "session_metadata_updated"
@@ -120,7 +126,7 @@ def test_writer_applies_a_consistent_event_envelope(tmp_path) -> None:
 
 def test_writer_appends_projection_consumed_event(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    writer = SessionEventWriter(store=store, session_id="sess_test")
+    writer = _writer_with_session(store, "sess_test")
 
     writer.append_provider_projection_consumed(
         request_id="req_1",
@@ -158,7 +164,7 @@ def test_session_records_only_new_consumed_part_ids(tmp_path) -> None:
 
 def test_writer_appends_task_plan_event_and_store_replays_latest_snapshot(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
-    writer = SessionEventWriter(store=store, session_id="sess_test")
+    writer = _writer_with_session(store, "sess_test")
     initial = TaskPlan(
         mode="linear",
         revision=1,
@@ -185,7 +191,7 @@ def test_writer_appends_task_plan_event_and_store_replays_latest_snapshot(tmp_pa
 
     events = store.list_events("sess_test")
     view = store.rebuild_session_view("sess_test")
-    assert [event.type for event in events] == ["task_plan_updated", "task_plan_updated"]
+    assert [event.type for event in events[1:]] == ["task_plan_updated", "task_plan_updated"]
     assert events[-1].payload == {
         "previous_revision": 1,
         "revision": 2,
@@ -201,13 +207,15 @@ def test_task_plan_state_is_isolated_by_session(tmp_path) -> None:
     plan_a = TaskPlan(mode="linear", revision=1, tasks=(Task(id="a", content="会话 A"),))
     plan_b = TaskPlan(mode="dag", revision=1, tasks=(Task(id="b", content="会话 B"),))
 
-    SessionEventWriter(store=store, session_id="sess_a").append_task_plan_updated(
+    writer_a = _writer_with_session(store, "sess_a")
+    writer_a.append_task_plan_updated(
         previous_revision=0,
         operation="create",
         changes=[plan_a.tasks[0].to_dict()],
         snapshot=plan_a,
     )
-    SessionEventWriter(store=store, session_id="sess_b").append_task_plan_updated(
+    writer_b = _writer_with_session(store, "sess_b")
+    writer_b.append_task_plan_updated(
         previous_revision=0,
         operation="create",
         changes=[plan_b.tasks[0].to_dict()],

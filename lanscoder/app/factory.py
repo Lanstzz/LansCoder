@@ -198,7 +198,7 @@ def create_lanscoder_app(
         sandbox_access=sandbox_access,
     )
     compact_summarizer = context_manager.l3_service.summarizer
-    catalog = SessionCatalog(paths.storage_root)
+    catalog = SessionCatalog(paths.storage_root, project_id=paths.project_id)
     resume_service = ResumeService(
         store=store,
         project_root=project_path,
@@ -224,6 +224,7 @@ def create_lanscoder_app(
     )
     session_handler = SessionCommandHandler(
         catalog=catalog,
+        access_policy=bootstrap.access_policy(),
         current_session=current.session,
         new_service=new_service,
         fork_service=fork_service,

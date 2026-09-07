@@ -10,12 +10,13 @@ import json
 import threading
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
 import anyio
 
-from lanscoder.utils.cancellation import CancellationToken
+from lanscoder.utils.cancellation import AgentCancelledError, CancellationToken
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from lanscoder.agent.background import DEFAULT_BACKGROUND_TOOL_NAMES, BackgroundJobManager
 from lanscoder.agent.guardrails import TurnGuardrails
@@ -43,7 +44,8 @@ from lanscoder.tools.background import (
 from lanscoder.tools.delegate import create_delegate_tool
 from lanscoder.tools.types import Tool
 from lanscoder.observability.models import TraceScope
-from lanscoder.observability.protocol import TraceRecorder
+from lanscoder.observability.context import TraceResumeLookup, lookup_resume_trace
+from lanscoder.observability.protocol import NoOpTraceRecorder, TraceRecorder
 
 __all__ = [
     "register_loop_tools",
@@ -160,7 +162,12 @@ def create_agent_loop(
         request_options=request_options or MainRequestOptions(),
         context_window=context_window,
     )
-    mcp_activation = McpActivationTracker(frozenset(name for name in session.tool_registry.names() if name.startswith("mcp__")))
+    mcp_activation = McpActivationTracker(
+        frozenset(name for name in session.tool_registry.names() if name.startswith("mcp__")),
+        trace_recorder=trace_recorder,
+        trace_id=trace_id,
+        trace_scope=trace_scope,
+    )
     if observer is None:
         observer = TurnObserver(
             stream_event_handler=stream_event_handler,
@@ -220,6 +227,7 @@ def create_agent_loop(
         tool_event_handler=tool_event_handler,
         trace_recorder=trace_recorder,
         trace_id=trace_id,
+        trace_scope=trace_scope,
     )
     permission_resume.set_tool_round_callback(loop._record_resumed_tool_round)
     return loop
@@ -281,13 +289,16 @@ class AgentChatRunner:
     stream_event_handler: Callable[[ChatStreamEvent], None] | None = None
     tool_event_handler: Callable[[ToolExecutionEvent], None] | None = None
     background_manager: BackgroundJobManager | None = None
-    trace_recorder: TraceRecorder | None = None
+    trace_recorder: TraceRecorder | None = field(default_factory=NoOpTraceRecorder)
+    trace_resume_lookup: TraceResumeLookup | None = None
+    trace_metadata_provider: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     pending_guidance: list[str] = field(default_factory=list)
     _guidance_lock: threading.Lock = field(default_factory=threading.Lock)
     _cancellation_lock: threading.Lock = field(default_factory=threading.Lock)
     _active_cancellation_token: CancellationToken | None = None
     _pending_permission_loop: AgentLoop | None = None
     _active_trace_id: str | None = None
+    _active_trace_scope: TraceScope | None = None
     # 本回合按序的 (reasoning 文本, 秒数, 消息是否以 tool_call 收尾)；
     # 供 TUI 收尾 reconcile 把 store 里的时长回填到 live thinking 子行。
     # 合并边界是 tool_call 而非 text:replay/live 的 append_thinking 只查末位
@@ -358,43 +369,74 @@ class AgentChatRunner:
             if self._active_cancellation_token is token:
                 self._active_cancellation_token = None
 
-    def _start_turn(self, *, streaming: bool = False) -> tuple[int, CancellationToken, AgentLoop]:
+    def _start_turn(self, *, content: str | None = None, streaming: bool = False) -> tuple[int, CancellationToken, AgentLoop]:
         """开始一次新回合:记录起始消息数、重置输出缓冲、创建 AgentLoop。"""
         self._turn_reasonings.clear()
+        self._active_trace_id = None
+        self._active_trace_scope = self._trace_scope()
         before_count = len(self.current_session.rebuild_view().messages)
         self.last_pending_input = None
         token = self._begin_cancellable_turn()
-        self._start_trace()
-        if streaming:
-            self.last_display_lines = []
-            self.last_stream_events = []
-        return before_count, token, self._create_loop(token, streaming=streaming)
-
-    def _resume_turn(self, *, streaming: bool = False) -> tuple[int, CancellationToken, AgentLoop]:
-        """恢复回合:复用挂起的 AgentLoop 或新建,替换取消令牌。"""
-        before_count = len(self.current_session.rebuild_view().messages)
-        self.last_pending_input = None
-        token = self._begin_cancellable_turn()
-        if self._active_trace_id is None:
-            self._start_trace()
-        elif self.trace_recorder is not None:
-            try:
-                self.trace_recorder.resume_trace(self._active_trace_id)
-            except Exception:
-                pass
-        loop = self._pending_permission_loop
-        if loop is None or loop.session is not self.current_session.session:
-            loop = self._create_loop(token, streaming=streaming)
-        else:
-            loop.replace_cancellation_token(token)
-            loop.set_trace_context(self.trace_recorder, self._active_trace_id)
-            loop.stream_event_handler = self.stream_event_handler if streaming else None
-            loop.tool_event_handler = self.tool_event_handler
+        try:
+            pending = self.current_session.session.pending_permission_execution
+            if pending is not None:
+                self._active_trace_id = pending.trace_id
+            else:
+                self._start_trace(content=content)
             if streaming:
                 self.last_display_lines = []
                 self.last_stream_events = []
-                loop.clear_stream_events()
-        return before_count, token, loop
+            return before_count, token, self._create_loop(token, streaming=streaming)
+        except BaseException as error:
+            self._end_trace(error=error)
+            self._finish_cancellable_turn(token)
+            raise
+
+    def _resume_turn(self, *, request_id: str | None = None, streaming: bool = False) -> tuple[int, CancellationToken, AgentLoop]:
+        """恢复回合:复用挂起的 AgentLoop 或新建,替换取消令牌。"""
+        self._active_trace_id = None
+        self._active_trace_scope = self._trace_scope()
+        session = self.current_session.session
+        if session.pending_permission_execution is None:
+            session.restore_pending_permission_execution()
+        before_count = len(self.current_session.rebuild_view().messages)
+        self.last_pending_input = None
+        pending = session.pending_permission_execution
+        if pending is not None and pending.request_id == request_id:
+            self._active_trace_id = pending.trace_id
+            if self._active_trace_id is None and self.trace_resume_lookup is not None and self._active_trace_scope is not None:
+                self._active_trace_id = lookup_resume_trace(
+                    self.trace_resume_lookup,
+                    self._active_trace_scope,
+                    tool_call_id=pending.tool_call.id,
+                    pending_kind=pending.kind,
+                )
+            if self._active_trace_id is not None and self.trace_recorder is not None:
+                try:
+                    self.trace_recorder.resume_trace(self._active_trace_id, scope=self._active_trace_scope)
+                except Exception:
+                    pass
+            session.set_trace_context(self.trace_recorder, self._active_trace_id, self._active_trace_scope)
+        token = self._begin_cancellable_turn()
+        try:
+            if streaming:
+                self.last_display_lines = []
+                self.last_stream_events = []
+            loop = self._pending_permission_loop
+            if loop is None or loop.session is not session:
+                loop = self._create_loop(token, streaming=streaming)
+            else:
+                loop.replace_cancellation_token(token)
+                loop.set_trace_context(self.trace_recorder, self._active_trace_id, self._active_trace_scope)
+                loop.stream_event_handler = self.stream_event_handler if streaming else None
+                loop.tool_event_handler = self.tool_event_handler
+                if streaming:
+                    loop.clear_stream_events()
+            return before_count, token, loop
+        except BaseException as error:
+            self._end_trace(error=error)
+            self._finish_cancellable_turn(token)
+            raise
 
     def _remember_pending_permission_loop(self, loop: AgentLoop) -> None:
         """仅在存在挂起权限执行时记住当前 loop,供恢复回合复用。"""
@@ -449,7 +491,7 @@ class AgentChatRunner:
     ) -> ChatResponse:
         """异步执行一次用户回合,在线程中运行 loop 并返回响应。"""
 
-        before_count, cancellation_token, loop = self._start_turn(streaming=self.use_streaming)
+        before_count, cancellation_token, loop = self._start_turn(content=content, streaming=self.use_streaming)
         try:
             result = await anyio.to_thread.run_sync(
                 _run_coroutine_in_thread,
@@ -459,12 +501,12 @@ class AgentChatRunner:
                     streaming=self.use_streaming,
                 ),
             )
+            return self._finish_agent_result(before_count, loop, result)
         except BaseException as error:
             self._end_trace(error=error)
             raise
         finally:
             self._finish_cancellable_turn(cancellation_token)
-        return self._finish_agent_result(before_count, loop, result)
 
     async def anudge_turn(self) -> ChatResponse:
         """异步执行一次引导回合,用于处理后台任务完成。"""
@@ -475,19 +517,20 @@ class AgentChatRunner:
                 _run_coroutine_in_thread,
                 loop.run_nudge_turn(streaming=self.use_streaming),
             )
+            if result.response is None and result.pending_input is None:
+                self._accumulate_turn_reasonings(before_count)
+                self._end_trace(no_generation=True)
+                return ChatResponse(provider=self.provider.name, model=self.provider.model, content="")
+            return self._finish_agent_result(before_count, loop, result)
         except BaseException as error:
             self._end_trace(error=error)
             raise
         finally:
             self._finish_cancellable_turn(cancellation_token)
-        if result.response is None:
-            self._accumulate_turn_reasonings(before_count)
-            return ChatResponse(provider=self.provider.name, model=self.provider.model, content="")
-        return self._finish_agent_result(before_count, loop, result)
 
     async def aresume_with_user_input(self, request_id: str, answer: str) -> ChatResponse:
         """异步恢复被挂起的回合并返回响应。"""
-        before_count, cancellation_token, loop = self._resume_turn(streaming=self.use_streaming)
+        before_count, cancellation_token, loop = self._resume_turn(request_id=request_id, streaming=self.use_streaming)
         try:
             result = await anyio.to_thread.run_sync(
                 _run_coroutine_in_thread,
@@ -497,12 +540,12 @@ class AgentChatRunner:
                     streaming=self.use_streaming,
                 ),
             )
+            return self._finish_agent_result(before_count, loop, result)
         except BaseException as error:
             self._end_trace(error=error)
             raise
         finally:
             self._finish_cancellable_turn(cancellation_token)
-        return self._finish_agent_result(before_count, loop, result)
 
     def _finish_agent_result(self, before_count: int, loop: AgentLoop, result) -> ChatResponse:
         """回合收尾:同步挂起输入、刷新输出,返回响应或等待输入的占位响应。"""
@@ -512,62 +555,112 @@ class AgentChatRunner:
         if result.pending_input is not None:
             self._pause_trace(result.pending_input)
         else:
-            self._end_trace(final_output=result.response)
+            self._end_trace(final_output=result.response, no_generation=loop.guardrails.call_count == 0)
         if result.response is not None:
             if result.response.content and not self.last_display_lines:
                 self.last_display_lines.append(result.response.content)
             return result.response
         return self._waiting_for_input_response(result.pending_input)
 
-    def _trace_scope(self) -> TraceScope:
-        metadata = self.current_session.rebuild_view().metadata
-        branch_id = str(
-            metadata.get("active_branch_id")
-            or metadata.get("root_branch_id")
-            or metadata.get("branch_id")
-            or "root"
-        )
-        return TraceScope(session_id=self.current_session.session_id, branch_id=branch_id)
+    def _trace_scope(self) -> TraceScope | None:
+        branch = self.current_session.session.writer.branch_context
+        if branch is None:
+            return None
+        return TraceScope(session_id=branch.session_id, branch_id=branch.branch_id)
 
-    def _start_trace(self) -> None:
-        if self.trace_recorder is None or self._active_trace_id is not None:
+    def _start_trace(self, *, content: str | None = None) -> None:
+        if self._active_trace_scope is None:
             return
+        metadata = self.current_session.rebuild_view().metadata
+        data = {
+            "operation": "agent_turn" if content is not None else "nudge",
+            "input": content,
+            "provider": self.provider.name,
+            "model": self.provider.model,
+            "project_id": metadata.get("project_id"),
+            "project_root": metadata.get("project_root"),
+        }
+        if self.trace_metadata_provider is not None:
+            try:
+                data.update(self.trace_metadata_provider(metadata))
+            except Exception:
+                data["evidence_incomplete"] = True
         try:
-            self._active_trace_id = self.trace_recorder.start_trace(
-                self._trace_scope(),
-                data={"operation": "agent_turn", "provider": self.provider.name, "model": self.provider.model},
+            if self.trace_recorder is None:
+                self._active_trace_id = NoOpTraceRecorder().start_trace(self._active_trace_scope)
+            else:
+                self._active_trace_id = self.trace_recorder.start_trace(self._active_trace_scope, data=data)
+                if not self._active_trace_id:
+                    self._active_trace_id = NoOpTraceRecorder().start_trace(self._active_trace_scope)
+            self.current_session.session.set_trace_context(
+                self.trace_recorder,
+                self._active_trace_id,
+                self._active_trace_scope,
             )
         except Exception:
-            self._active_trace_id = None
+            # Keep a durable identity even when optional recorder startup fails.
+            self._active_trace_id = NoOpTraceRecorder().start_trace(self._active_trace_scope)
+            self.current_session.session.set_trace_context(
+                self.trace_recorder,
+                self._active_trace_id,
+                self._active_trace_scope,
+            )
 
     def _pause_trace(self, pending: UserInputRequest) -> None:
         if self.trace_recorder is None or self._active_trace_id is None:
             return
+        execution = self.current_session.session.pending_permission_execution
         try:
-            self.trace_recorder.pause_trace(
-                self._active_trace_id,
-                pending={
-                    "request_id": pending.id,
-                    "question": pending.question,
-                    "kind": pending.kind,
-                },
-            )
+            context = self._active_trace_scope.activate(trace_id=self._active_trace_id) if self._active_trace_scope else nullcontext()
+            with context:
+                self.trace_recorder.pause_trace(
+                    self._active_trace_id,
+                    pending={
+                        "request_id": pending.id,
+                        "question": pending.question,
+                        "tool_call_id": execution.tool_call.id if execution else None,
+                        "pending_kind": execution.kind if execution else pending.kind,
+                        "trace_id": self._active_trace_id,
+                    },
+                )
         except Exception:
             return
 
-    def _end_trace(self, *, final_output: ChatResponse | None = None, error: BaseException | None = None) -> None:
-        if self.trace_recorder is None or self._active_trace_id is None:
-            return
+    def _end_trace(self, *, final_output: ChatResponse | None = None, error: BaseException | None = None, no_generation: bool = False) -> None:
         trace_id = self._active_trace_id
         self._active_trace_id = None
+        if self.trace_recorder is None or trace_id is None:
+            return
         try:
+            reason = None
+            finish_reason = final_output.finish_reason if final_output is not None else None
+            cancelled = isinstance(error, (AgentCancelledError, asyncio.CancelledError)) or finish_reason == "interrupted"
+            cancelled = cancelled or (self._active_cancellation_token is not None and self._active_cancellation_token.is_cancelled)
+            status = "cancelled" if cancelled else "completed"
             if error is not None:
-                status = "cancelled" if self._active_cancellation_token is not None and self._active_cancellation_token.is_cancelled else "failed"
-                self.trace_recorder.end_trace(trace_id, status=status, error=error)
-            else:
-                self.trace_recorder.end_trace(trace_id, status="completed", final_output=_trace_output(final_output), no_generation=final_output is None)
+                status = "cancelled" if cancelled else "failed"
+            elif cancelled:
+                reason = {"code": "interrupted", "message": "agent turn was cancelled"}
+            elif finish_reason == "error":
+                status = "failed"
+                reason = {"code": "error", "message": final_output.content}
+            elif no_generation or final_output is None:
+                no_generation = True
+                reason = {"code": finish_reason or "no_work", "message": "execution finished without a provider call"}
+            context = self._active_trace_scope.activate(trace_id=trace_id) if self._active_trace_scope else nullcontext()
+            with context:
+                self.trace_recorder.end_trace(
+                    trace_id,
+                    status=status,
+                    final_output=_trace_output(final_output),
+                    reason=reason,
+                    error=error,
+                    no_generation=no_generation and status == "completed",
+                )
         except Exception:
             return
+        finally:
+            self.current_session.session.set_trace_context(None, None, None)
 
     def _current_tools(self) -> list[Tool] | None:
         """返回当前生效的工具集(优先走 tools_provider 以支持热更新)。"""
@@ -611,6 +704,7 @@ class AgentChatRunner:
             "background_manager": self.background_manager,
             "trace_recorder": self.trace_recorder,
             "trace_id": self._active_trace_id,
+            "trace_scope": self._active_trace_scope,
         }
         if streaming:
             kwargs["stream_event_handler"] = self.stream_event_handler
@@ -714,8 +808,5 @@ def _trace_output(response: ChatResponse | None) -> dict[str, Any] | None:
     return {
         "content": response.content,
         "finish_reason": response.finish_reason,
-        "tool_calls": [
-            {"id": call.id, "name": call.name, "arguments": call.arguments}
-            for call in response.tool_calls
-        ],
+        "tool_calls": [{"id": call.id, "name": call.name, "arguments": call.arguments} for call in response.tool_calls],
     }

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from lanscoder.storage import PayloadRef
 
 import pytest
 
@@ -66,11 +68,13 @@ class FakePayloadStore:
         if self.fail:
             raise OSError("payload unavailable")
         raw = json.dumps(value, sort_keys=True).encode()
-        digest = f"payload-{len(self.payloads)}"
+        digest = hashlib.sha256(raw).hexdigest()
         self.payloads[digest] = raw
         return {"sha256": digest, "media_type": media_type, "size_bytes": len(raw)}
 
-    def read(self, reference: dict[str, Any]) -> bytes:
+    def read(self, reference: PayloadRef | dict[str, Any]) -> bytes:
+        if isinstance(reference, PayloadRef):
+            return self.payloads[reference.sha256]
         return self.payloads[reference["sha256"]]
 
 
@@ -214,6 +218,30 @@ def test_unclosed_trace_is_incomplete_but_legal_pause_is_not() -> None:
     assert paused_record.incomplete is False
 
 
+def test_unclosed_observation_marks_closed_trace_incomplete() -> None:
+    journal = FakeJournal()
+    recorder = JournalTraceRecorder(journal)
+    trace_id = recorder.start_trace(_scope())
+    recorder.start_observation(trace_id, ObservationType.TOOL)
+    recorder.end_trace(trace_id, final_output="done")
+
+    assert project_trace(journal.events, trace_id).incomplete is True
+
+
+def test_binary_payload_is_stored_without_json_reencoding(tmp_path: Path) -> None:
+    from lanscoder.storage import PayloadRef, PayloadStore
+
+    journal = FakeJournal()
+    payloads = PayloadStore(tmp_path)
+    recorder = JournalTraceRecorder(journal, payload_store=payloads)
+    trace_id = recorder.start_trace(_scope())
+
+    reference = recorder.record_payload(b"\x00\xff", media_type="image/png", force_reference=True, trace_id=trace_id)
+
+    assert reference is not None
+    assert payloads.read(PayloadRef.from_dict(reference)) == b"\x00\xff"
+
+
 def test_context_is_task_local_and_resume_lookup_uses_durable_scope() -> None:
     scope = _scope()
 
@@ -233,3 +261,90 @@ def test_git_snapshot_is_read_only_for_non_repository(tmp_path: Path) -> None:
     from lanscoder.observability.git import snapshot_git
 
     assert snapshot_git(tmp_path).head is None
+
+
+def test_small_observation_evidence_is_kept_inline() -> None:
+    journal = FakeJournal()
+    recorder = JournalTraceRecorder(journal, inline_payload_limit=100)
+    trace_id = recorder.start_trace(_scope())
+    observation_id = recorder.start_observation(trace_id, ObservationType.TOOL)
+
+    recorder.end_observation(observation_id, outcome="succeeded", payload="short output")
+
+    ended = journal.events[-1]
+    assert ended.data["payload"] == "short output"
+    assert "payload_ref" not in ended.data
+
+
+def test_recovery_event_only_marks_causally_related_trace_incomplete() -> None:
+    journal = FakeJournal()
+    recorder = JournalTraceRecorder(journal)
+    affected_trace = recorder.start_trace(_scope())
+    unrelated_trace = recorder.start_trace(_scope())
+    recorder.end_trace(affected_trace, final_output="affected")
+    recorder.end_trace(unrelated_trace, final_output="unrelated")
+    journal.events.append(
+        FakeEvent(
+            sequence=len(journal.events) + 1,
+            kind="journal.recovered",
+            session_id="sess_fake",
+            trace_id=affected_trace,
+            observation_id=None,
+            parent_observation_id=None,
+            branch_id=None,
+            data={"reason": "truncated tail", "trace_id": affected_trace},
+            occurred_at="2026-09-07T00:00:09Z",
+        )
+    )
+
+    assert project_trace(journal.events, affected_trace).incomplete is True
+    assert project_trace(journal.events, unrelated_trace).incomplete is False
+
+
+@pytest.mark.parametrize("status", [TraceStatus.FAILED.value, TraceStatus.CANCELLED.value])
+def test_failed_or_cancelled_trace_without_reason_is_incomplete(status: str) -> None:
+    journal = FakeJournal()
+    recorder = JournalTraceRecorder(journal)
+    trace_id = recorder.start_trace(_scope())
+
+    recorder.end_trace(trace_id, status=status)
+
+    assert project_trace(journal.events, trace_id).incomplete is True
+
+
+def test_model_dump_is_used_for_json_safe_evidence() -> None:
+    class Model:
+        def model_dump(self, *, mode: str) -> dict[str, str]:
+            assert mode == "json"
+            return {"answer": "serialized"}
+
+    journal = FakeJournal()
+    recorder = JournalTraceRecorder(journal)
+    trace_id = recorder.start_trace(_scope())
+    recorder.end_trace(trace_id, final_output=Model())
+
+    assert journal.events[-1].data["final_output"] == {"answer": "serialized"}
+
+
+def test_trace_summary_contains_bounded_query_fields() -> None:
+    journal = FakeJournal()
+    recorder = JournalTraceRecorder(journal)
+    trace_id = recorder.start_trace(
+        _scope(),
+        data={
+            "provider": "fake",
+            "model": "model-1",
+            "metadata": {"team": "infra", "nested": {"secret": "excluded"}},
+            "tags": ["nightly", "release"],
+        },
+    )
+    recorder.start_observation(trace_id, ObservationType.TOOL, data={"tool_name": "shell"})
+    recorder.end_trace(trace_id, final_output="done")
+
+    summary = project_trace(journal.events, trace_id).to_summary()
+
+    assert summary.provider == "fake"
+    assert summary.model == "model-1"
+    assert summary.tool_name == "shell"
+    assert summary.metadata == {"team": "infra"}
+    assert summary.tags == ("nightly", "release")

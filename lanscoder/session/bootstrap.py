@@ -8,12 +8,14 @@ from lanscoder.agent.prompt_inputs import read_agents_md
 from lanscoder.agent.session import AgentSession, create_project_permission_manager
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.memory.manager import MemoryManager
+from lanscoder.observability.protocol import NoOpTraceRecorder, TraceRecorder
+from lanscoder.observability.recorder import JournalTraceRecorder
 from lanscoder.permissions.grants import FilePermissionGrantStore
 from lanscoder.permissions.manager import PermissionManager
 from lanscoder.session.access import SessionAccessPolicy
 from lanscoder.session.errors import SessionNotFoundError
 from lanscoder.skills.discovery import discover_all_skills
-from lanscoder.storage import LansCoderPaths
+from lanscoder.storage import LansCoderPaths, PayloadStore
 from lanscoder.tools.types import Tool
 from lanscoder.utils.sandbox_access import SandboxAccess
 
@@ -31,7 +33,6 @@ class _SessionCatalogLookup:
 
 @dataclass(slots=True)
 class SessionBootstrap:
-
     store: JsonlSessionStore
     project_root: str | Path
     paths: LansCoderPaths | None = None
@@ -59,6 +60,12 @@ class SessionBootstrap:
 
     def resolve_tools(self) -> list[Tool] | None:
         return self.tools_provider() if self.tools_provider is not None else self.tools
+
+    def create_trace_recorder(self) -> TraceRecorder:
+        try:
+            return JournalTraceRecorder(self.store.journal, PayloadStore(self.paths))
+        except Exception:
+            return NoOpTraceRecorder()
 
     def permission_manager(self) -> PermissionManager:
         return create_project_permission_manager(

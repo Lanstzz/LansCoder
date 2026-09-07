@@ -271,7 +271,7 @@ def test_session_catalog_rejects_unsafe_session_ids(tmp_path: Path, session_id: 
     assert catalog.exists(session_id) is False
 
 
-def test_session_catalog_exists_checks_jsonl_path(tmp_path: Path) -> None:
+def test_session_catalog_exists_rejects_legacy_jsonl_path(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "sess_test.jsonl").write_text(
@@ -289,5 +289,5 @@ def test_session_catalog_exists_checks_jsonl_path(tmp_path: Path) -> None:
 
     catalog = SessionCatalog(tmp_path)
 
-    assert catalog.exists("sess_test") is True
+    assert catalog.exists("sess_test") is False
     assert catalog.exists("sess_missing") is False

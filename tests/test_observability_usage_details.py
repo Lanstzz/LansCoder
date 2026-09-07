@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 
 from lanscoder.providers.anthropic_provider import AnthropicProvider
 from lanscoder.providers.openai_compatible import OpenAICompatibleProvider
@@ -211,3 +212,49 @@ def test_streaming_usage_adds_only_explicit_deltas() -> None:
             "completion_tokens_details": {"reasoning_tokens": 2},
         },
     )
+
+
+def test_openai_streaming_preserves_cumulative_usage_chunks() -> None:
+    class StreamCompletions:
+        def create(self, **params):
+            return iter(
+                [
+                    _UsageObject(model="test-model", choices=[], usage=_UsageObject(prompt_tokens=4)),
+                    _UsageObject(
+                        model="test-model",
+                        choices=[
+                            _UsageObject(
+                                delta=_UsageObject(content="done"),
+                                finish_reason="stop",
+                            )
+                        ],
+                        usage=_UsageObject(prompt_tokens=4, completion_tokens=1, total_tokens=5),
+                    ),
+                ]
+            )
+
+    client = _UsageObject(chat=_UsageObject(completions=StreamCompletions()))
+    provider = OpenAICompatibleProvider(
+        name="test-openai",
+        model="test-model",
+        api_key="test-key",
+        client=client,
+    )
+
+    async def collect():
+        return [event async for event in provider.astream(ChatRequest(messages=[ChatMessage(role="user", content="hi")]))]
+
+    events = asyncio.run(collect())
+    response = events[-1].response
+    assert response is not None
+    assert response.usage == TokenUsage(input_tokens=4, output_tokens=1, total_tokens=5)
+
+
+def test_partial_cumulative_snapshot_refreshes_derived_total():
+    merged = merge_usage(token_usage(10, 0), token_usage(None, 4))
+    assert merged == TokenUsage(input_tokens=10, output_tokens=4, total_tokens=14)
+
+
+def test_partial_explicit_delta_updates_total_without_readding_input():
+    merged = merge_usage(token_usage(10, 4), token_usage(None, 2), right_is_delta=True)
+    assert merged == TokenUsage(input_tokens=10, output_tokens=6, total_tokens=16)

@@ -136,7 +136,7 @@ def test_recall_only_switches_branch_and_visible_checkpoints_follow_active_path(
     assert visible_user_checkpoints(events) == ["u1", "u3"]
 
 
-def test_session_index_rebuilds_only_primary_sessions_for_requested_project(tmp_path: Path) -> None:
+def test_session_index_rejects_legacy_projection_records(tmp_path: Path) -> None:
     project_id = project_id_for_path(tmp_path)
     journal = {
         "sess_primary": [
@@ -150,6 +150,5 @@ def test_session_index_rebuilds_only_primary_sessions_for_requested_project(tmp_
 
     records = index.list_records()
 
-    assert [record.session_id for record in records] == ["sess_primary"]
-    assert records[0].title == "Primary"
-    assert records[0].metadata["project_id"] == project_id
+    assert [record.session_id for record in records] == []
+    assert index.list_records(kind=None) == []

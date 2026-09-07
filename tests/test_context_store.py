@@ -119,6 +119,7 @@ def test_jsonl_store_lists_events_in_append_order(tmp_path: Path) -> None:
 def test_programmatic_compaction_rebuilds_replaced_parts(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     session_id = "sess_test"
+    SessionEventWriter(store=store, session_id=session_id).append_session_created()
     message = AgentMessage(
         id="msg_tool",
         session_id=session_id,
@@ -158,6 +159,7 @@ def test_programmatic_compaction_rebuilds_replaced_parts(tmp_path: Path) -> None
 def test_l1_route_result_with_raw_backing_survives_rebuild_without_l4(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     session_id = "sess_test"
+    SessionEventWriter(store=store, session_id=session_id).append_session_created()
     message = AgentMessage(
         id="msg_tool",
         session_id=session_id,

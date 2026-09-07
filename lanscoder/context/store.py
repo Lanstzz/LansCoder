@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import tempfile
@@ -16,12 +15,28 @@ from lanscoder.context.metadata import merge_metadata_patch
 from lanscoder.context.models import AgentMessage, MessagePart, SessionView
 from lanscoder.planning.models import TaskPlan, TaskPlanError
 from lanscoder.planning.validation import validate_plan
+from lanscoder.journal.models import JournalEnvelope, new_branch_id
+from lanscoder.journal.store import JournalStore
 
 EVENT_ROLE_MAP = {
+    "message.appended": "user",
     "user_message": "user",
     "assistant_message": "assistant",
     "tool_result": "tool",
     "background_notification": "notification",
+}
+
+_MESSAGE_ROLES = {
+    "user_message": "user",
+    "assistant_message": "assistant",
+    "tool_result": "tool",
+    "background_notification": "notification",
+}
+
+_JOURNAL_KINDS = {
+    "session_created": "session.created",
+    "session_metadata_updated": "session.metadata_updated",
+    **{event_type: "message.appended" for event_type in _MESSAGE_ROLES},
 }
 
 
@@ -31,8 +46,17 @@ class SessionStoreCorruptError(ValueError):
     pass
 
 
+def _journal_fields(event: SessionEvent) -> tuple[str, dict]:
+    kind = _JOURNAL_KINDS.get(event.type, event.type.replace("_", "."))
+    data = dict(event.payload)
+    role = _MESSAGE_ROLES.get(event.type)
+    if role is not None:
+        data["role"] = role
+    return kind, data
+
+
 class JsonlSessionStore:
-    """JSONL 会话存储:追加事件、重建视图,支持按消息截断与删除会话。"""
+    """JSONL 会话存储:追加事件并从 active branch 重建会话视图。"""
 
     def __init__(self, root: str | Path) -> None:
         """初始化存储根目录与会话目录。"""
@@ -40,50 +64,74 @@ class JsonlSessionStore:
         self.sessions_dir = self.root / "sessions"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self.journal = JournalStore(self.root)
 
-    def append_event(self, event: SessionEvent) -> None:
-        """追加一条事件到会话文件,并更新会话索引。"""
+    def append_event(self, event: SessionEvent) -> JournalEnvelope:
+        """Translate an in-process legacy event into the schema-v1 journal."""
         with self._lock:
-            path = self._session_path(event.session_id)
-            with path.open("a", encoding="utf-8") as file:
-                file.write(json.dumps(event.to_dict(), ensure_ascii=False, sort_keys=True))
-                file.write("\n")
+            kind, data = _journal_fields(event)
+            branch_id = self._branch_id_for_event(event.session_id, kind, data)
+            envelope = self.journal.append(
+                kind,
+                data,
+                session_id=event.session_id,
+                event_id=event.id,
+                occurred_at=event.created_at,
+                branch_id=branch_id,
+            )
             from lanscoder.session.index import SessionIndex
 
-            SessionIndex(self.root).update_event(event)
+            SessionIndex(self.root).update_event(envelope)
+            return envelope
 
-    def list_events(self, session_id: str) -> list[SessionEvent]:
-        """读取会话的全部事件。"""
+    def append_journal_event(self, *, session_id: str, kind: str, data: dict, branch_id: str | None = None) -> JournalEnvelope:
+        """Append one schema-v1 event and update its derived session index."""
         with self._lock:
-            path = self._session_path(session_id)
-            if not path.exists():
-                return []
+            envelope = self.journal.append(kind, data, session_id=session_id, branch_id=branch_id)
+            from lanscoder.session.index import SessionIndex
 
-            events: list[SessionEvent] = []
-            with path.open("r", encoding="utf-8") as file:
-                for line in file:
-                    if line.strip():
-                        events.append(SessionEvent.from_dict(json.loads(line)))
-            return events
+            SessionIndex(self.root).update_event(envelope)
+            return envelope
+
+    def list_events(self, session_id: str) -> list[JournalEnvelope]:
+        """Read schema-v1 journal envelopes for a session."""
+        with self._lock:
+            return self.journal.read_events(session_id)
+
+    def _branch_id_for_event(self, session_id: str, kind: str, data: dict) -> str | None:
+        if kind == "session.created":
+            root_branch_id = str(data.get("root_branch_id") or new_branch_id())
+            data["root_branch_id"] = root_branch_id
+            return root_branch_id
+        events = self.journal.read_events(session_id)
+        if events:
+            from lanscoder.session.branch import build_branch_topology
+
+            topology = build_branch_topology(events)
+            return topology.active_branch_id or topology.root_branch_id
+        return "root"
 
     def rebuild_session_view(self, session_id: str) -> SessionView:
         """按事件序列重建会话视图。"""
+        from lanscoder.session.projection import active_projection
+
         view = SessionView(session_id=session_id)
-        for sequence, event in enumerate(self.list_events(session_id), start=1):
-            self._apply_event(view, event, sequence=sequence)
+        for event in active_projection(self.list_events(session_id)):
+            self._apply_event(view, event, sequence=event.sequence)
         return view
 
     def original_user_message_texts(self, session_id: str) -> dict[str, str]:
         """返回各 user 消息的原始文本映射。"""
+        from lanscoder.session.projection import active_projection
 
         texts: dict[str, str] = {}
-        for event in self.list_events(session_id):
-            if event.type != "user_message":
+        for event in active_projection(self.list_events(session_id)):
+            if event.kind != "message.appended" or event.data.get("role") != "user":
                 continue
-            message_id = str(event.payload.get("message_id") or "")
+            message_id = str(event.data.get("message_id") or "")
             if not message_id:
                 continue
-            texts[message_id] = "\n".join(str(part.get("content") or "") for part in event.payload.get("parts") or [] if isinstance(part, dict) and part.get("kind") == "text" and part.get("content"))
+            texts[message_id] = "\n".join(str(part.get("content") or "") for part in event.data.get("parts") or [] if isinstance(part, dict) and part.get("kind") == "text" and part.get("content"))
         return texts
 
     def _session_path(self, session_id: str) -> Path:
@@ -150,8 +198,12 @@ class JsonlSessionStore:
             SessionIndex(self.root).rebuild_session(session_id)
             return True
 
-    def _apply_event(self, view: SessionView, event: SessionEvent, *, sequence: int) -> None:
-        """把单个事件应用到视图。"""
+    def _apply_event(self, view: SessionView, event: SessionEvent | JournalEnvelope, *, sequence: int) -> None:
+        """Apply one persistent envelope or one in-memory legacy event."""
+        if isinstance(event, JournalEnvelope):
+            self._apply_journal_envelope(view, event, sequence=sequence)
+            return
+
         if event.type in {"session_created", "session_metadata_updated"}:
             view.metadata = merge_metadata_patch(view.metadata, event.payload)
             view.metadata["session_id"] = event.session_id
@@ -180,18 +232,80 @@ class JsonlSessionStore:
         message = _message_from_event(event, role=role)
         view.messages.append(message)
 
+    @staticmethod
+    def _apply_journal_envelope(view: SessionView, event: JournalEnvelope, *, sequence: int) -> None:
+        kind = event.kind
+        data = event.data
+        if kind in {"session.created", "session.metadata_updated"}:
+            view.metadata = merge_metadata_patch(view.metadata, data)
+            view.metadata["session_id"] = event.session_id
+            return
+
+        if kind == "checkpoint.created":
+            view.checkpoints.append(
+                Checkpoint.from_dict(
+                    _checkpoint_payload_from_data(
+                        data,
+                        session_id=event.session_id,
+                        occurred_at=event.occurred_at,
+                        sequence=sequence,
+                    )
+                )
+            )
+            return
+
+        if kind == "compaction.completed":
+            _apply_compaction_replacements_from_data(view, data)
+            return
+
+        if kind == "message.part.metadata.updated":
+            _apply_message_part_metadata_update_from_data(view, data)
+            return
+
+        if kind == "task.plan.updated":
+            _apply_task_plan_payload_from_data(view, data, event_id=event.event_id)
+            return
+
+        if kind != "message.appended":
+            return
+        role = str(data.get("role") or "")
+        if role not in {"user", "assistant", "tool", "notification"}:
+            return
+        view.messages.append(
+            _message_from_payload(
+                data,
+                session_id=event.session_id,
+                occurred_at=event.occurred_at,
+                role=role,
+            )
+        )
+
 
 def _message_from_event(event: SessionEvent, *, role: str) -> AgentMessage:
     """从事件构造 AgentMessage。"""
-    payload = event.payload
+    return _message_from_payload(
+        event.payload,
+        session_id=event.session_id,
+        occurred_at=event.created_at,
+        role=role,
+    )
+
+
+def _message_from_payload(
+    payload: dict,
+    *,
+    session_id: str,
+    occurred_at: str,
+    role: str,
+) -> AgentMessage:
     message_id = str(payload["message_id"])
     parts = _parts_from_payload(payload.get("parts", []), message_id=message_id)
     return AgentMessage(
         id=message_id,
-        session_id=event.session_id,
+        session_id=session_id,
         role=role,
         parts=parts,
-        created_at=event.created_at,
+        created_at=occurred_at,
         metadata=dict(payload.get("metadata") or {}),
     )
 
@@ -208,16 +322,35 @@ def _parts_from_payload(parts: Iterable[dict[str, object]], *, message_id: str) 
 
 def _checkpoint_payload(event: SessionEvent, *, sequence: int) -> dict[str, object]:
     """补齐检查点载荷的缺省字段。"""
-    payload: dict[str, object] = dict(event.payload)
-    payload.setdefault("created_at", event.created_at)
-    payload.setdefault("session_id", event.session_id)
+    return _checkpoint_payload_from_data(
+        event.payload,
+        session_id=event.session_id,
+        occurred_at=event.created_at,
+        sequence=sequence,
+    )
+
+
+def _checkpoint_payload_from_data(
+    data: dict,
+    *,
+    session_id: str,
+    occurred_at: str,
+    sequence: int,
+) -> dict[str, object]:
+    payload: dict[str, object] = dict(data)
+    payload.setdefault("created_at", occurred_at)
+    payload.setdefault("session_id", session_id)
     payload.setdefault("sequence", sequence)
     return payload
 
 
 def _apply_compaction_replacements(view: SessionView, event: SessionEvent) -> None:
     """把压缩事件的部件替换应用到视图。"""
-    event_payload = event.payload.get("event")
+    _apply_compaction_replacements_from_data(view, event.payload)
+
+
+def _apply_compaction_replacements_from_data(view: SessionView, data: dict) -> None:
+    event_payload = data.get("event")
     if not isinstance(event_payload, dict):
         return
 
@@ -249,9 +382,13 @@ def _apply_compaction_replacements(view: SessionView, event: SessionEvent) -> No
 
 def _apply_message_part_metadata_update(view: SessionView, event: SessionEvent) -> None:
     """把消息部件的元数据更新应用到视图。"""
-    message_id = str(event.payload.get("message_id") or "")
-    part_id = str(event.payload.get("part_id") or "")
-    metadata = event.payload.get("metadata")
+    _apply_message_part_metadata_update_from_data(view, event.payload)
+
+
+def _apply_message_part_metadata_update_from_data(view: SessionView, data: dict) -> None:
+    message_id = str(data.get("message_id") or "")
+    part_id = str(data.get("part_id") or "")
+    metadata = data.get("metadata")
     if not message_id or not part_id or not isinstance(metadata, dict):
         return
     for message in view.messages:
@@ -265,21 +402,25 @@ def _apply_message_part_metadata_update(view: SessionView, event: SessionEvent) 
 
 def _apply_task_plan_payload(view: SessionView, event: SessionEvent) -> None:
     """校验并应用任务计划更新事件。"""
+    _apply_task_plan_payload_from_data(view, event.payload, event_id=event.id)
+
+
+def _apply_task_plan_payload_from_data(view: SessionView, data: dict, *, event_id: str) -> None:
     try:
-        plan = TaskPlan.from_dict(event.payload.get("snapshot"))  # type: ignore[arg-type]
+        plan = TaskPlan.from_dict(data.get("snapshot"))  # type: ignore[arg-type]
         validate_plan(plan)
     except (TaskPlanError, TypeError) as error:
-        raise SessionStoreCorruptError(f"invalid task_plan_updated snapshot in event {event.id}: {error}") from error
+        raise SessionStoreCorruptError(f"invalid task_plan_updated snapshot in event {event_id}: {error}") from error
 
-    previous_revision = event.payload.get("previous_revision")
-    revision = event.payload.get("revision")
+    previous_revision = data.get("previous_revision")
+    revision = data.get("revision")
     if isinstance(previous_revision, bool) or not isinstance(previous_revision, int) or isinstance(revision, bool) or not isinstance(revision, int):
-        raise SessionStoreCorruptError(f"task_plan_updated revision chain is invalid in event {event.id}")
+        raise SessionStoreCorruptError(f"task_plan_updated revision chain is invalid in event {event_id}")
     expected_previous = view.task_plan.revision if view.task_plan is not None else 0
     if previous_revision != expected_previous or revision != previous_revision + 1:
-        raise SessionStoreCorruptError(f"task_plan_updated revision chain is invalid in event {event.id}: " f"expected previous {expected_previous}, got {previous_revision} -> {revision}")
+        raise SessionStoreCorruptError(f"task_plan_updated revision chain is invalid in event {event_id}: " f"expected previous {expected_previous}, got {previous_revision} -> {revision}")
     if revision != plan.revision:
-        raise SessionStoreCorruptError(f"task_plan_updated revision mismatch in event {event.id}")
+        raise SessionStoreCorruptError(f"task_plan_updated revision mismatch in event {event_id}")
     view.task_plan = plan
 
 

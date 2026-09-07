@@ -8,13 +8,15 @@ policy.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from lanscoder.session.errors import SessionNotFoundError
+from lanscoder.storage.paths import project_id_for_path as _project_id_for_path
 
 
 PRIMARY_KIND = "primary"
@@ -26,16 +28,9 @@ class SessionAccessError(ValueError):
 
 
 def project_id_for_path(path: str | os.PathLike[str]) -> str:
-    """Return the stable identity for a project path.
+    """Return the canonical storage project identity for a project path."""
 
-    ``resolve(strict=False)`` deliberately permits a not-yet-created project
-    directory.  ``normcase`` keeps the identity consistent on case-folding
-    platforms while leaving case-sensitive platforms unchanged.
-    """
-
-    resolved = Path(path).resolve(strict=False)
-    normalized = os.path.normcase(str(resolved))
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return _project_id_for_path(path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,7 +148,7 @@ class SessionAccessPolicy:
             try:
                 value = method(session_id)
                 return value if value else None
-            except (KeyError, LookupError):
+            except (KeyError, LookupError, SessionNotFoundError):
                 return None
         read_events = getattr(self.journal, "read_events", None)
         if read_events is not None:

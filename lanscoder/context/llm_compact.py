@@ -12,6 +12,8 @@ from lanscoder.context.runtime_state import SessionRuntimeState, auto_compact_ci
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.tool_sequence import InvalidToolCallSequenceError, validate_tool_call_sequence
 from lanscoder.context.versions import CHECKPOINT_STRATEGY_VERSION
+from lanscoder.observability.models import TraceScope
+from lanscoder.session.branch import SessionBranchContext
 
 CompactMode = Literal["auto", "manual"]
 
@@ -87,6 +89,9 @@ class LlmCompactRequest:
     summary_mode: str = "default"
     current_turn: int = 0
     recent_turn_window: int = 10
+    trace_scope: TraceScope | None = None
+    trace_id: str | None = None
+    branch_context: SessionBranchContext | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +109,7 @@ class LlmCompactEvent:
 class LlmCompactCandidate:
     checkpoint: Checkpoint | None
     event: LlmCompactEvent
+    branch_context: SessionBranchContext | None = None
 
 
 @dataclass(slots=True)
@@ -147,6 +153,12 @@ class LlmCompactService:
         while True:
             attempts += 1
             try:
+                _configure_summarizer(
+                    self.summarizer,
+                    request,
+                    attempt_index=attempts,
+                    retry_sequence=retries,
+                )
                 summary = _summarize(
                     self.summarizer,
                     source_messages,
@@ -174,16 +186,17 @@ class LlmCompactService:
                         retry_count=retries,
                         checkpoint_id=checkpoint.id,
                     ),
+                    branch_context=request.branch_context,
                 )
             except UnconsumedLlmCheckpointBoundaryError:
-                return _failed_candidate(source_fingerprint, retries, "unconsumed_boundary")
+                return _failed_candidate(source_fingerprint, retries, "unconsumed_boundary", branch_context=request.branch_context)
             except InvalidLlmCheckpointBoundaryError:
-                return _failed_candidate(source_fingerprint, retries, "invalid_tool_sequence")
+                return _failed_candidate(source_fingerprint, retries, "invalid_tool_sequence", branch_context=request.branch_context)
             except (PromptTooLongError, CompactTimeoutError, NoSummaryError) as error:
                 reason = _failure_reason(error)
                 decision = self.retry_policy.decide(reason, attempt=attempts)
                 if not decision.should_retry:
-                    return _failed_candidate(source_fingerprint, retries, reason)
+                    return _failed_candidate(source_fingerprint, retries, reason, branch_context=request.branch_context)
                 retries += 1
 
     def commit_candidate(
@@ -191,18 +204,28 @@ class LlmCompactService:
         candidate: LlmCompactCandidate,
         *,
         runtime_state: SessionRuntimeState,
+        branch_context: SessionBranchContext | None = None,
     ) -> Checkpoint:
         checkpoint = candidate.checkpoint
         if checkpoint is None or candidate.event.status != "success":
             raise ValueError("only successful L3 candidates can be committed")
-        self.store.append_event(
-            SessionEvent(
-                id=new_event_id(),
+        captured_branch = branch_context or candidate.branch_context
+        if captured_branch is not None and hasattr(self.store, "append_journal_event"):
+            self.store.append_journal_event(
                 session_id=checkpoint.session_id,
-                type="checkpoint_created",
-                payload=checkpoint.to_dict(),
+                kind="checkpoint.created",
+                data=checkpoint.to_dict(),
+                branch_id=captured_branch.branch_id,
             )
-        )
+        else:
+            self.store.append_event(
+                SessionEvent(
+                    id=new_event_id(),
+                    session_id=checkpoint.session_id,
+                    type="checkpoint_created",
+                    payload=checkpoint.to_dict(),
+                )
+            )
         runtime_state.latest_checkpoint_id = checkpoint.id
         runtime_state.last_compaction_input_fingerprint = candidate.event.source_fingerprint
         return checkpoint
@@ -384,6 +407,8 @@ def _failed_candidate(
     source_fingerprint: str,
     retry_count: int,
     failure_reason: str,
+    *,
+    branch_context: SessionBranchContext | None = None,
 ) -> LlmCompactCandidate:
     return LlmCompactCandidate(
         checkpoint=None,
@@ -393,6 +418,7 @@ def _failed_candidate(
             retry_count=retry_count,
             failure_reason=failure_reason,
         ),
+        branch_context=branch_context,
     )
 
 
@@ -414,6 +440,25 @@ def _summarize(
         summary=summary.summary,
         tail_start_message_id=summary.tail_start_message_id,
         covered_until_message_id=summary.covered_until_message_id,
+    )
+
+
+def _configure_summarizer(
+    summarizer: LlmCompactSummarizer,
+    request: LlmCompactRequest,
+    *,
+    attempt_index: int,
+    retry_sequence: int,
+) -> None:
+    setter = getattr(summarizer, "set_trace_context", None)
+    if not callable(setter):
+        return
+    setter(
+        scope=request.trace_scope,
+        trace_id=request.trace_id,
+        parent_observation_id=(request.trace_scope.parent_observation_id if request.trace_scope is not None else None),
+        attempt_index=attempt_index,
+        retry_sequence=retry_sequence,
     )
 
 

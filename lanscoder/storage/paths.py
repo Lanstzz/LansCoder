@@ -108,5 +108,9 @@ class LansCoderPaths:
     def session_lock(self, session_id: str) -> Path:
         return self.locks / f"{session_id}.lock"
 
+    @property
+    def index_lock(self) -> Path:
+        return self.locks / "index.lock"
+
     def payload(self, sha256: str) -> Path:
         return self.payloads / sha256
