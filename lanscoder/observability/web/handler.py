@@ -10,7 +10,7 @@ from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-from .api import ObservatoryNotFound, ObservatoryQueryService, json_bytes, parse_query
+from .api import ObservatoryProblem, ObservatoryQueryService, json_bytes, parse_query
 
 
 class ObservatoryRequestHandler(BaseHTTPRequestHandler):
@@ -35,20 +35,26 @@ class ObservatoryRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/v1/sessions":
                 self._json(self.query_service.list_sessions())
             elif path.startswith("/api/v1/sessions/") and path.endswith("/replay") and _is_exact(path, "/api/v1/sessions/", 5):
-                self._json(self.query_service.replay_session(_component(path, 3)))
+                branch = _single_query_value(parse_query(parsed.query), "branch")
+                self._json(self.query_service.replay_session(_component(path, 3), branch))
             elif path.startswith("/api/v1/payloads/") and _is_exact(path, "/api/v1/payloads/", 4):
-                data, media_type = self.query_service.read_payload(_component(path, 3))
+                size_bytes = _single_query_value(parse_query(parsed.query), "size_bytes")
+                data, media_type = self.query_service.read_payload(_component(path, 3), size_bytes)
                 self._bytes(data, media_type)
-            elif path == "/" or path.startswith("/traces/") or path.startswith("/sessions/"):
+            elif path == "/" or path == "/traces" or path == "/sessions":
+                self._static("index.html")
+            elif path.startswith("/traces/") and _is_exact(path, "/traces/", 2):
+                self._static("index.html")
+            elif path.startswith("/sessions/") and _is_exact(path, "/sessions/", 2):
                 self._static("index.html")
             elif path.startswith("/static/"):
                 self._static(path.removeprefix("/static/"))
             else:
-                self.send_error(HTTPStatus.NOT_FOUND)
-        except ObservatoryNotFound:
-            self.send_error(HTTPStatus.NOT_FOUND)
+                self._problem("not_found", "resource not found", HTTPStatus.NOT_FOUND)
+        except ObservatoryProblem as error:
+            self._json(error.to_dict(), status=error.status)
         except (ValueError, KeyError):
-            self.send_error(HTTPStatus.NOT_FOUND)
+            self._problem("not_found", "resource not found", HTTPStatus.NOT_FOUND)
 
     def do_HEAD(self) -> None:  # noqa: N802
         self._method_not_allowed()
@@ -88,11 +94,14 @@ class ObservatoryRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def _json(self, value: Any) -> None:
-        self._bytes(json_bytes(value), "application/json; charset=utf-8")
+    def _json(self, value: Any, *, status: int = HTTPStatus.OK) -> None:
+        self._bytes(json_bytes(value), "application/json; charset=utf-8", status=status)
 
-    def _bytes(self, value: bytes, content_type: str) -> None:
-        self.send_response(HTTPStatus.OK)
+    def _problem(self, code: str, message: str, status: int) -> None:
+        self._json({"error": {"code": code, "message": message, "resource": {}}}, status=status)
+
+    def _bytes(self, value: bytes, content_type: str, *, status: int = HTTPStatus.OK) -> None:
+        self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(value)))
         self.end_headers()
@@ -101,10 +110,10 @@ class ObservatoryRequestHandler(BaseHTTPRequestHandler):
     def _static(self, name: str) -> None:
         clean = PurePosixPath(name)
         if clean.is_absolute() or ".." in clean.parts or str(clean) in {"", "."}:
-            raise ObservatoryNotFound(name)
+            raise ObservatoryProblem("not_found", "resource not found", status=404)
         resource = files("lanscoder.observability.web").joinpath("static", *clean.parts)
         if not resource.is_file():
-            raise ObservatoryNotFound(name)
+            raise ObservatoryProblem("not_found", "resource not found", status=404)
         content_type = mimetypes.guess_type(str(clean))[0] or "application/octet-stream"
         if content_type.startswith("text/") or content_type in {"application/javascript", "application/json"}:
             content_type += "; charset=utf-8"
@@ -118,10 +127,17 @@ def _component(path: str, index: int) -> str:
     parts = path.split("/")
     component_index = index + 1
     if len(parts) <= component_index or not parts[component_index]:
-        raise ObservatoryNotFound(path)
+        raise ObservatoryProblem("not_found", "resource not found", status=404)
     return parts[component_index]
 
 
 def _is_exact(path: str, prefix: str, expected_parts: int) -> bool:
     parts = path.split("/")
     return path.startswith(prefix) and len(parts) == expected_parts + 1 and all(parts[1:])
+
+
+def _single_query_value(query: dict[str, list[str]], name: str) -> str | None:
+    values = query.pop(name, [])
+    if len(values) > 1 or query:
+        raise ObservatoryProblem("invalid_query", "invalid query parameters", status=400)
+    return values[0] if values else None

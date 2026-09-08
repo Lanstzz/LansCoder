@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from lanscoder.session.errors import SessionNotFoundError
 from lanscoder.storage.paths import project_id_for_path as _project_id_for_path
@@ -84,7 +84,13 @@ class SessionAccessPolicy:
             raise SessionAccessError(f"session already exists: {resolved_id}")
         values = dict(metadata or {})
         values.update(extra_metadata)
-        values.update({"project_id": self.project_id, "kind": PRIMARY_KIND})
+        values.update(
+            {
+                "project_id": self.project_id,
+                "project_root": str(self.project_root.resolve(strict=False)),
+                "kind": PRIMARY_KIND,
+            }
+        )
         return SessionAccessDescriptor(
             session_id=resolved_id,
             project_id=self.project_id,
@@ -204,20 +210,109 @@ class SessionAccessPolicy:
 class ChildSessionFactory:
     """The sole session-creation boundary for persistent subagent sessions."""
 
-    policy: SessionAccessPolicy
+    policy: SessionAccessPolicy | None
+    constructor: Callable[..., Any] | None = None
+    allow_standalone_for_tests: bool = False
+
+    @classmethod
+    def standalone_for_tests(cls, constructor: Callable[..., Any]) -> "ChildSessionFactory":
+        """Build the explicit test-only adapter for engines without project state."""
+        return cls(policy=None, constructor=constructor, allow_standalone_for_tests=True)
+
+    def create_child_session(
+        self,
+        *,
+        parent_session_id: str,
+        parent_trace_id: str | None,
+        project_id: str | None,
+        worktree_metadata: Mapping[str, Any],
+        delegate_role: str | None = None,
+        delegate_task: str | None = None,
+        triggering_observation_id: str | None = None,
+        session_id: str | None = None,
+        session_arguments: Mapping[str, Any],
+    ) -> Any:
+        """Authorize and construct one child through the installed boundary."""
+        descriptor = self._authorize_child(
+            parent_session_id=parent_session_id,
+            parent_trace_id=parent_trace_id,
+            project_id=project_id,
+            worktree_metadata=worktree_metadata,
+            delegate_role=delegate_role,
+            delegate_task=delegate_task,
+            triggering_observation_id=triggering_observation_id,
+            session_id=session_id,
+        )
+        if self.constructor is None:
+            raise SessionAccessError("child session constructor is not installed")
+        return self.constructor(descriptor, **dict(session_arguments))
+
+    def _authorize_child(
+        self,
+        *,
+        parent_session_id: str,
+        parent_trace_id: str | None,
+        project_id: str | None,
+        worktree_metadata: Mapping[str, Any],
+        delegate_role: str | None,
+        delegate_task: str | None,
+        triggering_observation_id: str | None,
+        session_id: str | None,
+    ) -> SessionAccessDescriptor:
+        if self.policy is not None:
+            return self.create_child(
+                parent_session_id=parent_session_id,
+                parent_trace_id=parent_trace_id,
+                project_id=project_id,
+                worktree_metadata=worktree_metadata,
+                delegate_role=delegate_role,
+                delegate_task=delegate_task,
+                triggering_observation_id=triggering_observation_id,
+                session_id=session_id,
+            )
+        if not self.allow_standalone_for_tests:
+            raise SessionAccessError("subagent child session requires an access policy")
+        child_id = session_id or _new_session_id()
+        metadata: dict[str, Any] = {
+            "kind": SUBAGENT_KIND,
+            "parent_session_id": parent_session_id,
+            "worktree_metadata": dict(worktree_metadata),
+        }
+        if project_id is not None:
+            metadata["project_id"] = project_id
+        if parent_trace_id is not None:
+            metadata["parent_trace_id"] = parent_trace_id
+        if delegate_role is not None:
+            metadata["delegate_role"] = delegate_role
+        if delegate_task is not None:
+            metadata["delegate_task"] = delegate_task
+        if triggering_observation_id is not None:
+            metadata["parent_observation_id"] = triggering_observation_id
+            metadata["triggering_observation_id"] = triggering_observation_id
+        return SessionAccessDescriptor(
+            session_id=child_id,
+            project_id=project_id or "",
+            kind=SUBAGENT_KIND,
+            parent_session_id=parent_session_id,
+            parent_trace_id=parent_trace_id,
+            worktree_metadata=dict(worktree_metadata),
+            metadata=metadata,
+        )
 
     def create_child(
         self,
         *,
         parent_session_id: str,
         parent_trace_id: str,
-        project_id: str,
+        project_id: str | None,
         worktree_metadata: Mapping[str, Any],
         delegate_role: str | None = None,
         delegate_task: str | None = None,
         triggering_observation_id: str | None = None,
         session_id: str | None = None,
     ) -> SessionAccessDescriptor:
+        if self.policy is None:
+            raise SessionAccessError("subagent child session requires an access policy")
         if project_id != self.policy.project_id:
             raise SessionAccessError("subagent project_id must match its parent project")
         if not parent_trace_id:

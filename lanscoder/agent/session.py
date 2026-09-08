@@ -41,6 +41,7 @@ from lanscoder.skills.models import SkillCatalog
 from lanscoder.storage import LansCoderPaths
 from lanscoder.observability.models import TraceScope
 from lanscoder.session.branch import SessionBranchContext
+from lanscoder.session.access import SessionAccessDescriptor
 from lanscoder.observability.protocol import TraceRecorder
 
 if TYPE_CHECKING:
@@ -48,6 +49,29 @@ if TYPE_CHECKING:
     from lanscoder.memory.manager import MemoryManager
 
 DEFAULT_BASE_RULES = "你是 LansCoder，一个本地 AI coding agent。请遵守项目规则并优先保持上下文可恢复。"
+
+
+def create_authorized_child_session(
+    descriptor: SessionAccessDescriptor,
+    *,
+    store: JsonlSessionStore,
+    agents_md: str,
+    skill_catalog: SkillCatalog,
+    tools: list[Tool],
+    permission_manager: PermissionManager,
+    sandbox_access: SandboxAccess,
+) -> "AgentSession":
+    """Construct a policy-authorized child session from its immutable descriptor."""
+    return AgentSession.create(
+        store=store,
+        session_id=descriptor.session_id,
+        agents_md=agents_md,
+        skill_catalog=skill_catalog,
+        tools=tools,
+        permission_manager=permission_manager,
+        sandbox_access=sandbox_access,
+        session_metadata=descriptor.metadata,
+    )
 
 
 @dataclass(slots=True)
@@ -450,7 +474,7 @@ class AgentSession:
 
         prepared_attachments = prepare_attachments_for_session(
             attachments or [],
-            store_root=self.store.root,
+            paths=LansCoderPaths(storage_root=self.store.root),
             session_id=self.session_id,
         )
         message_id = self.writer.append_user_message(

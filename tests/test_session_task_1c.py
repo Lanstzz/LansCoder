@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from lanscoder.context.events import SessionEvent
+from lanscoder.context.compaction import CompactionPipeline, CompactionRequest
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.writer import SessionEventWriter
 from lanscoder.app.session_commands import SessionCommandHandler
@@ -53,9 +54,7 @@ def test_session_index_uses_independent_lock_atomic_replace_and_watermark(tmp_pa
 
 
 @pytest.mark.parametrize("index_contents", [None, "{not json}", '{"version": 1, "sessions": {}}'])
-def test_session_index_rebuilds_missing_stale_or_corrupt_index_from_journals(
-    tmp_path: Path, index_contents: str | None
-) -> None:
+def test_session_index_rebuilds_missing_stale_or_corrupt_index_from_journals(tmp_path: Path, index_contents: str | None) -> None:
     store, writer = _primary_writer(tmp_path, "sess_rebuild", title="Rebuilt")
     writer.append_user_message("from journal")
     index_path = store.root / "indexes" / "sessions.json"
@@ -96,9 +95,7 @@ def test_session_index_rebuilds_when_a_record_field_is_malformed(tmp_path: Path)
 
     records = SessionIndex(store.root).list_records()
 
-    assert [(record.session_id, record.message_count, record.status) for record in records] == [
-        ("sess_malformed_index", 1, "ok")
-    ]
+    assert [(record.session_id, record.message_count, record.status) for record in records] == [("sess_malformed_index", 1, "ok")]
 
 
 def test_session_index_rebuilds_malformed_json_when_no_journals_exist(tmp_path: Path) -> None:
@@ -262,6 +259,7 @@ def test_fork_copies_only_active_projection_with_fresh_ids_and_retrievable_archi
         },
     )
     second_message_id = SessionEventWriter(store=store, session_id="sess_source").append_user_message("active after recall")
+    source_second_part_id = store.rebuild_session_view("sess_source").messages[-1].parts[0].id
     checkpoint = {
         "id": "ckpt_source",
         "session_id": "sess_source",
@@ -272,6 +270,18 @@ def test_fork_copies_only_active_projection_with_fresh_ids_and_retrievable_archi
         "strategy_version": "v1",
     }
     store.append_event(SessionEvent(id="evt_checkpoint", session_id="sess_source", type="checkpoint_created", payload=checkpoint))
+    store.append_journal_event(
+        session_id="sess_source",
+        kind="provider.projection.consumed",
+        branch_id=child_branch,
+        data={
+            "request_id": "req_source",
+            "projection_fingerprint": "fingerprint",
+            "part_ids": [source_second_part_id],
+            "provider": "fake",
+            "model": "fake-model",
+        },
+    )
     archive_dir = paths.archives / "sess_source"
     archive_dir.mkdir(parents=True)
     (archive_dir / "ar_saved.txt").write_text("archived evidence", encoding="utf-8")
@@ -290,6 +300,23 @@ def test_fork_copies_only_active_projection_with_fresh_ids_and_retrievable_archi
     forked_checkpoint = forked_view.checkpoints[0]
     assert forked_checkpoint.id != "ckpt_source"
     assert forked_checkpoint.session_id == result.session.session_id
+    assert forked_checkpoint.tail_start_message_id == forked_view.messages[-1].id
+    assert forked_checkpoint.covered_until_message_id == forked_view.messages[-1].id
+    assert forked_checkpoint.tail_start_message_id != second_message_id
+    assert forked_checkpoint.covered_until_message_id != second_message_id
+    forked_projection = next(event for event in forked_events if event.kind == "provider.projection.consumed")
+    assert forked_projection.data["part_ids"] == [forked_view.messages[-1].parts[0].id]
+    assert forked_projection.data["part_ids"] != [source_second_part_id]
+    compaction = CompactionPipeline(paths).compact(
+        CompactionRequest(
+            view=forked_view,
+            target_tokens=0,
+            current_turn=2,
+            estimate_tokens=lambda _view: 1,
+            consumed_tool_result_part_ids=frozenset(),
+        )
+    )
+    assert compaction.view.messages[-1].id == forked_checkpoint.tail_start_message_id
     assert all(event.session_id == result.session.session_id for event in forked_events)
     assert (paths.archives / result.session.session_id / "ar_saved.txt").read_text(encoding="utf-8") == "archived evidence"
 
@@ -347,18 +374,8 @@ def test_fork_allocates_and_consistently_remaps_tool_call_ids(tmp_path: Path) ->
 
     result = ForkSessionService(store=store, project_root=tmp_path, paths=paths).fork("sess_tool_source")
     messages = result.session.rebuild_view().messages
-    tool_call_id = next(
-        part.metadata["tool_call_id"]
-        for message in messages
-        for part in message.parts
-        if part.kind == "tool_call"
-    )
-    tool_result_id = next(
-        part.metadata["tool_call_id"]
-        for message in messages
-        for part in message.parts
-        if part.kind == "tool_result"
-    )
+    tool_call_id = next(part.metadata["tool_call_id"] for message in messages for part in message.parts if part.kind == "tool_call")
+    tool_result_id = next(part.metadata["tool_call_id"] for message in messages for part in message.parts if part.kind == "tool_result")
 
     assert tool_call_id == tool_result_id
     assert tool_call_id != "call_source"

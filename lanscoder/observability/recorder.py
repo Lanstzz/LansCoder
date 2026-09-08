@@ -110,7 +110,10 @@ class JournalTraceRecorder:
                     reference = self.record_payload(safe_output, force_reference=True, trace_id=trace_id, scope=scope)
                     if reference is not None:
                         data["output_ref"] = reference
-                if "output_ref" not in data:
+                    else:
+                        data["output_ref"] = {"unavailable": True, "reason": "payload_persistence_failed"}
+                        data["evidence_incomplete"] = True
+                else:
                     data["final_output"] = safe_output
             elif output_ref is not None:
                 data["output_ref"] = json_safe(output_ref)
@@ -171,6 +174,7 @@ class JournalTraceRecorder:
                     if reference is not None:
                         event_data["payload_ref"] = reference
                     else:
+                        event_data["payload_ref"] = {"unavailable": True, "reason": "payload_persistence_failed"}
                         event_data["evidence_incomplete"] = True
             if observation_id in self._observation_started:
                 event_data["duration_ms"] = max(0, int((self._monotonic() - self._observation_started[observation_id]) * 1000))

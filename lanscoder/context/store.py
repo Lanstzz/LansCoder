@@ -87,10 +87,28 @@ class JsonlSessionStore:
             SessionIndex(self.root).update_event(envelope)
             return envelope
 
-    def append_journal_event(self, *, session_id: str, kind: str, data: dict, branch_id: str | None = None) -> JournalEnvelope:
+    def append_journal_event(
+        self,
+        *,
+        session_id: str,
+        kind: str,
+        data: dict,
+        trace_id: str | None = None,
+        observation_id: str | None = None,
+        parent_observation_id: str | None = None,
+        branch_id: str | None = None,
+    ) -> JournalEnvelope:
         """Append one schema-v1 event and update its derived session index."""
         with self._lock:
-            envelope = self.journal.append(kind, data, session_id=session_id, branch_id=branch_id)
+            envelope = self.journal.append(
+                kind,
+                data,
+                session_id=session_id,
+                trace_id=trace_id,
+                observation_id=observation_id,
+                parent_observation_id=parent_observation_id,
+                branch_id=branch_id,
+            )
             from lanscoder.session.index import SessionIndex
 
             SessionIndex(self.root).update_event(envelope)

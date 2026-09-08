@@ -27,7 +27,6 @@ class SessionRuntimeLike(Protocol):
 
 @dataclass(slots=True)
 class SessionCommandHandler:
-
     catalog: SessionCatalog
     access_policy: SessionAccessPolicy | None = None
     current_session: SessionRuntimeLike | None = None
@@ -94,7 +93,7 @@ class SessionCommandHandler:
         visible = records[:SESSION_LIST_VISIBLE_LIMIT]
         lines = [_session_list_header(len(visible), len(records))]
         for record in visible:
-            lines.append("- " f"{record.session_id} " f"{record.title} " f"updated={display_value(record.updated_at)} " f"messages={record.message_count} " f"status={record.status}")
+            lines.append(f"- {record.session_id} {record.title} updated={display_value(record.updated_at)} messages={record.message_count} status={record.status}")
         return "\n".join(lines)
 
     def _new(self, args: list[str]) -> str:
@@ -113,6 +112,7 @@ class SessionCommandHandler:
         source_session_id = self._current_session_id()
         if source_session_id is None:
             return "Fork unavailable: no current session"
+        self._access_policy().open_primary(source_session_id)
         title = " ".join(args).strip()
         result = self.fork_service.fork(source_session_id, title=title or None)
         self.current_session = result.session
@@ -123,8 +123,7 @@ class SessionCommandHandler:
     def _show_session(self, args: list[str]) -> str:
         if len(args) != 1:
             return "Usage: /session <session_id>"
-        policy = self.access_policy or SessionAccessPolicy(self.catalog.root.parent, journal=self.catalog, project_id=self.catalog.project_id)
-        policy.open_primary(args[0])
+        self._access_policy().open_primary(args[0])
         return _render_session_record(self.catalog.get_session(args[0]))
 
     def _resume(self, args: list[str]) -> CommandResult:
@@ -135,6 +134,7 @@ class SessionCommandHandler:
         if self.resume_service is None:
             return CommandResult(handled=True, output="Resume unavailable: resume service is not configured")
 
+        self._access_policy().open_primary(args[0])
         result = self.resume_service.resume(args[0])
         self.current_session = result.session
         if self.on_resume is not None:
@@ -146,7 +146,14 @@ class SessionCommandHandler:
         )
 
     def _resume_picker(self) -> CommandResult:
-        records = self.catalog.list_sessions()
+        policy = self._access_policy()
+        records = []
+        for record in self.catalog.list_sessions():
+            try:
+                policy.open_primary(record.session_id)
+            except SessionAccessError:
+                continue
+            records.append(record)
         if not records:
             return CommandResult(handled=True, output="No sessions.")
         return CommandResult(
@@ -202,6 +209,16 @@ class SessionCommandHandler:
         if self.current_session is None:
             return None
         return self.current_session.session_id
+
+    def _access_policy(self) -> SessionAccessPolicy:
+        if self.access_policy is not None:
+            return self.access_policy
+        project_root = self.resume_service.project_root if self.resume_service is not None else self.fork_service.project_root if self.fork_service is not None else self.catalog.root.parent
+        return SessionAccessPolicy(
+            project_root,
+            journal=self.catalog,
+            project_id=self.catalog.project_id,
+        )
 
 
 def _render_session_record(record: SessionRecord) -> str:

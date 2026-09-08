@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Callable
 
 from lanscoder.context.archive import ArchiveIntegrityError, ToolResultArchive
+from lanscoder.storage import LansCoderPaths
 from lanscoder.providers.types import ToolDefinition
 from lanscoder.tools.types import Tool, ToolResult, make_error_result, make_text_result
 
@@ -60,7 +60,7 @@ def _diagnostic(record, raw: str, max_chars: int) -> tuple[str, bool]:
     if max_chars < len(instruction):
         return _clip(instruction, max_chars)
 
-    metadata = f"Archive metadata: archive_id={record.archive_id}; " f"original_tokens={record.original_tokens}; original_chars={record.original_chars}."
+    metadata = f"Archive metadata: archive_id={record.archive_id}; original_tokens={record.original_tokens}; original_chars={record.original_chars}."
     base = f"{metadata}\n{instruction}"
     if len(base) > max_chars:
         return instruction, True
@@ -92,11 +92,10 @@ def _error(message: str) -> ToolResult:
 
 def create_retrieve_archive_tool(
     *,
-    archive_root: str | Path,
+    paths: LansCoderPaths,
     session_id: str,
     current_turn: Callable[[], int],
 ) -> Tool:
-
     def retrieve_archive(
         *,
         archive_id: str,
@@ -119,7 +118,7 @@ def create_retrieve_archive_tool(
             return _error("full must be a boolean.")
 
         try:
-            record, raw = ToolResultArchive(archive_root).read(session_id, archive_id)
+            record, raw = ToolResultArchive(paths).read(session_id, archive_id)
         except (ArchiveIntegrityError, FileNotFoundError, OSError, ValueError):
             return _error("The requested archive is unavailable or failed integrity validation.")
 
@@ -152,7 +151,7 @@ def create_retrieve_archive_tool(
     return Tool(
         definition=ToolDefinition(
             name="retrieve_archive",
-            description=("Retrieve the original content of a compacted tool result from this " "session. Use query for matching line windows or full=true for raw text."),
+            description=("Retrieve the original content of a compacted tool result from this session. Use query for matching line windows or full=true for raw text."),
             parameters={
                 "type": "object",
                 "properties": {

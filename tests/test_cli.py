@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 import lanscoder.cli as cli
 from lanscoder.agent.loop_limits import AgentLoopLimits
-from lanscoder.cli import CliConfig, main, read_message, run_repl
+from lanscoder.cli import CliConfig, build_parser, main, read_message, run_repl
 
 
 @dataclass
@@ -56,6 +56,50 @@ class FakeCliApp:
 
     def run(self) -> None:
         self.run_count += 1
+
+
+def test_observe_parser_accepts_an_optional_storage_root(tmp_path: Path) -> None:
+    args = build_parser().parse_args(["observe", "--storage-root", str(tmp_path / "observatory")])
+
+    assert args.command == "observe"
+    assert args.storage_root is None
+    assert args.observe_storage_root == str(tmp_path / "observatory")
+
+
+def test_observe_parser_keeps_parent_and_subcommand_storage_roots_distinct(tmp_path: Path) -> None:
+    args = build_parser().parse_args(["--storage-root", str(tmp_path / "parent"), "observe", "--storage-root", str(tmp_path / "child")])
+
+    assert args.storage_root == str(tmp_path / "parent")
+    assert args.observe_storage_root == str(tmp_path / "child")
+
+
+def test_observe_command_opens_foreground_server_and_closes_on_interrupt(monkeypatch, tmp_path: Path, capsys) -> None:
+    calls: list[object] = []
+
+    class FakeServer:
+        url = "http://127.0.0.1:43123/"
+
+        def __init__(self, paths) -> None:
+            calls.append(paths.storage_root)
+
+        def start(self):
+            calls.append("start")
+            return self
+
+        def serve_forever(self) -> None:
+            calls.append("serve_forever")
+            raise KeyboardInterrupt
+
+        def shutdown(self) -> None:
+            calls.append("shutdown")
+
+    monkeypatch.setattr(cli, "ObservatoryServer", FakeServer)
+    monkeypatch.setattr(cli, "open_observatory", lambda server: calls.append(server.url) or server.url)
+
+    assert main(["observe", "--storage-root", str(tmp_path / "observatory")]) == 0
+
+    assert calls == [tmp_path / "observatory", "start", "http://127.0.0.1:43123/", "serve_forever", "shutdown"]
+    assert "Observatory available at http://127.0.0.1:43123/" in capsys.readouterr().out
 
 
 def test_read_message_prefers_argument_over_stdin():
@@ -323,7 +367,7 @@ def test_run_repl_routes_next_line_to_pending_permission(capsys):
 
     assert runner.turns == ["write file"]
     assert runner.resumes == [("perm_1", "allow_once")]
-    assert capsys.readouterr().out == ("LansCoder> need permission\n" "Permission> Allow?\n" "Choose:\n" "  1. Deny\n" "  2. Allow once\n" "  3. Allow always for same scope\n" "LansCoder> done\n")
+    assert capsys.readouterr().out == ("LansCoder> need permission\nPermission> Allow?\nChoose:\n  1. Deny\n  2. Allow once\n  3. Allow always for same scope\nLansCoder> done\n")
 
 
 def test_run_repl_accepts_human_permission_aliases(capsys):

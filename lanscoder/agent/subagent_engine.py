@@ -14,7 +14,7 @@ from lanscoder.agent.background import BackgroundJobManager, current_job_id
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.observer import TurnObserver
 from lanscoder.agent.ports import SessionTurnRunner
-from lanscoder.agent.session import AgentSession
+from lanscoder.agent.session import AgentSession, create_authorized_child_session
 from lanscoder.agent.worktree import (
     Worktree,
     WorktreeDiff,
@@ -96,23 +96,26 @@ class SubagentEngine:
         self.limits = limits or DEFAULT_CHILD_LIMITS
         self.background_manager = background_manager
         self.child_runner_factory = child_runner_factory
+        self.allow_legacy_standalone_for_tests = allow_legacy_standalone_for_tests
         self.child_session_factory = self._build_child_session_factory()
         self.trace_recorder = trace_recorder
         self.trace_id = trace_id
         self.trace_scope = trace_scope
-        self.allow_legacy_standalone_for_tests = allow_legacy_standalone_for_tests
         self.foreground_progress: dict[str, Any] | None = None
 
-    def _build_child_session_factory(self) -> ChildSessionFactory | None:
+    def _build_child_session_factory(self) -> ChildSessionFactory:
         """Build the policy-backed child identity boundary when a project is known."""
 
+        if self.allow_legacy_standalone_for_tests:
+            return ChildSessionFactory.standalone_for_tests(create_authorized_child_session)
         if self.project_root is None:
-            return None
+            return ChildSessionFactory(policy=None)
         return ChildSessionFactory(
             SessionAccessPolicy(
                 self.project_root,
                 journal=SessionCatalog(self.store.root),
-            )
+            ),
+            constructor=create_authorized_child_session,
         )
 
     def profile(self, role: str) -> SubagentProfile | None:
@@ -433,13 +436,6 @@ class SubagentEngine:
         session_id = new_session_id()
         trace_context = trace_context or self._child_trace_context(request)
         resolved_worktree_metadata = dict(worktree_metadata or {})
-        session_metadata = self._resolve_child_session_metadata(
-            request,
-            profile=profile,
-            trace_context=trace_context,
-            worktree_metadata=resolved_worktree_metadata,
-            session_id=session_id,
-        )
         if request.run_in_background:
             permission_manager = self.permission_coordinator.child_permission_manager(
                 root=self.project_root,
@@ -452,15 +448,23 @@ class SubagentEngine:
                 mutation=False,
                 background=False,
             )
-        child = AgentSession.create(
-            store=self.store,
+        child = self.child_session_factory.create_child_session(
+            parent_session_id=request.parent_session_id,
+            parent_trace_id=trace_context.parent_trace_id,
+            project_id=self._project_id(request.parent_session_id),
+            worktree_metadata=resolved_worktree_metadata,
+            delegate_role=profile.role,
+            delegate_task=request.task,
+            triggering_observation_id=trace_context.parent_observation_id,
             session_id=session_id,
-            agents_md=self.agents_md,
-            skill_catalog=self.skill_catalog,
-            tools=self._supplied_tools_for_child(profile.role),
-            permission_manager=permission_manager,
-            sandbox_access=self.permission_coordinator.sandbox_access,
-            session_metadata=session_metadata,
+            session_arguments={
+                "store": self.store,
+                "agents_md": self.agents_md,
+                "skill_catalog": self.skill_catalog,
+                "tools": self._supplied_tools_for_child(profile.role),
+                "permission_manager": permission_manager,
+                "sandbox_access": self.permission_coordinator.sandbox_access,
+            },
         )
         return child
 
@@ -505,10 +509,6 @@ class SubagentEngine:
         factory = self.child_session_factory
         project_id = self._project_id(request.parent_session_id)
         parent_trace_id = trace_context.parent_trace_id
-        if factory is None:
-            if self.allow_legacy_standalone_for_tests:
-                return None
-            raise SessionAccessError("subagent child session requires a project root")
         if project_id is None:
             if self.allow_legacy_standalone_for_tests:
                 return None
@@ -690,21 +690,25 @@ class SubagentEngine:
             background=False,
         )
         sandbox_access = SandboxAccess(mode=SandboxAccessMode.PROJECT)
-        child = AgentSession.create(
-            store=self.store,
+        resolved_trace_context = trace_context or self._child_trace_context(request)
+        resolved_metadata = self._worktree_metadata(worktree)
+        child = self.child_session_factory.create_child_session(
+            parent_session_id=request.parent_session_id,
+            parent_trace_id=resolved_trace_context.parent_trace_id,
+            project_id=self._project_id(request.parent_session_id),
+            worktree_metadata=resolved_metadata,
+            delegate_role=profile.role,
+            delegate_task=request.task,
+            triggering_observation_id=resolved_trace_context.parent_observation_id,
             session_id=session_id,
-            agents_md=self.agents_md,
-            skill_catalog=self.skill_catalog,
-            tools=self._worktree_child_tools(worktree.path, profile=profile, access=sandbox_access, for_registry=True),
-            permission_manager=permission_manager,
-            sandbox_access=sandbox_access,
-            session_metadata=self._resolve_child_session_metadata(
-                request,
-                profile=profile,
-                trace_context=trace_context or self._child_trace_context(request),
-                worktree_metadata=self._worktree_metadata(worktree),
-                session_id=session_id,
-            ),
+            session_arguments={
+                "store": self.store,
+                "agents_md": self.agents_md,
+                "skill_catalog": self.skill_catalog,
+                "tools": self._worktree_child_tools(worktree.path, profile=profile, access=sandbox_access, for_registry=True),
+                "permission_manager": permission_manager,
+                "sandbox_access": sandbox_access,
+            },
         )
         child.require_prewrite_review = False
         return child

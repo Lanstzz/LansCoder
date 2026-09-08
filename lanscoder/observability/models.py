@@ -264,6 +264,7 @@ class TraceRecord:
             incomplete = True
 
         metadata = bounded_fields(started_data.get("metadata"), METADATA_FIELDS)
+        metadata.update(bounded_fields(started_data, METADATA_FIELDS))
         tags = bounded_tags(started_data.get("tags"))
 
         return cls(

@@ -5408,3 +5408,15 @@ async def test_lanscoder_app_force_scrolls_to_bottom_after_unknown_command(monke
     await app._submit_composer()
 
     assert output.scroll_end_calls >= 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_observe_action_opens_browser_off_the_ui_event_loop(monkeypatch) -> None:
+    app = LansCoderApp()
+    opened: list[str] = []
+    monkeypatch.setattr("lanscoder.app.tui.launch_browser", lambda url: opened.append(url) or url)
+
+    await app._handle_command_action({"type": "open_observatory", "url": "http://127.0.0.1:43123/traces/trc_active"})
+
+    assert opened == ["http://127.0.0.1:43123/traces/trc_active"]

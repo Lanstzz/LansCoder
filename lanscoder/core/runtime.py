@@ -46,6 +46,7 @@ from lanscoder.tools.types import Tool
 from lanscoder.observability.models import TraceScope
 from lanscoder.observability.context import TraceResumeLookup, lookup_resume_trace
 from lanscoder.observability.protocol import NoOpTraceRecorder, TraceRecorder
+from lanscoder.observability.git import snapshot_git
 
 __all__ = [
     "register_loop_tools",
@@ -597,6 +598,8 @@ class AgentChatRunner:
             "project_id": metadata.get("project_id"),
             "project_root": metadata.get("project_root"),
         }
+        if data["project_root"]:
+            data.update(snapshot_git(data["project_root"]).to_dict())
         if self.trace_metadata_provider is not None:
             try:
                 data.update(self.trace_metadata_provider(metadata))

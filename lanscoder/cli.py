@@ -14,7 +14,9 @@ from lanscoder.app.factory import create_lanscoder_app
 from lanscoder.config import load_config
 from lanscoder.config.settings import default_global_config_path, project_config_path, render_default_config
 from lanscoder.mcp.config_store import McpConfigStore, McpConfigStoreError
+from lanscoder.observability.web import ObservatoryServer, open_observatory
 from lanscoder.permissions.types import PermissionMode
+from lanscoder.storage import LansCoderPaths
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_subparsers.add_parser("list", help="List configured MCP servers without secrets.")
     remove_parser = mcp_subparsers.add_parser("remove", help="Remove one configured MCP server.")
     remove_parser.add_argument("name")
+    observe_parser = subparsers.add_parser("observe", help="Run the local Observatory server.")
+    observe_parser.add_argument("--storage-root", dest="observe_storage_root", default=None, help="Directory for LansCoder runtime data (default: ~/.lanscoder).")
 
     parser.add_argument("--project", default=".", help="Project root for tools and AGENTS.md.")
     parser.add_argument("--storage-root", default=None, help="Directory for LansCoder runtime data (default: ~/.lanscoder).")
@@ -121,6 +125,10 @@ def main(
         return run_config_command(args)
     if args.command == "mcp":
         return run_mcp_command(args)
+    if args.command == "observe":
+        if args.storage_root is not None and args.observe_storage_root is not None and args.storage_root != args.observe_storage_root:
+            parser.error("conflicting --storage-root values for observe")
+        return run_observe_command(args)
 
     if args.tui or (args.message is None and stdin_text is None and sys.stdin.isatty() and not args.interactive):
         config = CliConfig(
@@ -209,6 +217,23 @@ def run_single_turn(config: CliConfig) -> str:
     app = create_cli_app(config)
     response = app.chat_runner.run_user_turn(config.message)
     return response.content
+
+
+def run_observe_command(args: argparse.Namespace) -> int:
+    """Run a standalone local Observatory until interrupted."""
+
+    storage_root = args.observe_storage_root or args.storage_root
+    paths = LansCoderPaths(storage_root=Path(storage_root) if storage_root is not None else None)
+    server = ObservatoryServer(paths).start()
+    url = open_observatory(server)
+    print(f"Observatory available at {url}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown()
+    return 0
 
 
 def run_benchmark_turn(config: CliConfig) -> str:
@@ -311,7 +336,7 @@ def run_mcp_command(args: argparse.Namespace) -> int:
                 return 0
             for server in servers:
                 status = "enabled" if server["enabled"] else "disabled"
-                print(f'{server["name"]} {server["type"]} {server["endpoint"]} {status}')
+                print(f"{server['name']} {server['type']} {server['endpoint']} {status}")
             return 0
         if args.mcp_command == "remove":
             if not store.remove(args.name):

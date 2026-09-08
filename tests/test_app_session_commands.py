@@ -42,7 +42,8 @@ def _store(tmp_path: Path) -> JsonlSessionStore:
 
 
 def _catalog(tmp_path: Path) -> SessionCatalog:
-    return SessionCatalog(_paths(tmp_path).storage_root)
+    paths = _paths(tmp_path)
+    return SessionCatalog(paths.storage_root, project_id=paths.project_id)
 
 
 def _create_primary_session(
@@ -363,3 +364,45 @@ def test_busy_rejects_session_swap(tmp_path: Path) -> None:
 
     # The current session must be untouched when the swap is rejected.
     assert state.session.session_id == "sess_one"
+
+
+def test_resume_and_fork_reject_a_subagent_session_id(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _create_primary_session(tmp_path, store, "sess_primary")
+    writer = SessionEventWriter(store=store, session_id="sess_subagent")
+    writer.append_session_created(
+        title="Internal worker",
+        project_id=_paths(tmp_path).project_id,
+        kind="subagent",
+    )
+    handler = SessionCommandHandler(
+        catalog=_catalog(tmp_path),
+        current_session=CurrentSession("sess_subagent"),
+        resume_service=ResumeService(store=store, project_root=tmp_path),
+        fork_service=ForkSessionService(store=store, project_root=tmp_path, paths=_paths(tmp_path)),
+    )
+
+    resume = handler.handle("/resume sess_subagent")
+    fork = handler.handle("/fork")
+
+    assert "not a primary session: sess_subagent" in resume.output
+    assert "not a primary session: sess_subagent" in fork.output
+
+
+def test_resume_picker_excludes_subagent_sessions(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _make_session(tmp_path, store, "sess_primary", title="Primary")
+    writer = SessionEventWriter(store=store, session_id="sess_subagent")
+    writer.append_session_created(
+        title="Internal worker",
+        project_id=_paths(tmp_path).project_id,
+        kind="subagent",
+    )
+    handler = SessionCommandHandler(
+        catalog=_catalog(tmp_path),
+        resume_service=ResumeService(store=store, project_root=tmp_path),
+    )
+
+    result = handler.handle("/resume")
+
+    assert result.action["sessions"] == [{"session_id": "sess_primary", "title": "Primary", "message_count": 1, "status": "ok"}]

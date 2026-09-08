@@ -34,11 +34,11 @@ def _seed(tmp_path, content: str, *, session_id: str = "sess_test") -> str:
         content=content,
         metadata={"tool_name": "shell"},
     )
-    return ToolResultArchive(_storage_root(tmp_path)).store_original(session_id, part).archive_id
+    return ToolResultArchive(_paths(tmp_path)).store_original(session_id, part).archive_id
 
 
 def _tool(tmp_path, turn=lambda: 7, *, session_id: str = "sess_test"):
-    return create_retrieve_archive_tool(session_id=session_id, archive_root=_storage_root(tmp_path), current_turn=turn)
+    return create_retrieve_archive_tool(session_id=session_id, paths=_paths(tmp_path), current_turn=turn)
 
 
 def test_schema_and_full_retrieval_are_bounded_and_protected(tmp_path) -> None:
@@ -161,14 +161,14 @@ def test_missing_tampered_or_cross_session_archive_fails_without_path(tmp_path) 
 
 
 def test_session_registry_injects_retrieve_and_rejects_override(tmp_path) -> None:
-    archive_root = _storage_root(tmp_path)
-    registry = create_session_tool_registry(session_id="sess_test", archive_root=archive_root)
+    paths = _paths(tmp_path)
+    registry = create_session_tool_registry(session_id="sess_test", paths=paths)
 
     assert "retrieve_archive" in registry.names()
     with pytest.raises(ValueError, match="reserved"):
         create_session_tool_registry(
             session_id="sess_test",
-            archive_root=archive_root,
+            paths=paths,
             tools=[create_think_tool()] + [_tool(tmp_path, session_id="other")],
         )
 

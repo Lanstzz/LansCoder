@@ -151,13 +151,19 @@ class TestTruncateBeforeMessage:
         assert remaining[-1].data["role"] == "assistant"
 
     def test_truncate_to_first_turn_keeps_session_metadata(self, tmp_path: Path) -> None:
-        store, _, session = _create_session(tmp_path, "sess_truncate_first")
+        store, bootstrap, session = _create_session(tmp_path, "sess_truncate_first")
         target = _append_turn(session, "hello", "hi there")
 
         store.truncate_before_message(session.session_id, target)
 
         remaining = store.list_events(session.session_id)
-        assert [event.kind for event in remaining] == ["session.created", "session.metadata_updated"]
+        assert [event.kind for event in remaining] == ["session.created"]
+        created = remaining[0]
+        assert created.data["session_id"] == session.session_id
+        assert created.data["project_id"] == bootstrap.paths.project_id
+        assert created.data["project_root"] == str(bootstrap.paths.project_root)
+        assert created.data["kind"] == "primary"
+        assert not any(event.kind == "message.appended" for event in remaining)
 
     def test_truncate_preserves_session_created_and_prior_assistant_message(self, tmp_path: Path) -> None:
         store, _, session = _create_session(tmp_path, "sess_truncate_preserve")

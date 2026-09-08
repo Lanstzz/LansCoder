@@ -5,6 +5,8 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pytest
+
 from lanscoder.core.runtime import create_agent_loop
 from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.agent.session import AgentSession
@@ -12,6 +14,7 @@ from lanscoder.agent.subagent_engine import SubagentEngine
 from lanscoder.subagent.types import SubagentRequest, SubagentResult
 from lanscoder.context.identity import new_session_id
 from lanscoder.context.store import JsonlSessionStore
+from lanscoder.session.access import SessionAccessError
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import (
     ChatRequest,
@@ -182,6 +185,24 @@ def test_child_session_is_metadata_tagged(tmp_path) -> None:
     assert view.metadata["parent_session_id"] == "parent_1"
     assert view.metadata["delegate_role"] == "researcher"
     assert view.metadata["delegate_task"] == "inspect context"
+
+
+def test_engine_without_project_root_fails_at_child_factory_boundary(tmp_path) -> None:
+    provider = FakeProvider([])
+    engine = SubagentEngine(
+        store=JsonlSessionStore(tmp_path),
+        provider=provider,
+        tools=[_tool("view")],
+        permission_coordinator=_engine_coordinator(),
+        child_runner_factory=_child_runner_factory(provider),
+    )
+
+    assert engine.child_session_factory is not None
+    with pytest.raises(SessionAccessError, match="access policy"):
+        engine.create_child_session(
+            SubagentRequest(role="researcher", task="inspect", parent_session_id="parent_1"),
+            profile=engine.profile("researcher"),
+        )
 
 
 def test_subagent_run_restricts_child_tools_and_persists_session(tmp_path) -> None:

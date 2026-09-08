@@ -18,6 +18,7 @@ from lanscoder.app.projector import TranscriptProjector, replay_messages
 from lanscoder.app.tui_state import BlockKind, ChildKind, TranscriptModel
 from lanscoder.context.compaction import CompactionPipeline
 from lanscoder.context.models import AgentMessage, MessagePart, SessionView
+from lanscoder.storage import LansCoderPaths
 from tests.test_context_compaction_pipeline import _message, _request, _tool_call, _tool_result
 
 
@@ -96,9 +97,7 @@ def test_replay_after_compaction_rebuilds_block_tree_without_exception(
         ],
     )
 
-    result = CompactionPipeline(root=tmp_path).compact(
-        _request(view=view, target_tokens=1, current_turn=10)
-    )
+    result = CompactionPipeline(paths=LansCoderPaths(storage_root=tmp_path)).compact(_request(view=view, target_tokens=1, current_turn=10))
 
     model = TranscriptModel()
     replay_messages(TranscriptProjector(model), result.view.messages)

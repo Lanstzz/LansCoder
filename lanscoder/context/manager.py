@@ -30,6 +30,7 @@ from lanscoder.context.writer import SessionEventWriter
 from lanscoder.observability.models import TraceScope
 from lanscoder.observability.protocol import TraceRecorder
 from lanscoder.session.branch import SessionBranchContext, build_branch_topology
+from lanscoder.storage import LansCoderPaths
 
 
 class ContextWindowTrigger(StrEnum):
@@ -153,7 +154,7 @@ class ContextWindowManager:
             self.config = ContextCompactionConfig()
         if self.pipeline is None:
             self.pipeline = CompactionPipeline(
-                root=self.store.root,
+                paths=LansCoderPaths(storage_root=self.store.root),
                 large_tool_result_tokens=self.config.large_tool_result_tokens,
                 cold_preview_chars=self.config.cold_preview_chars,
             )

@@ -144,6 +144,39 @@ def test_app_unmount_closes_mcp_manager_once(tmp_path: Path) -> None:
     assert manager.close_calls == 1
 
 
+def test_app_unmount_closes_the_embedded_observatory_server(monkeypatch, tmp_path: Path) -> None:
+    managers = []
+
+    class FakeObservatoryManager:
+        def __init__(self, paths) -> None:
+            self.paths = paths
+            self.shutdown_calls = 0
+            managers.append(self)
+
+        def start(self):
+            return type("Server", (), {"url": "http://127.0.0.1:43123/"})()
+
+        def shutdown(self) -> None:
+            self.shutdown_calls += 1
+
+    monkeypatch.setattr("lanscoder.app.factory.ObservatoryServerManager", FakeObservatoryManager)
+    app = create_lanscoder_app(
+        project_root=tmp_path,
+        storage_root=tmp_path / "storage",
+        provider=FakeProvider([]),
+        session_id="sess_test",
+        tools=[],
+    )
+
+    assert app.command_handler.handle("/observe").action == {
+        "type": "open_observatory",
+        "url": "http://127.0.0.1:43123/traces?session_id=sess_test",
+    }
+    app.on_unmount()
+
+    assert managers[0].shutdown_calls == 1
+
+
 def test_create_lanscoder_app_wires_session_commands_context_and_chat(tmp_path: Path) -> None:
     (tmp_path / "AGENTS.md").write_text("项目规则", encoding="utf-8")
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="收到")])

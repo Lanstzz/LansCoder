@@ -13,6 +13,7 @@ from lanscoder.app.mcp_commands import McpCommandHandler
 from lanscoder.app.memory_commands import MemoryCommandHandler
 from lanscoder.app.model_commands import ModelCommandHandler, ModelState
 from lanscoder.app.model_state import ModelSelectionState, ModelStateStore
+from lanscoder.app.observe_commands import ObserveCommandHandler, ObservatoryServerManager
 from lanscoder.app.permission_commands import PermissionCommandHandler
 from lanscoder.app.recall_commands import RecallCommandHandler
 from lanscoder.app.router import CompositeCommandHandler
@@ -171,11 +172,7 @@ def create_lanscoder_app(
         resume=resume_session,
         limits=AgentLoopLimits.default(),
         request_options=_main_request_options(selected_profile),
-        context_window=(
-            context_window
-            if context_window is not None
-            else (selected_profile.context_window if selected_profile is not None else None)
-        ),
+        context_window=(context_window if context_window is not None else (selected_profile.context_window if selected_profile is not None else None)),
         compaction_strategy=compaction_strategy or "l1_l2_l3",
         background_manager=background_manager,
     )
@@ -269,6 +266,12 @@ def create_lanscoder_app(
         resume_service=resume_service,
         background_manager=background_manager,
     )
+    observatory_manager = ObservatoryServerManager(paths)
+    observe_handler = ObserveCommandHandler(
+        current_session=current,
+        active_trace_id=lambda: getattr(current.session.writer, "trace_id", None),
+        server_manager=observatory_manager,
+    )
     command_handler = CompositeCommandHandler(
         [
             McpCommandHandler(mcp_manager),
@@ -279,6 +282,7 @@ def create_lanscoder_app(
             permission_handler,
             skill_handler,
             memory_handler,
+            observe_handler,
         ]
     )
     help_handler = HelpCommandHandler(command_handler=command_handler)
@@ -286,7 +290,10 @@ def create_lanscoder_app(
 
     def _close_session_and_mcp() -> None:
         try:
-            chat_runner.flush_background_notifications()
+            try:
+                chat_runner.flush_background_notifications()
+            finally:
+                observatory_manager.shutdown()
         finally:
             mcp_manager.close()
 

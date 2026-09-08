@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from typing import Any
 
-METADATA_FIELDS = frozenset({"team", "operation", "component", "environment", "role", "kind", "request_id", "attempt_index", "project_id"})
+METADATA_FIELDS = frozenset({"team", "operation", "component", "environment", "role", "kind", "request_id", "attempt_index", "project_id", "project_root", "git_head", "git_branch", "git_dirty"})
 PARAMETER_FIELDS = frozenset({"temperature", "max_tokens", "max_completion_tokens", "reasoning_effort", "tool_choice"})
 STREAM_FIELDS = frozenset(
     {

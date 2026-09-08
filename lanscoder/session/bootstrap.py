@@ -91,11 +91,7 @@ class SessionBootstrap:
             permission_manager=self.permission_manager(),
             sandbox_access=self.sandbox_access,
             memory_manager=self.memory_manager(),
-        )
-        session.writer.append_session_metadata_updated(
-            project_id=descriptor.project_id,
-            project_root=str(self.paths.project_root),
-            kind=descriptor.kind,
+            session_metadata=descriptor.metadata,
         )
         return session
 
