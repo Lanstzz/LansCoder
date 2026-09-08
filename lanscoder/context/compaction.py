@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Literal
 
 from lanscoder.context.archive import ArchiveIntegrityError, ToolResultArchive
@@ -25,6 +24,7 @@ from lanscoder.context.tool_lifecycle import (
     index_tool_result_lifecycles,
 )
 from lanscoder.context.versions import COMPACTION_STRATEGY_VERSION, CONTEXT_EVENT_SCHEMA_VERSION
+from lanscoder.storage import LansCoderPaths
 
 CompactionLevel = Literal["l1", "l2"]
 
@@ -76,10 +76,14 @@ class CompactionResult:
 
 @dataclass(slots=True)
 class CompactionPipeline:
-    root: str | Path
+    paths: LansCoderPaths
     large_tool_result_tokens: int = 1200
     cold_preview_chars: int = 160
     _seen_noop_fingerprints: set[str] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.paths, LansCoderPaths):
+            raise TypeError("CompactionPipeline requires LansCoderPaths")
 
     def compact(self, request: CompactionRequest) -> CompactionResult:
         view = _clone_view(request.view)
@@ -232,7 +236,7 @@ class CompactionPipeline:
         lifecycle_records: dict[tuple[str, str], ToolResultLifecycleRecord],
     ) -> list[dict[str, object]]:
         changed: list[dict[str, object]] = []
-        archive = ToolResultArchive(self.root)
+        archive = ToolResultArchive(self.paths)
         router = _make_route_router(preview_chars=self.cold_preview_chars)
         for message in _effective_tail_messages(view):
             for index, part in enumerate(message.parts):
@@ -278,7 +282,7 @@ class CompactionPipeline:
         lifecycle_records: dict[tuple[str, str], ToolResultLifecycleRecord],
     ) -> list[dict[str, object]]:
         changed: list[dict[str, object]] = []
-        archive = ToolResultArchive(self.root)
+        archive = ToolResultArchive(self.paths)
         candidates = _l2_candidates(
             _effective_tail_messages(view),
             lifecycle_records=lifecycle_records,
@@ -341,7 +345,6 @@ def _clone_view(view: SessionView) -> SessionView:
 
 
 def _effective_tail_messages(view: SessionView) -> list[AgentMessage]:
-
     checkpoint = CheckpointIndex(view.checkpoints).latest()
     if checkpoint is None:
         return view.messages
@@ -410,7 +413,6 @@ def _make_route_router(*, preview_chars: int) -> RouteCompactRouter:
 
 
 def _l1_compacted_by(value: object) -> str:
-
     label = str(value or "l1_route")
     if label.startswith("l2_"):
         return f"l1_{label[3:]}"
@@ -499,7 +501,6 @@ def _has_l2_per_result_pressure(
     per_result_target: int | None,
     consumed_tool_result_part_ids: frozenset[str],
 ) -> bool:
-
     if per_result_target is None:
         return False
     for message in messages:
@@ -521,7 +522,6 @@ def _has_l2_per_result_pressure(
 
 
 def _per_result_target(value: object, *, fallback: int) -> int | None:
-
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
     if isinstance(fallback, int) and not isinstance(fallback, bool) and fallback > 0:
@@ -538,7 +538,6 @@ def _l2_candidates(
     per_result_target: int | None,
     consumed_tool_result_part_ids: frozenset[str],
 ) -> list[_L2Candidate]:
-
     del target_tokens
     candidates: list[_L2Candidate] = []
     tail_index = 0
@@ -654,7 +653,6 @@ def _l2_backing_record(
     session_id: str,
     part: MessagePart,
 ):
-
     archive_id = part.metadata.get("archive_id")
     if isinstance(archive_id, str) and archive_id:
         record, _raw = archive.read(session_id, archive_id)

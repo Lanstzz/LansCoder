@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from dataclasses import asdict
+from typing import Any
 
 from lanscoder.context.llm_compact import (
     DIALOGUE_SUMMARY_HEADINGS,
@@ -16,13 +18,42 @@ from lanscoder.context.tool_sequence import InvalidToolCallSequenceError, valida
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.errors import ProviderError, ProviderErrorKind
 from lanscoder.providers.types import ChatMessage, ChatRequest
+from lanscoder.observability.models import ObservationType, TraceScope
+from lanscoder.observability.protocol import TraceRecorder
 
 
 class ProviderLlmCompactSummarizer(LlmCompactSummarizer):
 
-    def __init__(self, provider: ChatProvider, *, max_tokens: int = 1200) -> None:
+    def __init__(
+        self,
+        provider: ChatProvider,
+        *,
+        max_tokens: int = 1200,
+        trace_recorder: TraceRecorder | None = None,
+    ) -> None:
         self.provider = provider
         self.max_tokens = max_tokens
+        self.trace_recorder = trace_recorder
+        self.trace_scope: TraceScope | None = None
+        self.trace_id: str | None = None
+        self.parent_observation_id: str | None = None
+        self.attempt_index = 1
+        self.retry_sequence = 0
+
+    def set_trace_context(
+        self,
+        *,
+        scope: TraceScope | None,
+        trace_id: str | None,
+        parent_observation_id: str | None,
+        attempt_index: int,
+        retry_sequence: int,
+    ) -> None:
+        self.trace_scope = scope
+        self.trace_id = trace_id
+        self.parent_observation_id = parent_observation_id
+        self.attempt_index = attempt_index
+        self.retry_sequence = retry_sequence
 
     def summarize(
         self,
@@ -34,31 +65,36 @@ class ProviderLlmCompactSummarizer(LlmCompactSummarizer):
     ) -> LlmCompactSummary:
         tail = _tail_boundary(messages, current_turn=current_turn, recent_turn_window=recent_turn_window)
         prompt = _build_dialogue_summary_prompt(messages, summary_mode=summary_mode)
+        request = ChatRequest(
+            messages=[
+                ChatMessage(
+                    role="system",
+                    content=(
+                        "你是 LansCoder 的上下文压缩器。输出简洁的多轮对话摘要；"
+                        "必须且只能使用指定的四个 Markdown 标题，每个恰好一次；"
+                        "只在标题下写有证据支持的事实。不要选择 checkpoint 边界。"
+                    ),
+                ),
+                ChatMessage(role="user", content=prompt),
+            ],
+            tools=[],
+            tool_choice="none",
+            max_tokens=self.max_tokens,
+        )
+        observation_id = self._start_generation(request)
         try:
-            response = self.provider.complete(
-                ChatRequest(
-                    messages=[
-                        ChatMessage(
-                            role="system",
-                            content=(
-                                "你是 LansCoder 的上下文压缩器。输出简洁的多轮对话摘要；"
-                                "必须且只能使用指定的四个 Markdown 标题，每个恰好一次；"
-                                "只在标题下写有证据支持的事实。不要选择 checkpoint 边界。"
-                            ),
-                        ),
-                        ChatMessage(role="user", content=prompt),
-                    ],
-                    tools=[],
-                    tool_choice="none",
-                    max_tokens=self.max_tokens,
-                )
-            )
+            response = self.provider.complete(request)
         except ProviderError as error:
+            self._end_generation(observation_id, error=error)
             if error.kind == ProviderErrorKind.PROMPT_TOO_LONG:
                 raise PromptTooLongError(str(error)) from error
             if error.kind == ProviderErrorKind.TIMEOUT:
                 raise CompactTimeoutError(str(error)) from error
             raise NoSummaryError(str(error)) from error
+        except BaseException as error:
+            self._end_generation(observation_id, error=error)
+            raise
+        self._end_generation(observation_id, response=response)
         summary = response.content.strip()
         if not summary:
             raise NoSummaryError("empty summary")
@@ -67,6 +103,66 @@ class ProviderLlmCompactSummarizer(LlmCompactSummarizer):
             tail_start_message_id=tail.tail_start_message_id,
             covered_until_message_id=tail.covered_until_message_id,
         )
+
+    def _start_generation(self, request: ChatRequest) -> str | None:
+        if self.trace_recorder is None or self.trace_id is None:
+            return None
+        try:
+            return self.trace_recorder.start_observation(
+                self.trace_id,
+                ObservationType.GENERATION,
+                parent_observation_id=self.parent_observation_id,
+                scope=self.trace_scope,
+                data={
+                    "operation": "compaction",
+                    "attempt_index": self.attempt_index,
+                    "retry_sequence": self.retry_sequence,
+                    "provider": self.provider.name,
+                    "model": self.provider.model,
+                    "normalized_request": asdict(request),
+                },
+            )
+        except Exception:
+            return None
+
+    def _end_generation(self, observation_id: str | None, *, response: Any = None, error: BaseException | None = None) -> None:
+        if self.trace_recorder is None or observation_id is None:
+            return
+        diagnostics: dict[str, Any] = {}
+        usage: dict[str, Any] = {}
+        data: dict[str, Any] = {
+            "provider": self.provider.name,
+            "model": self.provider.model,
+            "diagnostics": diagnostics,
+            "provider_diagnostics": diagnostics,
+            "usage": usage,
+            "usage_details": {},
+        }
+        if response is not None:
+            diagnostics = asdict(response.diagnostics)
+            usage = asdict(response.usage) if response.usage is not None else {}
+            data = {
+                "provider": response.provider,
+                "model": response.model,
+                "normalized_response": {
+                    "content": response.content,
+                    "finish_reason": response.finish_reason,
+                    "diagnostics": diagnostics,
+                },
+                "diagnostics": diagnostics,
+                "provider_diagnostics": diagnostics,
+                "usage": usage,
+                "usage_details": dict(response.usage.usage_details) if response.usage is not None else {},
+            }
+        try:
+            self.trace_recorder.end_observation(
+                observation_id,
+                outcome="failed" if error is not None else "succeeded",
+                data=data,
+                error=error,
+            )
+        except Exception:
+            return
 
 
 class _TailBoundary:

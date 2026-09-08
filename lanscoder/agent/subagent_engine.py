@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -13,7 +14,7 @@ from lanscoder.agent.background import BackgroundJobManager, current_job_id
 from lanscoder.agent.loop_limits import AgentLoopLimits
 from lanscoder.agent.observer import TurnObserver
 from lanscoder.agent.ports import SessionTurnRunner
-from lanscoder.agent.session import AgentSession
+from lanscoder.agent.session import AgentSession, create_authorized_child_session
 from lanscoder.agent.worktree import (
     Worktree,
     WorktreeDiff,
@@ -22,8 +23,14 @@ from lanscoder.agent.worktree import (
 )
 from lanscoder.context.identity import new_session_id
 from lanscoder.context.store import JsonlSessionStore
+from lanscoder.observability.context import get_observation_id, get_trace_id
+from lanscoder.observability.models import TraceScope
+from lanscoder.observability.protocol import TraceRecorder
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import MainRequestOptions
+from lanscoder.session.access import ChildSessionFactory, SessionAccessError, SessionAccessPolicy
+from lanscoder.session.catalog import SessionCatalog
+from lanscoder.storage.paths import project_id_for_path
 from lanscoder.utils.cancellation import (
     AgentCancelledError,
     current_cancellation_token,
@@ -46,6 +53,15 @@ logger = logging.getLogger(__name__)
 DEFAULT_CHILD_LIMITS = AgentLoopLimits(max_tool_rounds=20, max_provider_calls=40, max_turn_seconds=600)
 
 
+@dataclass(frozen=True, slots=True)
+class _ChildTraceContext:
+    """Parent identity captured at the delegate call boundary."""
+
+    recorder: TraceRecorder | None
+    parent_trace_id: str | None
+    parent_observation_id: str | None
+
+
 class SubagentEngine:
     """子代理执行引擎:管理子会话、角色工具集与前台进度,隔离执行时使用 worktree。"""
 
@@ -63,6 +79,10 @@ class SubagentEngine:
         limits: AgentLoopLimits | None = None,
         background_manager: BackgroundJobManager | None = None,
         child_runner_factory: Callable[..., SessionTurnRunner],
+        trace_recorder: TraceRecorder | None = None,
+        trace_id: str | None = None,
+        trace_scope: TraceScope | None = None,
+        allow_legacy_standalone_for_tests: bool = False,
     ) -> None:
         """注入子代理引擎依赖:存储、provider、角色工具集与子循环工厂。"""
         self.store = store
@@ -76,7 +96,27 @@ class SubagentEngine:
         self.limits = limits or DEFAULT_CHILD_LIMITS
         self.background_manager = background_manager
         self.child_runner_factory = child_runner_factory
+        self.allow_legacy_standalone_for_tests = allow_legacy_standalone_for_tests
+        self.child_session_factory = self._build_child_session_factory()
+        self.trace_recorder = trace_recorder
+        self.trace_id = trace_id
+        self.trace_scope = trace_scope
         self.foreground_progress: dict[str, Any] | None = None
+
+    def _build_child_session_factory(self) -> ChildSessionFactory:
+        """Build the policy-backed child identity boundary when a project is known."""
+
+        if self.allow_legacy_standalone_for_tests:
+            return ChildSessionFactory.standalone_for_tests(create_authorized_child_session)
+        if self.project_root is None:
+            return ChildSessionFactory(policy=None)
+        return ChildSessionFactory(
+            SessionAccessPolicy(
+                self.project_root,
+                journal=SessionCatalog(self.store.root),
+            ),
+            constructor=create_authorized_child_session,
+        )
 
     def profile(self, role: str) -> SubagentProfile | None:
         """按角色名返回子代理档案,未知角色返回 None。"""
@@ -140,9 +180,17 @@ class SubagentEngine:
         profile: SubagentProfile,
         progress_tracker: dict[str, Any] | None,
     ) -> SubagentResult:
-        """在当前工作树内联执行子代理,结束后删除子会话。"""
+        """在当前工作树内联执行子代理并保留完整 child journal。"""
 
-        child_session = self.create_child_session(request, profile=profile)
+        trace_context = self._child_trace_context(request)
+        child_session = self.create_child_session(request, profile=profile, trace_context=trace_context)
+        child_trace_id, child_scope = self._start_child_trace(
+            child_session,
+            request,
+            trace_context=trace_context,
+            worktree_metadata={},
+        )
+        child_trace_ended = False
         started = time.monotonic()
         try:
             prompt = self._child_prompt(request, profile=profile)
@@ -151,13 +199,20 @@ class SubagentEngine:
                 prompt,
                 self.tools_for_role(request.role),
                 self._make_child_observer(progress_tracker),
+                trace_recorder=trace_context.recorder,
+                trace_id=child_trace_id,
+                trace_scope=child_scope,
             )
             usage = runner.usage_summary()
             response = result.response if result is not None else None
             if response is not None:
                 if response.finish_reason == "interrupted":
+                    self._end_child_trace(child_trace_id, status="cancelled", reason="interrupted")
+                    child_trace_ended = True
                     raise AgentCancelledError()
                 content = response.content.strip() or "Subagent finished without text output."
+                self._end_child_trace(child_trace_id, status="completed", final_output=content)
+                child_trace_ended = True
                 return SubagentResult(
                     ok=True,
                     role=request.role,
@@ -168,6 +223,8 @@ class SubagentEngine:
                     elapsed_seconds=time.monotonic() - started,
                 )
             if result is not None:
+                self._end_child_trace(child_trace_id, status="failed", error="subagent paused for user input")
+                child_trace_ended = True
                 return SubagentResult(
                     ok=False,
                     role=request.role,
@@ -179,6 +236,8 @@ class SubagentEngine:
                     elapsed_seconds=time.monotonic() - started,
                 )
             summary = f"Subagent failed: {failure}" if failure else "subagent failed without a result"
+            self._end_child_trace(child_trace_id, status="failed", error=failure or "child_loop_failed")
+            child_trace_ended = True
             return SubagentResult(
                 ok=False,
                 role=request.role,
@@ -189,8 +248,19 @@ class SubagentEngine:
                 provider_calls=usage["provider_calls"],
                 elapsed_seconds=time.monotonic() - started,
             )
+        except AgentCancelledError:
+            if not child_trace_ended:
+                self._end_child_trace(child_trace_id, status="cancelled", reason="interrupted")
+                child_trace_ended = True
+            raise
+        except Exception as exc:
+            if not child_trace_ended:
+                self._end_child_trace(child_trace_id, status="failed", error=exc)
+                child_trace_ended = True
+            raise
         finally:
-            self._delete_child_session(child_session.session_id)
+            if not child_trace_ended and child_trace_id is not None:
+                self._end_child_trace(child_trace_id, status="failed", error="child loop did not complete")
 
     def _run_isolated(
         self,
@@ -232,8 +302,25 @@ class SubagentEngine:
             )
         self._attach_worktree_cleanup(manager, worktree)
 
+        trace_context = self._child_trace_context(request)
+        child_trace_id: str | None = None
+        child_trace_scope: TraceScope | None = None
+        child_trace_ended = False
         try:
-            child_session = self._create_isolated_child_session(request, profile=profile, worktree=worktree, session_id=session_id)
+            child_session = self._create_isolated_child_session(
+                request,
+                profile=profile,
+                worktree=worktree,
+                session_id=session_id,
+                trace_context=trace_context,
+            )
+            worktree_metadata = self._worktree_metadata(worktree)
+            child_trace_id, child_trace_scope = self._start_child_trace(
+                child_session,
+                request,
+                trace_context=trace_context,
+                worktree_metadata=worktree_metadata,
+            )
             try:
                 prompt = self._child_prompt(request, profile=profile, worktree=worktree)
                 started = time.monotonic()
@@ -246,15 +333,22 @@ class SubagentEngine:
                         access=child_session.permission_coordinator.sandbox_access,
                     ),
                     self._make_child_observer(progress_tracker),
+                    trace_recorder=trace_context.recorder,
+                    trace_id=child_trace_id,
+                    trace_scope=child_trace_scope,
                 )
                 usage = runner.usage_summary()
                 diff = manager.diff(worktree)
                 response = result.response if result is not None else None
                 if response is not None:
                     if response.finish_reason == "interrupted":
+                        self._end_child_trace(child_trace_id, status="cancelled", reason="interrupted")
+                        child_trace_ended = True
                         raise AgentCancelledError()
                     content = response.content.strip() or "Subagent finished without text output."
                     summary = self._compose_isolated_summary(content, worktree=worktree, diff=diff)
+                    self._end_child_trace(child_trace_id, status="completed", final_output=content)
+                    child_trace_ended = True
                     return SubagentResult(
                         ok=True,
                         role=request.role,
@@ -269,6 +363,8 @@ class SubagentEngine:
                         elapsed_seconds=time.monotonic() - started,
                     )
                 if result is not None:
+                    self._end_child_trace(child_trace_id, status="failed", error="waiting_for_user_input")
+                    child_trace_ended = True
                     return SubagentResult(
                         ok=False,
                         role=request.role,
@@ -284,6 +380,8 @@ class SubagentEngine:
                         elapsed_seconds=time.monotonic() - started,
                     )
                 summary = f"隔离 coder 执行失败：{failure}" if failure else "隔离 coder 执行失败：child loop 未产出结果。"
+                self._end_child_trace(child_trace_id, status="failed", error=failure or "child_loop_failed")
+                child_trace_ended = True
                 return SubagentResult(
                     ok=False,
                     role=request.role,
@@ -298,11 +396,21 @@ class SubagentEngine:
                     provider_calls=usage["provider_calls"],
                     elapsed_seconds=time.monotonic() - started,
                 )
-            finally:
-                self._delete_child_session(session_id)
+            except AgentCancelledError:
+                if not child_trace_ended:
+                    self._end_child_trace(child_trace_id, status="cancelled", reason="interrupted")
+                    child_trace_ended = True
+                raise
+            except Exception as exc:
+                if not child_trace_ended:
+                    self._end_child_trace(child_trace_id, status="failed", error=exc)
+                    child_trace_ended = True
+                raise
         except AgentCancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - defensive: setup failures must not break parent loop
+            if child_trace_id is not None and not child_trace_ended:
+                self._end_child_trace(child_trace_id, status="failed", error=exc)
             return SubagentResult(
                 ok=False,
                 role=request.role,
@@ -312,10 +420,22 @@ class SubagentEngine:
                 worktree_path=str(worktree.path),
                 worktree_branch=worktree.branch,
             )
+        finally:
+            if child_trace_id is not None and not child_trace_ended:
+                self._end_child_trace(child_trace_id, status="failed", error="isolated child did not complete")
 
-    def create_child_session(self, request: SubagentRequest, *, profile: SubagentProfile) -> AgentSession:
-        """为子代理创建子会话(按后台/前台选择权限配置)。"""
+    def create_child_session(
+        self,
+        request: SubagentRequest,
+        *,
+        profile: SubagentProfile,
+        trace_context: _ChildTraceContext | None = None,
+        worktree_metadata: dict[str, Any] | None = None,
+    ) -> AgentSession:
+        """为子代理创建持久化 child session(按后台/前台选择权限配置)。"""
         session_id = new_session_id()
+        trace_context = trace_context or self._child_trace_context(request)
+        resolved_worktree_metadata = dict(worktree_metadata or {})
         if request.run_in_background:
             permission_manager = self.permission_coordinator.child_permission_manager(
                 root=self.project_root,
@@ -328,28 +448,225 @@ class SubagentEngine:
                 mutation=False,
                 background=False,
             )
-        child = AgentSession.create(
-            store=self.store,
-            session_id=session_id,
-            agents_md=self.agents_md,
-            skill_catalog=self.skill_catalog,
-            tools=self._supplied_tools_for_child(profile.role),
-            permission_manager=permission_manager,
-            sandbox_access=self.permission_coordinator.sandbox_access,
-        )
-        child.writer.append_session_metadata_updated(
+        child = self.child_session_factory.create_child_session(
             parent_session_id=request.parent_session_id,
+            parent_trace_id=trace_context.parent_trace_id,
+            project_id=self._project_id(request.parent_session_id),
+            worktree_metadata=resolved_worktree_metadata,
             delegate_role=profile.role,
             delegate_task=request.task,
+            triggering_observation_id=trace_context.parent_observation_id,
+            session_id=session_id,
+            session_arguments={
+                "store": self.store,
+                "agents_md": self.agents_md,
+                "skill_catalog": self.skill_catalog,
+                "tools": self._supplied_tools_for_child(profile.role),
+                "permission_manager": permission_manager,
+                "sandbox_access": self.permission_coordinator.sandbox_access,
+            },
         )
         return child
 
-    def _delete_child_session(self, session_id: str) -> None:
-        """删除子会话(尽力而为,不打断父循环)。"""
+    def _resolve_child_session_metadata(
+        self,
+        request: SubagentRequest,
+        *,
+        profile: SubagentProfile,
+        trace_context: _ChildTraceContext,
+        worktree_metadata: dict[str, Any],
+        session_id: str,
+    ) -> dict[str, Any]:
+        descriptor = self._create_child_descriptor(
+            request,
+            profile=profile,
+            trace_context=trace_context,
+            worktree_metadata=worktree_metadata,
+            session_id=session_id,
+        )
+        if descriptor is not None:
+            return dict(descriptor.metadata)
+
+        if not self.allow_legacy_standalone_for_tests:
+            raise SessionAccessError("subagent child session identity could not be authorized")
+
+        return self._fallback_child_metadata(
+            request,
+            profile=profile,
+            trace_context=trace_context,
+            worktree_metadata=worktree_metadata,
+        )
+
+    def _create_child_descriptor(
+        self,
+        request: SubagentRequest,
+        *,
+        profile: SubagentProfile,
+        trace_context: _ChildTraceContext,
+        worktree_metadata: dict[str, Any],
+        session_id: str,
+    ):
+        factory = self.child_session_factory
+        project_id = self._project_id(request.parent_session_id)
+        parent_trace_id = trace_context.parent_trace_id
+        if project_id is None:
+            if self.allow_legacy_standalone_for_tests:
+                return None
+            raise SessionAccessError("subagent parent project_id is required")
+        if parent_trace_id is None:
+            if self.allow_legacy_standalone_for_tests:
+                return None
+            raise SessionAccessError("subagent parent_trace_id is required")
         try:
-            self.store.delete_session(session_id)
-        except Exception:  # noqa: BLE001 - cleanup must never break the parent loop
-            pass
+            return factory.create_child(
+                parent_session_id=request.parent_session_id,
+                parent_trace_id=parent_trace_id,
+                project_id=project_id,
+                worktree_metadata=worktree_metadata,
+                delegate_role=profile.role,
+                delegate_task=request.task,
+                triggering_observation_id=trace_context.parent_observation_id,
+                session_id=session_id,
+            )
+        except SessionAccessError:
+            if self.allow_legacy_standalone_for_tests:
+                return None
+            raise
+
+    def _fallback_child_metadata(
+        self,
+        request: SubagentRequest,
+        *,
+        profile: SubagentProfile,
+        trace_context: _ChildTraceContext,
+        worktree_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "kind": "subagent",
+            "parent_session_id": request.parent_session_id,
+            "delegate_role": profile.role,
+            "delegate_task": request.task,
+            "project_id": self._project_id(request.parent_session_id),
+            "worktree_metadata": dict(worktree_metadata),
+        }
+        if trace_context.parent_trace_id is not None:
+            metadata["parent_trace_id"] = trace_context.parent_trace_id
+        if trace_context.parent_observation_id is not None:
+            metadata["parent_observation_id"] = trace_context.parent_observation_id
+            metadata["triggering_observation_id"] = trace_context.parent_observation_id
+        if worktree_metadata.get("path") is not None:
+            metadata["worktree_path"] = str(worktree_metadata["path"])
+        if worktree_metadata.get("branch") is not None:
+            metadata["worktree_branch"] = str(worktree_metadata["branch"])
+        return {key: value for key, value in metadata.items() if value is not None}
+
+    def _project_id(self, parent_session_id: str) -> str | None:
+        try:
+            metadata = self.store.rebuild_session_view(parent_session_id).metadata
+        except Exception:
+            metadata = {}
+        project_id = metadata.get("project_id")
+        if project_id:
+            return str(project_id)
+        if self.project_root is not None:
+            return project_id_for_path(self.project_root)
+        return None
+
+    def _child_trace_context(self, request: SubagentRequest) -> _ChildTraceContext:
+        recorder = self.trace_recorder
+        if recorder is None:
+            writer = getattr(getattr(self.permission_coordinator, "session", None), "writer", None)
+            recorder = getattr(writer, "trace_recorder", None)
+        return _ChildTraceContext(
+            recorder=recorder,
+            parent_trace_id=request.parent_trace_id or get_trace_id() or self.trace_id,
+            parent_observation_id=request.triggering_observation_id or get_observation_id(),
+        )
+
+    def _start_child_trace(
+        self,
+        child_session: AgentSession,
+        request: SubagentRequest,
+        *,
+        trace_context: _ChildTraceContext,
+        worktree_metadata: dict[str, Any],
+    ) -> tuple[str | None, TraceScope | None]:
+        recorder = trace_context.recorder
+        branch = child_session.writer.branch_context
+        if recorder is None or branch is None:
+            return None, None
+        scope = TraceScope(
+            child_session.session_id,
+            branch.branch_id,
+            parent_trace_id=trace_context.parent_trace_id,
+            parent_observation_id=trace_context.parent_observation_id,
+        )
+        data: dict[str, Any] = {
+            "operation": "delegate",
+            "delegate_role": str(request.role),
+            "delegate_task": request.task,
+            "parent_session_id": request.parent_session_id,
+            "project_id": self._project_id(request.parent_session_id),
+            "worktree_metadata": dict(worktree_metadata),
+        }
+        if trace_context.parent_observation_id is not None:
+            data["parent_observation_id"] = trace_context.parent_observation_id
+            data["triggering_observation_id"] = trace_context.parent_observation_id
+        try:
+            child_trace_id = recorder.start_trace(scope, data=data)
+            if trace_context.parent_trace_id:
+                link_data = {
+                    "parent_session_id": request.parent_session_id,
+                    "child_session_id": child_session.session_id,
+                    "parent_observation_id": trace_context.parent_observation_id,
+                    "triggering_observation_id": trace_context.parent_observation_id,
+                }
+                try:
+                    recorder.link_trace(
+                        trace_context.parent_trace_id,
+                        child_trace_id,
+                        relation="child",
+                        data=link_data,
+                        scope=scope,
+                    )
+                except TypeError:
+                    recorder.link_trace(
+                        trace_context.parent_trace_id,
+                        child_trace_id,
+                        relation="child",
+                        data=link_data,
+                    )
+            child_session.set_trace_context(recorder, child_trace_id, scope)
+            return child_trace_id, scope
+        except Exception as exc:  # noqa: BLE001 - recorder failures are fail-open
+            logger.debug("unable to start child trace for %s: %s", child_session.session_id, exc)
+            return None, None
+
+    def _end_child_trace(
+        self,
+        trace_id: str | None,
+        *,
+        status: str,
+        final_output: Any = None,
+        error: Any = None,
+        reason: Any = None,
+    ) -> None:
+        recorder = self.trace_recorder
+        if recorder is None:
+            writer = getattr(getattr(self.permission_coordinator, "session", None), "writer", None)
+            recorder = getattr(writer, "trace_recorder", None)
+        if trace_id is None or recorder is None:
+            return
+        try:
+            recorder.end_trace(
+                trace_id,
+                status=status,
+                final_output=final_output,
+                error=error,
+                reason=reason,
+            )
+        except Exception:
+            return
 
     def _supplied_tools_for_child(self, role: str) -> list[Tool]:
         """返回给子会话的工具集(剔除 retrieve_archive)。"""
@@ -363,6 +680,7 @@ class SubagentEngine:
         profile: SubagentProfile,
         worktree: Worktree,
         session_id: str,
+        trace_context: _ChildTraceContext | None = None,
     ) -> AgentSession:
         """为 worktree 隔离创建子会话,允许变更并关闭预写审查。"""
 
@@ -372,34 +690,60 @@ class SubagentEngine:
             background=False,
         )
         sandbox_access = SandboxAccess(mode=SandboxAccessMode.PROJECT)
-        child = AgentSession.create(
-            store=self.store,
-            session_id=session_id,
-            agents_md=self.agents_md,
-            skill_catalog=self.skill_catalog,
-            tools=self._worktree_child_tools(worktree.path, profile=profile, access=sandbox_access, for_registry=True),
-            permission_manager=permission_manager,
-            sandbox_access=sandbox_access,
-        )
-        child.require_prewrite_review = False
-        child.writer.append_session_metadata_updated(
+        resolved_trace_context = trace_context or self._child_trace_context(request)
+        resolved_metadata = self._worktree_metadata(worktree)
+        child = self.child_session_factory.create_child_session(
             parent_session_id=request.parent_session_id,
+            parent_trace_id=resolved_trace_context.parent_trace_id,
+            project_id=self._project_id(request.parent_session_id),
+            worktree_metadata=resolved_metadata,
             delegate_role=profile.role,
             delegate_task=request.task,
-            worktree_path=str(worktree.path),
-            worktree_branch=worktree.branch,
+            triggering_observation_id=resolved_trace_context.parent_observation_id,
+            session_id=session_id,
+            session_arguments={
+                "store": self.store,
+                "agents_md": self.agents_md,
+                "skill_catalog": self.skill_catalog,
+                "tools": self._worktree_child_tools(worktree.path, profile=profile, access=sandbox_access, for_registry=True),
+                "permission_manager": permission_manager,
+                "sandbox_access": sandbox_access,
+            },
         )
+        child.require_prewrite_review = False
         return child
 
-    def _run_child_loop(self, child_session, prompt, tools, observer):
+    @staticmethod
+    def _worktree_metadata(worktree: Worktree) -> dict[str, Any]:
+        return {
+            "isolated": True,
+            "path": str(worktree.path),
+            "branch": worktree.branch,
+        }
+
+    def _run_child_loop(
+        self,
+        child_session,
+        prompt,
+        tools,
+        observer,
+        *,
+        trace_recorder: TraceRecorder | None = None,
+        trace_id: str | None = None,
+        trace_scope: TraceScope | None = None,
+    ):
         """在子会话上跑一次用户回合,返回 (结果, 运行器, 失败原因)。"""
 
-        runner = self.child_runner_factory(
-            session=child_session,
-            tools=tools,
-            observer=observer,
-            cancellation_token=current_cancellation_token(),
-        )
+        factory_kwargs = {
+            "session": child_session,
+            "tools": tools,
+            "observer": observer,
+            "cancellation_token": current_cancellation_token(),
+            "trace_recorder": trace_recorder,
+            "trace_id": trace_id,
+            "trace_scope": trace_scope,
+        }
+        runner = self.child_runner_factory(**factory_kwargs)
         try:
             result = asyncio.run(runner.run_user_turn(prompt))
             return result, runner, None

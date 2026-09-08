@@ -24,6 +24,7 @@ from textual.timer import Timer
 from textual.widgets import Static, TextArea
 
 from lanscoder.app.ports import ChatRunnerLike, CommandHandlerLike, CurrentSessionLike
+from lanscoder.observability.web import launch_browser
 from lanscoder.app.picker import TuiPickerState, render_picker
 from lanscoder.app.slash_suggest import SlashSuggest
 from lanscoder.app.picker_adapters import (
@@ -73,6 +74,7 @@ from lanscoder.app.tui_widgets import (
     _plain_static,
 )
 from lanscoder.input.attachments import UserAttachment, format_attachment_chip, resolve_paste_attachments
+from lanscoder.storage import LansCoderPaths
 
 __all__ = [
     "ComposerTextArea",
@@ -634,7 +636,10 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
     def _stage_paste_attachments(self, paste_text: str | None) -> bool:
         """解析并去重暂存粘贴的附件,写入附件提示行。"""
         try:
-            attachments = resolve_paste_attachments(paste_text)
+            session = getattr(getattr(self, "current_session", None), "session", None)
+            store = getattr(session, "store", None)
+            paths = LansCoderPaths(storage_root=store.root) if store is not None else None
+            attachments = resolve_paste_attachments(paste_text, paths=paths) if paths is not None else resolve_paste_attachments(paste_text)
         except (OSError, ValueError) as exc:
             self._ui_line(BlockKind.ERROR, f"Could not attach pasted image: {exc}")
             return True
@@ -1037,6 +1042,11 @@ class LansCoderApp(LansCoderViewMixin, App[None]):
         if action_type == "skill_referenced":
             self._picker = None
             self._insert_input_text(str(action.get("reference") or ""))
+            return False
+        if action_type == "open_observatory":
+            url = str(action.get("url") or "")
+            if url:
+                await anyio.to_thread.run_sync(launch_browser, url)
             return False
         return False
 

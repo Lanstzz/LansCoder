@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Literal
@@ -37,12 +38,40 @@ from lanscoder.utils.sandbox_access import SandboxAccess
 from lanscoder.skills.discovery import discover_all_skills
 from lanscoder.skills.catalog import render_skill_catalog
 from lanscoder.skills.models import SkillCatalog
+from lanscoder.storage import LansCoderPaths
+from lanscoder.observability.models import TraceScope
+from lanscoder.session.branch import SessionBranchContext
+from lanscoder.session.access import SessionAccessDescriptor
+from lanscoder.observability.protocol import TraceRecorder
 
 if TYPE_CHECKING:
     from lanscoder.agent.permission import PermissionCoordinator
     from lanscoder.memory.manager import MemoryManager
 
 DEFAULT_BASE_RULES = "你是 LansCoder，一个本地 AI coding agent。请遵守项目规则并优先保持上下文可恢复。"
+
+
+def create_authorized_child_session(
+    descriptor: SessionAccessDescriptor,
+    *,
+    store: JsonlSessionStore,
+    agents_md: str,
+    skill_catalog: SkillCatalog,
+    tools: list[Tool],
+    permission_manager: PermissionManager,
+    sandbox_access: SandboxAccess,
+) -> "AgentSession":
+    """Construct a policy-authorized child session from its immutable descriptor."""
+    return AgentSession.create(
+        store=store,
+        session_id=descriptor.session_id,
+        agents_md=agents_md,
+        skill_catalog=skill_catalog,
+        tools=tools,
+        permission_manager=permission_manager,
+        sandbox_access=sandbox_access,
+        session_metadata=descriptor.metadata,
+    )
 
 
 @dataclass(slots=True)
@@ -57,6 +86,7 @@ class PendingPermissionExecution:
     deferred_tool_calls: list[ToolCall] = field(default_factory=list)
     kind: Literal["permission_confirmation", "ask_user"] = "permission_confirmation"
     ask_user_request: UserInputRequest | None = None
+    trace_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -92,6 +122,15 @@ class AgentSession:
     _tool_result_lock: RLock = field(default_factory=RLock, repr=False)
     _tool_result_message_ids: dict[str, str] = field(default_factory=dict, repr=False)
 
+    def set_trace_context(
+        self,
+        recorder: TraceRecorder | None,
+        trace_id: str | None,
+        scope: TraceScope | None,
+    ) -> None:
+        """Attach optional event observations to the active session writer."""
+        self.writer.set_trace_context(recorder, trace_id, scope)
+
     @classmethod
     def create(
         cls,
@@ -104,6 +143,7 @@ class AgentSession:
         permission_manager: PermissionManager | None = None,
         sandbox_access: SandboxAccess | None = None,
         memory_manager: MemoryManager | None = None,
+        session_metadata: Mapping[str, object] | None = None,
     ) -> "AgentSession":
         """工厂:新建空会话,装配权限协调器与会话工具注册表。"""
 
@@ -135,7 +175,7 @@ class AgentSession:
             runtime_state=runtime_state,
             tools=tools,
             known_message_ids=known_message_ids,
-            archive_root=store.root,
+            paths=LansCoderPaths(storage_root=store.root),
             current_turn=lambda: writer.current_turn,
             store=store,
             writer=writer,
@@ -143,7 +183,7 @@ class AgentSession:
             memory_manager=memory_manager,
         )
         session.tool_registry = registry
-        session.append_session_created()
+        session.append_session_created(**dict(session_metadata or {}))
         return session
 
     @classmethod
@@ -223,7 +263,7 @@ class AgentSession:
             runtime_state=runtime_state,
             tools=tools,
             known_message_ids=known_message_ids,
-            archive_root=store.root,
+            paths=LansCoderPaths(storage_root=store.root),
             current_turn=lambda: writer.current_turn,
             store=store,
             writer=writer,
@@ -241,25 +281,30 @@ class AgentSession:
             return None
 
         tool_call, deferred_tool_calls, persisted_review_only = pending[0]
+        persisted_metadata = self._pending_part_metadata(tool_call.id)
+        persisted_request_id = persisted_metadata.get("request_id")
         preflight = self.permission_coordinator.preflight(tool_call)
         if preflight is None:
             ask_user_request = _ask_user_request_from_tool_call(tool_call)
             if ask_user_request is None:
                 return None
+            request_id = str(persisted_request_id or ask_user_request.id)
             restored = PendingPermissionExecution(
-                request_id=ask_user_request.id,
+                request_id=request_id,
                 tool_call=tool_call,
                 kind="ask_user",
                 deferred_tool_calls=deferred_tool_calls,
-                ask_user_request=ask_user_request,
+                ask_user_request=replace(ask_user_request, id=request_id),
+                trace_id=self._pending_trace_id(tool_call.id),
             )
             self.pending_permission_execution = restored
             return restored
 
+        request_id = str(persisted_request_id or preflight.request.id)
         restored = PendingPermissionExecution(
-            request_id=preflight.request.id,
+            request_id=request_id,
             tool_call=tool_call,
-            permission_request=preflight.request,
+            permission_request=replace(preflight.request, id=request_id),
             prewrite_review=(
                 build_prewrite_review(
                     self.permission_coordinator.permission_manager.policy.project_root,
@@ -271,6 +316,7 @@ class AgentSession:
             ),
             review_only=(persisted_review_only if persisted_review_only is not None else preflight.decision.kind == PermissionDecisionKind.ALLOW),
             deferred_tool_calls=deferred_tool_calls,
+            trace_id=self._pending_trace_id(tool_call.id),
         )
         self.pending_permission_execution = restored
         return restored
@@ -290,6 +336,51 @@ class AgentSession:
                     message_id=message.id,
                     part_id=part.id,
                     metadata={"prewrite_review_only": review_only},
+                )
+            return
+
+    def persist_pending_trace(self, trace_id: str | None) -> None:
+        """Persist identity needed to reconnect a paused trace after restart."""
+        pending = self.pending_permission_execution
+        if pending is None:
+            return
+        pending.trace_id = trace_id
+        self._update_pending_part_metadata(
+            pending.tool_call.id,
+            {
+                "trace_id": trace_id,
+                "tool_call_id": pending.tool_call.id,
+                "pending_kind": pending.kind,
+                "request_id": pending.request_id,
+            },
+        )
+
+    def _pending_trace_id(self, tool_call_id: str) -> str | None:
+        value = self._pending_part_metadata(tool_call_id).get("trace_id")
+        return str(value) if value else None
+
+    def _pending_part_metadata(self, tool_call_id: str) -> dict[str, object]:
+        for message in reversed(self.rebuild_view().messages):
+            if message.role != "assistant":
+                continue
+            for part in message.parts:
+                if part.kind == "tool_call" and str(part.metadata.get("tool_call_id") or "") == tool_call_id:
+                    return dict(part.metadata)
+        return {}
+
+    def _update_pending_part_metadata(self, tool_call_id: str, metadata: dict[str, object]) -> None:
+        for message in reversed(self.rebuild_view().messages):
+            if message.role != "assistant":
+                continue
+            part = next(
+                (item for item in message.parts if item.kind == "tool_call" and str(item.metadata.get("tool_call_id") or "") == tool_call_id),
+                None,
+            )
+            if part is not None:
+                self.writer.append_message_part_metadata_updated(
+                    message_id=message.id,
+                    part_id=part.id,
+                    metadata=metadata,
                 )
             return
 
@@ -319,8 +410,8 @@ class AgentSession:
         }
         return confirmation
 
-    def append_session_created(self) -> None:
-        self.writer.append_session_created()
+    def append_session_created(self, **metadata: object) -> None:
+        self.writer.append_session_created(**metadata)
 
     def build_system_prefix(
         self,
@@ -350,7 +441,6 @@ class AgentSession:
         return entry.messages
 
     def set_benchmark_task(self, task: str) -> None:
-
         self.benchmark_task = task.strip()
 
     def _skill_protocol(self) -> str:
@@ -384,7 +474,7 @@ class AgentSession:
 
         prepared_attachments = prepare_attachments_for_session(
             attachments or [],
-            store_root=self.store.root,
+            paths=LansCoderPaths(storage_root=self.store.root),
             session_id=self.session_id,
         )
         message_id = self.writer.append_user_message(
@@ -497,6 +587,7 @@ class AgentSession:
         observed_revision: int | None = None,
         label: str | None = None,
         error: str | None = None,
+        branch_context: SessionBranchContext | None = None,
     ) -> str:
         """把后台任务完成通知写入会话。"""
 
@@ -509,6 +600,7 @@ class AgentSession:
             observed_revision=observed_revision,
             label=label,
             error=error,
+            branch_context=branch_context,
         )
         self.known_message_ids.add(message_id)
         return message_id

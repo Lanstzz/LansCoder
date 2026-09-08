@@ -8,6 +8,11 @@ from lanscoder.context.models import AgentMessage, MessagePart, SessionView
 from lanscoder.context.token_budget import estimate_text_tokens
 from lanscoder.context.tool_sequence import validate_tool_call_sequence
 from lanscoder.context.versions import COMPACTION_STRATEGY_VERSION
+from lanscoder.storage import LansCoderPaths
+
+
+def _paths(tmp_path: Path) -> LansCoderPaths:
+    return LansCoderPaths(storage_root=tmp_path)
 
 
 def _message(
@@ -157,7 +162,7 @@ def test_pipeline_uses_request_estimator_instead_of_raw_ledger(tmp_path) -> None
     )
     estimates = []
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=100,
@@ -178,7 +183,7 @@ def test_unconsumed_derived_result_is_not_l1_or_l2_candidate(tmp_path) -> None:
     def estimate(candidate: SessionView) -> int:
         return sum(estimate_text_tokens(item.content) for message in candidate.messages for item in message.parts)
 
-    protected = CompactionPipeline(root=tmp_path).compact(
+    protected = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=1,
@@ -187,7 +192,7 @@ def test_unconsumed_derived_result_is_not_l1_or_l2_candidate(tmp_path) -> None:
             consumed_tool_result_part_ids=frozenset(),
         )
     )
-    consumed = CompactionPipeline(root=tmp_path).compact(
+    consumed = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=1,
@@ -215,7 +220,7 @@ def test_session_view_fingerprint_tracks_persisted_message_content() -> None:
 def test_compaction_event_records_full_schema(tmp_path: Path) -> None:
     view, part = _derived_tool_result_view(content="x" * 40_000)
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=1,
@@ -247,7 +252,7 @@ def test_l1_routes_derived_search_and_stores_raw_backing(tmp_path: Path) -> None
         ],
     )
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=1,
@@ -262,7 +267,7 @@ def test_l1_routes_derived_search_and_stores_raw_backing(tmp_path: Path) -> None
     assert part.metadata["lifecycle"] == "derived"
     assert part.metadata["tool_call_id"] == "search_l1"
     assert part.metadata["replacement_tokens"] < part.metadata["original_tokens"]
-    record, backed = ToolResultArchive(tmp_path).read("sess_test", part.metadata["archive_id"])
+    record, backed = ToolResultArchive(_paths(tmp_path)).read("sess_test", part.metadata["archive_id"])
     assert backed == raw_content
     assert record.content_sha256 == part.metadata["original_content_sha256"]
 
@@ -288,7 +293,7 @@ def test_l1_never_routes_fresh_source_and_does_not_create_backing(tmp_path: Path
         ],
     )
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=1,
@@ -312,7 +317,7 @@ def test_l1_skips_when_router_has_no_strictly_smaller_candidate(tmp_path: Path) 
         ],
     )
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=1,
@@ -358,7 +363,7 @@ def test_l1_routes_build_and_diff_derived_results_with_raw_backing(tmp_path: Pat
         ],
     )
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=1,
@@ -373,8 +378,8 @@ def test_l1_routes_build_and_diff_derived_results_with_raw_backing(tmp_path: Pat
     assert build_part.metadata["build_omitted_lines"] > 0
     assert diff_part.metadata["compacted_by"] == "l1_git_diff"
     assert diff_part.metadata["diff_context_lines_omitted"] > 0
-    assert ToolResultArchive(tmp_path).read("sess_test", build_part.metadata["archive_id"])[1] == build_raw
-    assert ToolResultArchive(tmp_path).read("sess_test", diff_part.metadata["archive_id"])[1] == diff_raw
+    assert ToolResultArchive(_paths(tmp_path)).read("sess_test", build_part.metadata["archive_id"])[1] == build_raw
+    assert ToolResultArchive(_paths(tmp_path)).read("sess_test", diff_part.metadata["archive_id"])[1] == diff_raw
     validate_tool_call_sequence(result.view.messages)
 
 
@@ -387,7 +392,7 @@ def test_l1_then_l2_uses_existing_raw_backing_and_is_idempotent(tmp_path: Path) 
             _tool_result("l1_l2", "grep", content=raw_content),
         ],
     )
-    pipeline = CompactionPipeline(root=tmp_path)
+    pipeline = CompactionPipeline(paths=_paths(tmp_path))
     request = _request(
         view=view,
         target_tokens=1,
@@ -410,7 +415,7 @@ def test_l1_then_l2_uses_existing_raw_backing_and_is_idempotent(tmp_path: Path) 
 
     assert archived.metadata["compaction_state"] == "archived"
     assert archived.metadata["compacted_by"] == "l2_archive"
-    assert ToolResultArchive(tmp_path).read("sess_test", archived.metadata["archive_id"])[1] == raw_content
+    assert ToolResultArchive(_paths(tmp_path)).read("sess_test", archived.metadata["archive_id"])[1] == raw_content
     assert second.event.changed_parts == 0
     assert len(list((tmp_path / "archives" / "sess_test").glob("*.txt"))) == 1
     validate_tool_call_sequence(first.view.messages)
@@ -427,7 +432,7 @@ def test_per_result_pressure_runs_l1_then_l2_below_total_budget(tmp_path: Path) 
         ],
     )
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=100_000,
@@ -442,7 +447,7 @@ def test_per_result_pressure_runs_l1_then_l2_below_total_budget(tmp_path: Path) 
     assert result.event.changed_parts == 2
     assert result.event.replacements[0]["replacement_part"]["metadata"]["compacted_by"] == "l1_search_results"
     assert part.metadata["compaction_state"] == "archived"
-    assert ToolResultArchive(tmp_path).read("sess_test", part.metadata["archive_id"])[1] == raw_content
+    assert ToolResultArchive(_paths(tmp_path)).read("sess_test", part.metadata["archive_id"])[1] == raw_content
 
 
 def test_per_result_pressure_does_not_bypass_fresh_source_noop(tmp_path: Path) -> None:
@@ -466,7 +471,7 @@ def test_per_result_pressure_does_not_bypass_fresh_source_noop(tmp_path: Path) -
         ],
     )
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=100_000,
@@ -492,7 +497,7 @@ def test_per_result_pressure_archives_raw_derived_below_total_budget(tmp_path: P
         ],
     )
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=100_000,
@@ -505,7 +510,7 @@ def test_per_result_pressure_archives_raw_derived_below_total_budget(tmp_path: P
     part = result.view.messages[1].parts[0]
     assert result.event.levels_attempted == ["l1", "l2"]
     assert part.metadata["compaction_state"] == "archived"
-    assert ToolResultArchive(tmp_path).read("sess_test", part.metadata["archive_id"])[1] == raw_content
+    assert ToolResultArchive(_paths(tmp_path)).read("sess_test", part.metadata["archive_id"])[1] == raw_content
 
 
 def test_l2_archives_raw_derived_result_when_over_budget(tmp_path: Path) -> None:
@@ -518,7 +523,7 @@ def test_l2_archives_raw_derived_result_when_over_budget(tmp_path: Path) -> None
         ],
     )
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=1,
@@ -531,7 +536,7 @@ def test_l2_archives_raw_derived_result_when_over_budget(tmp_path: Path) -> None
     part = result.view.messages[1].parts[0]
     assert part.metadata["compaction_state"] == "archived"
     assert part.metadata["lifecycle"] == "derived"
-    assert ToolResultArchive(tmp_path).read("sess_test", part.metadata["archive_id"])[1] == raw_content
+    assert ToolResultArchive(_paths(tmp_path)).read("sess_test", part.metadata["archive_id"])[1] == raw_content
 
 
 def test_l2_archives_large_load_skill_result_through_generic_tool_path(tmp_path: Path) -> None:
@@ -544,7 +549,7 @@ def test_l2_archives_large_load_skill_result_through_generic_tool_path(tmp_path:
         ],
     )
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=1,
@@ -556,7 +561,7 @@ def test_l2_archives_large_load_skill_result_through_generic_tool_path(tmp_path:
     part = result.view.messages[1].parts[0]
     assert part.metadata["compaction_state"] == "archived"
     assert part.metadata["tool_name"] == "load_skill"
-    assert ToolResultArchive(tmp_path).read("sess_test", part.metadata["archive_id"])[1] == skill_content
+    assert ToolResultArchive(_paths(tmp_path)).read("sess_test", part.metadata["archive_id"])[1] == skill_content
     validate_tool_call_sequence(result.view.messages)
 
 
@@ -575,7 +580,7 @@ def test_l2_skips_pinned_derived_result(tmp_path: Path) -> None:
         ],
     )
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=1,
@@ -614,7 +619,7 @@ def test_l2_never_routes_text_even_when_force_flag_is_set(tmp_path: Path) -> Non
         ],
     )
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=100_000,
@@ -633,7 +638,7 @@ def test_l2_never_routes_text_even_when_force_flag_is_set(tmp_path: Path) -> Non
 def test_pipeline_stops_after_budget_target_is_met(tmp_path: Path) -> None:
     view, _ = _derived_tool_result_view(content="x" * 40_000)
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=1000,
@@ -661,7 +666,7 @@ def test_pipeline_does_nothing_when_already_within_budget(tmp_path: Path) -> Non
         ],
     )
 
-    result = CompactionPipeline(root=tmp_path, large_tool_result_tokens=20).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path), large_tool_result_tokens=20).compact(
         _request(
             view=view,
             target_tokens=10_000,
@@ -682,7 +687,7 @@ def test_already_within_budget_noop_is_deduped(tmp_path: Path) -> None:
         session_id="sess_test",
         messages=[_message("msg_current", content="short")],
     )
-    pipeline = CompactionPipeline(root=tmp_path)
+    pipeline = CompactionPipeline(paths=_paths(tmp_path))
     request = _request(
         view=view,
         target_tokens=10_000,
@@ -703,7 +708,7 @@ def test_noop_compaction_is_recorded_and_deduped(tmp_path: Path) -> None:
         session_id="sess_test",
         messages=[_message("msg_current", content="short")],
     )
-    pipeline = CompactionPipeline(root=tmp_path)
+    pipeline = CompactionPipeline(paths=_paths(tmp_path))
     request = _request(
         view=view,
         target_tokens=1,
@@ -730,7 +735,7 @@ def test_pipeline_does_not_replace_part_when_compaction_would_increase_tokens(tm
         ],
     )
 
-    result = CompactionPipeline(root=tmp_path).compact(
+    result = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=100_000,
@@ -760,7 +765,7 @@ def test_l2_keeps_fresh_large_view_and_structured_tool_call_byte_identical(tmp_p
         },
     )
 
-    compacted = CompactionPipeline(root=tmp_path).compact(
+    compacted = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=SessionView(session_id="sess_test", messages=[call, result]),
             target_tokens=100_000,
@@ -800,7 +805,7 @@ def test_l2_archives_stale_view_and_keeps_raw_backing(tmp_path: Path) -> None:
         ],
     )
 
-    compacted = CompactionPipeline(root=tmp_path).compact(
+    compacted = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=1,
@@ -815,7 +820,7 @@ def test_l2_archives_stale_view_and_keeps_raw_backing(tmp_path: Path) -> None:
     assert archived.metadata["lifecycle_reason"] == "source_mutated"
     assert "lifecycle=stale" in archived.content
     assert raw_content not in archived.content
-    record, backed = ToolResultArchive(tmp_path).read("sess_test", archived.metadata["archive_id"])
+    record, backed = ToolResultArchive(_paths(tmp_path)).read("sess_test", archived.metadata["archive_id"])
     assert backed == raw_content
     assert record.archive_id == archived.metadata["archive_id"]
     assert compacted.event.lifecycle_counts["stale"] == 1
@@ -844,7 +849,7 @@ def test_l2_archives_superseded_view_after_later_covering_view(tmp_path: Path) -
         ],
     )
 
-    compacted = CompactionPipeline(root=tmp_path).compact(
+    compacted = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=1,
@@ -876,7 +881,7 @@ def test_l2_archives_duplicate_derived_results_under_the_same_content_addressed_
         ],
     )
 
-    compacted = CompactionPipeline(root=tmp_path).compact(
+    compacted = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=100_000,
@@ -910,7 +915,7 @@ def test_l2_skips_current_turn_protected_archive_retrieval_duplicate(tmp_path: P
         ],
     )
 
-    compacted = CompactionPipeline(root=tmp_path).compact(
+    compacted = CompactionPipeline(paths=_paths(tmp_path)).compact(
         _request(
             view=view,
             target_tokens=1,

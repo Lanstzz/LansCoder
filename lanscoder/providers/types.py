@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
+from math import isfinite
 from typing import Any, Literal
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
@@ -31,7 +33,6 @@ StreamEventKind = Literal[
 
 @dataclass(frozen=True, slots=True)
 class ProviderCapabilities:
-
     supports_tools: bool = True
     supports_forced_tool_choice: bool = True
     supports_streaming: bool = False
@@ -44,15 +45,52 @@ class ProviderCapabilities:
 
 @dataclass(slots=True)
 class TokenUsage:
-
     input_tokens: int | None = None
     output_tokens: int | None = None
     total_tokens: int | None = None
+    usage_details: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.usage_details = _json_safe_usage_details(self.usage_details)
+
+
+def _json_safe_usage_details(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+
+    result: dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            continue
+        safe_item = _json_safe_usage_detail_value(item)
+        if safe_item is not _UNSAFE_USAGE_DETAIL:
+            result[key] = safe_item
+    return result
+
+
+_UNSAFE_USAGE_DETAIL = object()
+
+
+def _json_safe_usage_detail_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if isfinite(value) else _UNSAFE_USAGE_DETAIL
+    if isinstance(value, Mapping):
+        safe_mapping = _json_safe_usage_details(value)
+        return safe_mapping if safe_mapping else _UNSAFE_USAGE_DETAIL
+    if isinstance(value, (list, tuple)):
+        safe_items = []
+        for item in value:
+            safe_item = _json_safe_usage_detail_value(item)
+            if safe_item is not _UNSAFE_USAGE_DETAIL:
+                safe_items.append(safe_item)
+        return safe_items
+    return _UNSAFE_USAGE_DETAIL
 
 
 @dataclass(slots=True)
 class ProviderDiagnostics:
-
     reasoning: str | None = None
     # 无 reasoning 时该字段恒为 None。两条分支都仅在有 reasoning 时写入：
     # 流式：首个 reasoning_delta 到首个 text_delta/tool_call_started/message_completed 的墙钟间隔；
@@ -64,7 +102,6 @@ class ProviderDiagnostics:
 
 @dataclass(slots=True)
 class ContentPart:
-
     type: Literal["text", "image"]
     text: str | None = None
     media_type: str | None = None
@@ -74,7 +111,6 @@ class ContentPart:
 
 @dataclass(slots=True)
 class ChatMessage:
-
     role: MessageRole
     content: str
     content_parts: list[ContentPart] | None = None
@@ -85,7 +121,6 @@ class ChatMessage:
 
 @dataclass(slots=True)
 class ToolDefinition:
-
     name: str
     description: str
     parameters: dict[str, Any] = field(default_factory=dict)
@@ -93,7 +128,6 @@ class ToolDefinition:
 
 @dataclass(slots=True)
 class ToolCall:
-
     id: str
     name: str
     arguments: dict[str, Any] | str
@@ -101,7 +135,6 @@ class ToolCall:
 
 @dataclass(frozen=True, slots=True)
 class ToolChoiceFunction:
-
     name: str
 
 
@@ -110,7 +143,6 @@ ToolChoice = ToolChoiceMode | ToolChoiceFunction
 
 @dataclass(frozen=True, slots=True)
 class MainRequestOptions:
-
     temperature: float | None = None
     max_tokens: int | None = None
     extra_body: dict[str, Any] = field(default_factory=dict)
@@ -128,7 +160,6 @@ class MainRequestOptions:
 
 @dataclass(slots=True)
 class ChatRequest:
-
     messages: list[ChatMessage]
     tools: list[ToolDefinition] = field(default_factory=list)
     tool_choice: ToolChoice | None = "auto"
@@ -139,7 +170,6 @@ class ChatRequest:
 
 @dataclass(slots=True)
 class ChatResponse:
-
     provider: str
     model: str
     content: str
@@ -152,7 +182,6 @@ class ChatResponse:
 
 @dataclass(slots=True)
 class ChatStreamEvent:
-
     kind: StreamEventKind
     text: str = ""
     tool_call: ToolCall | None = None

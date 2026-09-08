@@ -12,6 +12,7 @@ from typing import Any
 from lanscoder.context.models import MessagePart, utc_now_iso
 from lanscoder.context.token_budget import estimate_text_tokens
 from lanscoder.context.versions import ARCHIVE_SCHEMA_VERSION
+from lanscoder.storage import LansCoderPaths
 
 _SAFE_COMPONENT = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
@@ -22,7 +23,6 @@ class ArchiveIntegrityError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class ArchiveRecord:
-
     archive_id: str
     session_id: str
     content_sha256: str
@@ -34,8 +34,11 @@ class ArchiveRecord:
 
 @dataclass(slots=True)
 class ToolResultArchive:
+    paths: LansCoderPaths
 
-    root: str | Path
+    def __post_init__(self) -> None:
+        if not isinstance(self.paths, LansCoderPaths):
+            raise TypeError("ToolResultArchive requires LansCoderPaths")
 
     def store_original(
         self,
@@ -43,7 +46,6 @@ class ToolResultArchive:
         part: MessagePart,
         original_content: str | None = None,
     ) -> ArchiveRecord:
-
         self._validate_part(part)
         raw = part.content if original_content is None else original_content
         digest = _sha256(raw)
@@ -55,7 +57,6 @@ class ToolResultArchive:
         )
 
     def read(self, session_id: str, archive_id: str) -> tuple[ArchiveRecord, str]:
-
         text_path, metadata_path = self._archive_paths(session_id, archive_id)
         raw = text_path.read_text(encoding="utf-8")
         metadata = _read_metadata(metadata_path)
@@ -93,7 +94,6 @@ class ToolResultArchive:
         summary: str | None = None,
         key_errors: tuple[str, ...] = (),
     ) -> MessagePart:
-
         self._validate_part(part)
         tool_name = _short(part.metadata.get("tool_name") or "tool", 64)
         status = _short(_tool_status(part), 32)
@@ -188,7 +188,7 @@ class ToolResultArchive:
     def _archive_paths(self, session_id: str, archive_id: str) -> tuple[Path, Path]:
         _validate_component(session_id, "session_id")
         _validate_component(archive_id, "archive_id")
-        directory = Path(self.root) / "archives" / session_id
+        directory = self.paths.archives / session_id
         return directory / f"{archive_id}.txt", directory / f"{archive_id}.json"
 
     @staticmethod
@@ -211,7 +211,6 @@ def _content_addressed_id(content_sha256: str) -> str:
 
 
 def _atomic_write(path: Path, content: str) -> None:
-
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent, text=True)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:

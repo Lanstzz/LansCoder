@@ -83,6 +83,8 @@ class PermissionResumeHandler:
         if result is None:
             result = await anyio.to_thread.run_sync(self._execute_resumed_permission_tool_call, pending)
             self._emit_finished_permission_resume(pending, result)
+        elif pending.kind == "ask_user":
+            self._emit_finished_permission_resume(pending, result)
         chained = await self._finish_permission_resume(pending, result)
         if chained is not None:
             return ResumeOutcome(
@@ -117,13 +119,38 @@ class PermissionResumeHandler:
 
     def _prepare_permission_resume(self, pending: PendingPermissionExecution, answer: str) -> ToolResult | None:
         if pending.kind == "ask_user":
+            self._emit_tool_event("started", pending.tool_call)
+            self._observer.record_user_input(
+                tool_call=pending.tool_call,
+                request_id=pending.request_id,
+                event="ask_user_answer",
+            )
             return make_text_result(
                 "ask_user",
                 answer,
                 question=str(pending.ask_user_request.question if pending.ask_user_request is not None else ""),
                 answer=answer,
             )
-        result = self._blocked_permission_resume_result(pending, answer)
+        decision = self._resolve_pending_confirmation(pending, answer)
+        result = self._blocked_permission_resume_result(pending, answer, decision=decision)
+        if pending.prewrite_review is not None:
+            self._emit_tool_event(
+                "prewrite_review",
+                pending.tool_call,
+                permission_request=pending.permission_request,
+                prewrite_review=pending.prewrite_review.to_payload(),
+            )
+        self._emit_tool_event(
+            "started",
+            pending.tool_call,
+            permission_request=pending.permission_request,
+        )
+        if pending.permission_request is not None:
+            self._observer.record_permission_decision(
+                tool_call=pending.tool_call,
+                permission_request_id=pending.permission_request.id,
+                decision=decision.kind.value,
+            )
         if result is not None:
             self._emit_tool_event(
                 "denied",
@@ -132,11 +159,6 @@ class PermissionResumeHandler:
                 permission_request=pending.permission_request,
             )
             return result
-        self._emit_tool_event(
-            "started",
-            pending.tool_call,
-            permission_request=pending.permission_request,
-        )
         return None
 
     def _execute_resumed_permission_tool_call(self, pending: PendingPermissionExecution) -> ToolResult:
@@ -175,8 +197,14 @@ class PermissionResumeHandler:
             reason=f"未知写前预览选择：{answer}",
         )
 
-    def _blocked_permission_resume_result(self, pending: PendingPermissionExecution, answer: str) -> ToolResult | None:
-        decision = self._resolve_pending_confirmation(pending, answer)
+    def _blocked_permission_resume_result(
+        self,
+        pending: PendingPermissionExecution,
+        answer: str,
+        *,
+        decision: PermissionDecision | None = None,
+    ) -> ToolResult | None:
+        decision = decision or self._resolve_pending_confirmation(pending, answer)
         if decision.kind == PermissionDecisionKind.DENY:
             return make_permission_denied_result(
                 tool_name=pending.tool_call.name,
@@ -216,6 +244,7 @@ class PermissionResumeHandler:
         *,
         result: ToolResult | None = None,
         permission_request: PermissionRequest | None = None,
+        prewrite_review: dict[str, object] | None = None,
     ) -> None:
         self._observer.on_tool_event(
             ToolExecutionEvent(
@@ -223,5 +252,6 @@ class PermissionResumeHandler:
                 tool_call=tool_call,
                 result=result,
                 permission_request=permission_request,
+                prewrite_review=prewrite_review,
             )
         )

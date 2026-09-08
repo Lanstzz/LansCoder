@@ -12,6 +12,7 @@ def _registry(tmp_path: Path) -> tuple[ToolRegistry, MemoryManager, SessionEvent
 
     store = JsonlSessionStore(tmp_path / "data")
     writer = SessionEventWriter(store=store, session_id="sess_test")
+    writer.append_session_created()
     manager = MemoryManager(user_root=tmp_path / "user", project_root=tmp_path / "proj")
     registry = ToolRegistry(create_memory_tools(manager, writer))
     return registry, manager, writer

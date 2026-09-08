@@ -8,6 +8,9 @@ from lanscoder.app.commands import CommandResult
 from lanscoder.context.models import SessionView
 from lanscoder.context.runtime_state import SessionRuntimeState
 from lanscoder.context.store import JsonlSessionStore
+from lanscoder.journal.models import new_branch_id
+from lanscoder.session.branch import build_branch_topology
+from lanscoder.session.projection import active_projection
 from lanscoder.session.resume import ResumeService
 
 
@@ -113,17 +116,39 @@ class RecallCommandHandler:
 
     def recall_to(self, message_id: str) -> str:
         session_id = self.session.session_id
-        target_turn = self._turn_for_message(message_id)
-        self.store.truncate_before_message(session_id, message_id)
+        events = self.store.list_events(session_id)
+        topology = build_branch_topology(events)
+        projected = active_projection(events, topology=topology)
+        target_index = next(
+            (
+                index
+                for index, event in enumerate(projected)
+                if event.kind == "message.appended"
+                and event.data.get("role") == "user"
+                and str(event.data.get("message_id") or "") == message_id
+            ),
+            None,
+        )
+        if target_index is None:
+            raise ValueError(f"message_id not found on the active branch: {message_id}")
+        if target_index == 0:
+            raise ValueError("cannot recall before the session.created event")
 
-        from lanscoder.session.index import SessionIndex
-
-        SessionIndex(self.store.root).rebuild_session(session_id)
+        parent_branch_id = topology.active_branch_id or topology.root_branch_id
+        branch_id = new_branch_id()
+        self.store.append_journal_event(
+            session_id=session_id,
+            kind="session.recalled",
+            branch_id=branch_id,
+            data={
+                "new_branch_id": branch_id,
+                "parent_branch_id": parent_branch_id,
+                "base_sequence": projected[target_index - 1].sequence,
+                "excluded_target_message_id": message_id,
+            },
+        )
 
         new_session = self._resume_session(session_id)
-
-        if self.background_manager is not None and target_turn is not None:
-            self.background_manager.abandon_since(session_id, min_dispatch_turn=target_turn)
 
         self.on_recall(new_session)
 
@@ -134,18 +159,6 @@ class RecallCommandHandler:
         if self.resume_service is not None:
             return self.resume_service.resume(session_id).session
         return self.bootstrap.resume(session_id)
-
-    def _turn_for_message(self, message_id: str) -> int | None:
-
-        for msg in self.session.rebuild_view().messages:
-            if msg.id != message_id or msg.role != "user":
-                continue
-            for part in msg.parts:
-                turn = part.metadata.get("created_turn") or part.metadata.get("turn_id")
-                if isinstance(turn, int) and turn > 0:
-                    return turn
-            return None
-        return None
 
     def _text_for_message(self, message_id: str) -> str:
 

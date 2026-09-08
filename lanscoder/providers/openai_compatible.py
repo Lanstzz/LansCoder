@@ -17,6 +17,8 @@ from lanscoder.providers.streaming import (
     StreamFailure,
     StreamToolCallAccumulator,
     complete_stream_tool_calls,
+    extract_usage_details,
+    merge_usage,
     read_field as _read_field,
     start_sync_stream_worker,
     token_usage,
@@ -30,6 +32,7 @@ from lanscoder.providers.types import (
     FinishReason,
     ProviderCapabilities,
     ProviderDiagnostics,
+    TokenUsage,
     ToolChoice,
     ToolChoiceFunction,
     ToolCall,
@@ -37,7 +40,6 @@ from lanscoder.providers.types import (
 
 
 def _read_reasoning_delta(delta: Any) -> str:
-
     for name in ("reasoning_content", "reasoning"):
         value = _read_field(delta, name)
         if isinstance(value, str):
@@ -51,7 +53,6 @@ def _read_reasoning_delta(delta: Any) -> str:
 
 
 class OpenAICompatibleProvider(ChatProvider):
-
     def __init__(
         self,
         *,
@@ -108,7 +109,6 @@ class OpenAICompatibleProvider(ChatProvider):
         return dict(self._extra_body)
 
     def complete(self, request: ChatRequest) -> ChatResponse:
-
         params = self._build_completion_params(request)
         try:
             response = self._client.chat.completions.create(**params)
@@ -138,7 +138,6 @@ class OpenAICompatibleProvider(ChatProvider):
         )
 
     async def astream(self, request: ChatRequest) -> AsyncIterator[ChatStreamEvent]:
-
         if not self._capabilities.supports_streaming:
             raise ProviderError(
                 ProviderErrorKind.UNSUPPORTED,
@@ -153,6 +152,7 @@ class OpenAICompatibleProvider(ChatProvider):
         tool_accumulators: dict[int, StreamToolCallAccumulator] = {}
         raw_finish_reason: Any = None
         response_model = self._model
+        usage: TokenUsage | None = None
 
         try:
             stream = await asyncio.to_thread(self._client.chat.completions.create, **params)
@@ -183,6 +183,7 @@ class OpenAICompatibleProvider(ChatProvider):
                     raise stream_error
 
                 response_model = _read_field(chunk, "model", response_model) or response_model
+                usage = merge_usage(usage, _parse_usage(_read_field(chunk, "usage")))
                 choices = _read_field(chunk, "choices", []) or []
                 if not choices:
                     continue
@@ -244,11 +245,11 @@ class OpenAICompatibleProvider(ChatProvider):
             tool_calls=tool_calls,
             finish_reason=finish_reason,
             diagnostics=diagnostics,
+            usage=usage,
         )
         yield ChatStreamEvent(kind="message_completed", response=response, diagnostics=diagnostics)
 
     def _build_completion_params(self, request: ChatRequest) -> dict[str, Any]:
-
         if request.tools and not self._capabilities.supports_tools:
             raise ProviderError(
                 ProviderErrorKind.CONFIG_ERROR,
@@ -277,7 +278,6 @@ class OpenAICompatibleProvider(ChatProvider):
 
     @staticmethod
     def _to_openai_message(message: ChatMessage) -> dict[str, Any]:
-
         content: str | list[dict[str, Any]] = message.content
         if message.content_parts is not None:
             content = []
@@ -317,7 +317,6 @@ class OpenAICompatibleProvider(ChatProvider):
 
     @staticmethod
     def _parse_tool_calls(tool_calls: list[Any], *, diagnostics: ProviderDiagnostics) -> list[ToolCall]:
-
         parsed: list[ToolCall] = []
         for call in tool_calls:
             function = _read_field(call, "function", {})
@@ -340,7 +339,6 @@ class OpenAICompatibleProvider(ChatProvider):
 
 
 def _normalize_finish_reason(reason: Any) -> FinishReason:
-
     if reason in {"stop", "tool_calls", "length", "content_filter"}:
         return reason
     if reason is None:
@@ -349,17 +347,19 @@ def _normalize_finish_reason(reason: Any) -> FinishReason:
 
 
 def _parse_usage(usage: Any):
-
     if usage is None:
         return None
     input_tokens = _read_field(usage, "prompt_tokens")
     output_tokens = _read_field(usage, "completion_tokens")
     total_tokens = _read_field(usage, "total_tokens")
-    return token_usage(input_tokens, output_tokens, total_tokens)
+    usage_details = extract_usage_details(
+        usage,
+        nested_fields=("prompt_tokens_details", "completion_tokens_details"),
+    )
+    return token_usage(input_tokens, output_tokens, total_tokens, usage_details=usage_details)
 
 
 def _to_openai_tool_choice(tool_choice: ToolChoice | None) -> str | dict[str, Any] | None:
-
     if tool_choice is None:
         return None
     if isinstance(tool_choice, ToolChoiceFunction):

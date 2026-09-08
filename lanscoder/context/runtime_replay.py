@@ -8,9 +8,10 @@ from lanscoder.context.store import JsonlSessionStore
 
 
 def replay_runtime_state(store: JsonlSessionStore, session_id: str) -> SessionRuntimeState:
+    from lanscoder.session.projection import active_projection
 
     state = SessionRuntimeState(session_id=session_id)
-    for event in store.list_events(session_id):
+    for event in active_projection(store.list_events(session_id)):
         _apply_event(state, event)
     return state
 

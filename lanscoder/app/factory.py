@@ -13,6 +13,7 @@ from lanscoder.app.mcp_commands import McpCommandHandler
 from lanscoder.app.memory_commands import MemoryCommandHandler
 from lanscoder.app.model_commands import ModelCommandHandler, ModelState
 from lanscoder.app.model_state import ModelSelectionState, ModelStateStore
+from lanscoder.app.observe_commands import ObserveCommandHandler, ObservatoryServerManager
 from lanscoder.app.permission_commands import PermissionCommandHandler
 from lanscoder.app.recall_commands import RecallCommandHandler
 from lanscoder.app.router import CompositeCommandHandler
@@ -42,6 +43,7 @@ from lanscoder.session.fork import ForkSessionService
 from lanscoder.session.new import NewSessionService
 from lanscoder.session.resume import ResumeService
 from lanscoder.session.share import SessionShareService
+from lanscoder.storage import LansCoderPaths
 from lanscoder.tools.builtin import create_builtin_registry
 from lanscoder.agent.background import BackgroundJobManager
 from lanscoder.tools.types import Tool
@@ -107,7 +109,7 @@ class McpToolProvider:
 def create_lanscoder_app(
     *,
     project_root: str | Path = ".",
-    data_root: str | Path | None = None,
+    storage_root: str | Path | None = None,
     provider: ChatProvider | None = None,
     session_id: str | None = None,
     resume_session: bool = False,
@@ -123,9 +125,9 @@ def create_lanscoder_app(
     """应用工厂:解析配置、装配全部组件并返回可运行的 LansCoderApp。"""
 
     project_path = Path(project_root)
-    resolved_data_root = Path(data_root) if data_root is not None else project_path / ".lanscoder"
+    paths = LansCoderPaths(storage_root=storage_root, project_root=project_path)
     resolved_app_config = app_config or load_config(project_root=project_path)
-    model_state_store = ModelStateStore(resolved_data_root / "model_state.json")
+    model_state_store = ModelStateStore(paths.model_state)
     model_catalog = resolved_app_config.model_catalog()
     selected_profile: ModelProfile | None = None
     if provider is None:
@@ -164,17 +166,13 @@ def create_lanscoder_app(
     handle = create_agent_session(
         provider=resolved_provider,
         project_root=project_path,
-        data_root=resolved_data_root,
+        storage_root=paths.storage_root,
         tools=current_tools,
         session_id=session_id,
         resume=resume_session,
         limits=AgentLoopLimits.default(),
         request_options=_main_request_options(selected_profile),
-        context_window=(
-            context_window
-            if context_window is not None
-            else (selected_profile.context_window if selected_profile is not None else None)
-        ),
+        context_window=(context_window if context_window is not None else (selected_profile.context_window if selected_profile is not None else None)),
         compaction_strategy=compaction_strategy or "l1_l2_l3",
         background_manager=background_manager,
     )
@@ -192,19 +190,16 @@ def create_lanscoder_app(
     bootstrap = SessionBootstrap(
         store=store,
         project_root=project_path,
-        data_root=resolved_data_root,
+        paths=paths,
         tools=current_tools,
         sandbox_access=sandbox_access,
     )
     compact_summarizer = context_manager.l3_service.summarizer
-    catalog = SessionCatalog(resolved_data_root)
-    from lanscoder.session.index import SessionIndex
-
-    SessionIndex(resolved_data_root).prune_empty(exclude={session.session_id})
+    catalog = SessionCatalog(paths.storage_root, project_id=paths.project_id)
     resume_service = ResumeService(
         store=store,
         project_root=project_path,
-        data_root=resolved_data_root,
+        paths=paths,
         tools_provider=tool_provider,
         sandbox_access=sandbox_access,
         catalog=catalog,
@@ -212,20 +207,21 @@ def create_lanscoder_app(
     new_service = NewSessionService(
         store=store,
         project_root=project_path,
-        data_root=resolved_data_root,
+        paths=paths,
         tools_provider=tool_provider,
         sandbox_access=sandbox_access,
     )
     fork_service = ForkSessionService(
         store=store,
         project_root=project_path,
-        data_root=resolved_data_root,
+        paths=paths,
         tools_provider=tool_provider,
         sandbox_access=sandbox_access,
         catalog=catalog,
     )
     session_handler = SessionCommandHandler(
         catalog=catalog,
+        access_policy=bootstrap.access_policy(),
         current_session=current.session,
         new_service=new_service,
         fork_service=fork_service,
@@ -270,6 +266,12 @@ def create_lanscoder_app(
         resume_service=resume_service,
         background_manager=background_manager,
     )
+    observatory_manager = ObservatoryServerManager(paths)
+    observe_handler = ObserveCommandHandler(
+        current_session=current,
+        active_trace_id=lambda: getattr(current.session.writer, "trace_id", None),
+        server_manager=observatory_manager,
+    )
     command_handler = CompositeCommandHandler(
         [
             McpCommandHandler(mcp_manager),
@@ -280,6 +282,7 @@ def create_lanscoder_app(
             permission_handler,
             skill_handler,
             memory_handler,
+            observe_handler,
         ]
     )
     help_handler = HelpCommandHandler(command_handler=command_handler)
@@ -287,7 +290,10 @@ def create_lanscoder_app(
 
     def _close_session_and_mcp() -> None:
         try:
-            chat_runner.flush_background_notifications()
+            try:
+                chat_runner.flush_background_notifications()
+            finally:
+                observatory_manager.shutdown()
         finally:
             mcp_manager.close()
 

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
+from dataclasses import asdict
+from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from functools import partial
 from typing import Any, Literal
 
@@ -34,6 +36,7 @@ from lanscoder.agent.user_input import (
     AgentTurnStatus,
 )
 from lanscoder.context.context_builder import ContextBuilder
+from lanscoder.session.branch import SessionBranchContext
 from lanscoder.context.manager import ContextCompactRequest, ContextWindowTrigger
 from lanscoder.input.attachments import UserAttachment
 from lanscoder.permissions.types import PermissionRequest
@@ -42,6 +45,9 @@ from lanscoder.providers.errors import ProviderError, ProviderErrorKind
 from lanscoder.providers.types import ChatResponse, ChatStreamEvent, MainRequestOptions, ToolCall
 from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from lanscoder.tools.types import ToolResult
+from lanscoder.observability.context import get_observation_id
+from lanscoder.observability.models import ObservationType, TraceScope
+from lanscoder.observability.protocol import TraceRecorder
 
 
 class AgentLoop:
@@ -69,6 +75,9 @@ class AgentLoop:
         context_window: int | None = None,
         background_manager: BackgroundJobManager | None = None,
         background_tool_names: frozenset[str] | None = None,
+        trace_recorder: TraceRecorder | None = None,
+        trace_id: str | None = None,
+        trace_scope: TraceScope | None = None,
     ) -> None:
         """注入循环依赖:会话、provider、请求构建、护栏、观察者、工具执行器与权限恢复处理器。"""
         self.session = session
@@ -102,6 +111,9 @@ class AgentLoop:
         self._observer = observer
         self.tool_executor = tool_executor
         self.permission_resume = permission_resume
+        self.trace_recorder = trace_recorder
+        self.trace_id = trace_id
+        self.trace_scope = trace_scope
 
     @property
     def stream_event_handler(self) -> Callable[[ChatStreamEvent], None] | None:
@@ -121,6 +133,15 @@ class AgentLoop:
         self._tool_event_handler = value
         self._observer.set_tool_event_handler(value)
 
+    def set_trace_context(self, recorder: TraceRecorder | None, trace_id: str | None, scope: TraceScope | None = None) -> None:
+        """Update recorder state when a paused loop continues on a new turn."""
+
+        self.trace_recorder = recorder
+        self.trace_id = trace_id
+        self.trace_scope = scope
+        self._mcp_activation.set_trace_context(recorder, trace_id, scope)
+        self._observer.set_trace_context(recorder, trace_id, scope)
+
     async def run_user_turn(
         self,
         content: str,
@@ -130,16 +151,55 @@ class AgentLoop:
     ) -> AgentTurnResult:
         """用户回合入口:按 streaming 选择流式或异步执行路径。"""
 
-        if streaming:
-            return await self._run_user_turn_streaming(content, attachments=attachments)
-        return await self._run_user_turn_async(content, attachments=attachments)
+        execute = self._run_user_turn_streaming if streaming else self._run_user_turn_async
+        return await self._run_agent_segment(partial(execute, content, attachments=attachments))
 
     async def run_nudge_turn(self, *, streaming: bool = False) -> AgentTurnResult:
         """引导回合入口:按 streaming 选择路径,用于消费后台任务完成事件。"""
 
-        if streaming:
-            return await self._run_nudge_turn_streaming()
-        return await self._run_nudge_turn_async()
+        execute = self._run_nudge_turn_streaming if streaming else self._run_nudge_turn_async
+        return await self._run_agent_segment(execute)
+
+    async def _run_agent_segment(self, execute: Callable[[], Awaitable[AgentTurnResult]]) -> AgentTurnResult:
+        recorder = self.trace_recorder
+        observation_id = None
+        if recorder is not None and self.trace_id is not None:
+            try:
+                observation_id = recorder.start_observation(
+                    self.trace_id,
+                    ObservationType.AGENT,
+                    scope=self.trace_scope,
+                    data={"turn": self.session.current_turn, "limits": asdict(self.limits)},
+                )
+            except Exception:
+                pass
+        context = self.trace_scope.activate(trace_id=self.trace_id, observation_id=observation_id) if self.trace_scope is not None else nullcontext()
+        outcome = "succeeded"
+        error = None
+        data = {}
+        try:
+            with context:
+                result = await execute()
+                if result.pending_input is not None:
+                    self.session.persist_pending_trace(self.trace_id)
+                    data["status"] = "waiting_for_input"
+                elif result.response is not None:
+                    data["finish_reason"] = result.response.finish_reason
+                    if result.response.finish_reason == "interrupted":
+                        outcome = "cancelled"
+                    elif result.response.finish_reason == "error":
+                        outcome = "failed"
+                return result
+        except BaseException as exc:
+            outcome = "cancelled" if isinstance(exc, (AgentCancelledError, asyncio.CancelledError)) else "failed"
+            error = exc
+            raise
+        finally:
+            if recorder is not None and observation_id is not None:
+                try:
+                    recorder.end_observation(observation_id, outcome=outcome, data=data, error=error)
+                except Exception:
+                    pass
 
     def replace_cancellation_token(self, token: CancellationToken | None) -> None:
         """替换取消令牌,并同步到工具执行器与观察者。"""
@@ -159,7 +219,7 @@ class AgentLoop:
     ) -> AgentTurnResult:
         """同步包装:在新事件循环中执行一次用户回合。"""
 
-        return asyncio.run(self._run_user_turn_async(content, attachments=attachments))
+        return asyncio.run(self.run_user_turn(content, attachments=attachments))
 
     async def _run_user_turn_async(
         self,
@@ -188,7 +248,7 @@ class AgentLoop:
     def _run_nudge_turn_sync(self) -> AgentTurnResult:
         """同步包装:在新事件循环中执行引导回合。"""
 
-        return asyncio.run(self._run_nudge_turn_async())
+        return asyncio.run(self.run_nudge_turn())
 
     async def _run_nudge_turn_async(self) -> AgentTurnResult:
         """异步引导回合:无挂起权限执行或后台完成时提前返回,否则进入工具循环。"""
@@ -218,14 +278,13 @@ class AgentLoop:
     ) -> AgentTurnResult:
         """携带用户输入恢复被挂起的回合(权限确认或 ask_user)。"""
 
-        if streaming:
-            return await self._resume_with_user_input_streaming(request_id, answer)
-        return await self._resume_with_user_input_async(request_id, answer)
+        execute = self._resume_with_user_input_streaming if streaming else self._resume_with_user_input_async
+        return await self._run_agent_segment(partial(execute, request_id, answer))
 
     def _resume_with_user_input_sync(self, request_id: str, answer: str) -> AgentTurnResult:
         """同步包装:在新事件循环中恢复被挂起的回合。"""
 
-        return asyncio.run(self._resume_with_user_input_async(request_id, answer))
+        return asyncio.run(self.resume_with_user_input(request_id, answer))
 
     async def _resume_with_user_input_async(self, request_id: str, answer: str) -> AgentTurnResult:
         """异步恢复回合:先做超时/取消检查,委托权限恢复处理器,需要时继续工具循环。"""
@@ -324,6 +383,7 @@ class AgentLoop:
         tool_choice="auto",
         runtime_instruction: str | None = None,
         streaming: bool,
+        retry_sequence: int = 0,
     ) -> ChatResponse:
         """执行一次「调用 provider 拿响应」:构建请求、预检护栏/取消,支持同步或流式。"""
         prepared = self._prepare_main_provider_request(
@@ -333,9 +393,19 @@ class AgentLoop:
         self.guardrails.reserve_call()
         self.guardrails.check_timeout()
         self._check_cancelled()
+        generation_id = self._start_generation(
+            prepared,
+            streaming=streaming,
+            tool_choice=tool_choice,
+            retry_sequence=retry_sequence,
+        )
         if not streaming:
             started_at = time.monotonic()
-            response = await anyio.to_thread.run_sync(self.provider.complete, prepared.request)
+            try:
+                response = await anyio.to_thread.run_sync(self.provider.complete, prepared.request)
+            except BaseException as error:
+                self._end_generation(generation_id, outcome="failed", error=error)
+                raise
             if response.diagnostics.reasoning:
                 response.diagnostics.reasoning_seconds = max(0.0, time.monotonic() - started_at)
         else:
@@ -343,12 +413,22 @@ class AgentLoop:
             final_response: ChatResponse | None = None
             reasoning_started_at: float | None = None
             reasoning_seconds: float | None = None
+            first_output_ms: int | None = None
+            generation_started_at = time.monotonic()
             try:
                 async for event in self.provider.astream(prepared.request):
                     self._check_cancelled()
                     self.last_stream_events.append(event)
                     self._observer.on_stream_event(event)
                     kind = event.kind
+                    if first_output_ms is None and kind in {
+                        "reasoning_delta",
+                        "text_delta",
+                        "tool_call_started",
+                        "tool_call_delta",
+                        "tool_call_completed",
+                    }:
+                        first_output_ms = max(0, int((time.monotonic() - generation_started_at) * 1000))
                     if kind == "reasoning_delta":
                         if reasoning_started_at is None:
                             reasoning_started_at = time.monotonic()
@@ -361,15 +441,101 @@ class AgentLoop:
                         ProviderErrorKind.API_ERROR,
                         "provider stream ended without message_completed event",
                     )
-            except ProviderError:
+            except BaseException as error:
+                attempt_events = self.last_stream_events[start_event_count:]
+                self._end_generation(
+                    generation_id,
+                    outcome="failed",
+                    error=error,
+                    streaming=True,
+                    stream_events=attempt_events,
+                    first_output_ms=first_output_ms,
+                )
                 del self.last_stream_events[start_event_count:]
                 raise
             if reasoning_seconds is not None and final_response.diagnostics.reasoning:
                 final_response.diagnostics.reasoning_seconds = reasoning_seconds
             response = final_response
+        self._end_generation(
+            generation_id,
+            outcome="succeeded",
+            response=response,
+            streaming=streaming,
+            stream_events=self.last_stream_events[start_event_count:] if streaming else None,
+            first_output_ms=first_output_ms if streaming else None,
+        )
         self._record_projection_consumed(prepared)
         self._report_progress(response)
         return response
+
+    def _start_generation(
+        self,
+        prepared: PreparedMainRequest,
+        *,
+        streaming: bool,
+        tool_choice: object,
+        retry_sequence: int,
+    ) -> str | None:
+        if self.trace_recorder is None or self.trace_id is None:
+            return None
+        try:
+            return self.trace_recorder.start_observation(
+                self.trace_id,
+                ObservationType.GENERATION,
+                data={
+                    "operation": "compaction" if prepared.request_id.startswith("compact_") else "chat",
+                    "request_id": prepared.request_id,
+                    "provider": self.provider.name,
+                    "model": self.provider.model,
+                    "streaming": streaming,
+                    "tool_choice": tool_choice,
+                    "retry_sequence": retry_sequence,
+                    "normalized_request": asdict(prepared.request),
+                },
+                scope=self.trace_scope,
+            )
+        except Exception:
+            return None
+
+    def _end_generation(
+        self,
+        observation_id: str | None,
+        *,
+        outcome: str,
+        response: ChatResponse | None = None,
+        streaming: bool = False,
+        error: BaseException | None = None,
+        stream_events: list[ChatStreamEvent] | None = None,
+        first_output_ms: int | None = None,
+    ) -> None:
+        if self.trace_recorder is None or observation_id is None:
+            return
+        data: dict[str, Any] = {}
+        if response is not None:
+            data.update(
+                {
+                    "provider": response.provider,
+                    "model": response.model,
+                    "finish_reason": response.finish_reason,
+                    "normalized_response": _normalized_response(response),
+                    "usage": asdict(response.usage) if response.usage is not None else {},
+                    "streaming": streaming,
+                }
+            )
+            if response.raw is not None and not streaming:
+                data["provider_raw_response"] = response.raw
+        if streaming:
+            data["streaming"] = True
+            data["stream_summary"] = _stream_summary(stream_events or [], first_output_ms=first_output_ms)
+        try:
+            self.trace_recorder.end_observation(
+                observation_id,
+                outcome=outcome,
+                data=data,
+                error=error,
+            )
+        except Exception:
+            return
 
     async def _complete_once_with_recovery(
         self,
@@ -380,32 +546,39 @@ class AgentLoop:
     ) -> ChatResponse:
         """带恢复的一次调用:可重试错误重试一次,提示过长则先压缩上下文再重试。"""
         retryable_failures = 0
+        retry_sequence = 0
         while True:
             try:
                 return await self._complete_once(
                     tool_choice=tool_choice,
                     runtime_instruction=runtime_instruction,
                     streaming=streaming,
+                    retry_sequence=retry_sequence,
                 )
             except ProviderError as exc:
                 if exc.retryable:
                     if retryable_failures == 0:
                         retryable_failures += 1
+                        retry_sequence += 1
                         continue
+                    retry_sequence += 1
                     return await self._complete_once(
                         tool_choice=tool_choice,
                         runtime_instruction=runtime_instruction,
                         streaming=False,
+                        retry_sequence=retry_sequence,
                     )
                 if not exc.requires_compaction:
                     raise
                 result = await anyio.to_thread.run_sync(partial(self._compact_for_prompt_too_long, runtime_instruction=runtime_instruction))
                 if result is None or result.status != "success":
                     raise
+                retry_sequence += 1
                 return await self._complete_once(
                     tool_choice=tool_choice,
                     runtime_instruction=runtime_instruction,
                     streaming=streaming,
+                    retry_sequence=retry_sequence,
                 )
 
     async def _run_tool_loop(self, complete_once, *, initial_tool_choice="auto") -> AgentTurnResult:
@@ -578,6 +751,9 @@ class AgentLoop:
                     ),
                     trigger=ContextWindowTrigger.AUTO,
                     current_turn=self.session.current_turn,
+                    trace_scope=self._trace_scope_for_child_observation(),
+                    trace_id=self.trace_id,
+                    branch_context=self.session.writer.branch_context,
                 )
             )
             if result.status == "success":
@@ -639,6 +815,9 @@ class AgentLoop:
                 ),
                 trigger=trigger,
                 current_turn=self.session.current_turn,
+                trace_scope=self._trace_scope_for_child_observation(),
+                trace_id=self.trace_id,
+                branch_context=self.session.writer.branch_context,
             )
         )
 
@@ -647,6 +826,18 @@ class AgentLoop:
         return self._compact_if_needed(
             trigger=ContextWindowTrigger.PROMPT_TOO_LONG,
             runtime_instruction=runtime_instruction,
+        )
+
+    def _trace_scope_for_child_observation(self) -> TraceScope | None:
+        scope = self.trace_scope
+        parent_observation_id = get_observation_id()
+        if scope is None or parent_observation_id is None or scope.parent_observation_id == parent_observation_id:
+            return scope
+        return TraceScope(
+            session_id=scope.session_id,
+            branch_id=scope.branch_id,
+            parent_trace_id=scope.parent_trace_id,
+            parent_observation_id=parent_observation_id,
         )
 
     def _provider_tool_definitions(self):
@@ -716,6 +907,15 @@ class AgentLoop:
                 observed_revision=notification.observed_revision,
                 label=notification.label,
                 error=notification.error,
+                branch_context=(
+                    SessionBranchContext(
+                        self.session.session_id,
+                        str(notification.dispatch_branch_context["branch_id"]),
+                        self.session.writer.branch_context.root_branch_id if self.session.writer.branch_context else None,
+                    )
+                    if notification.dispatch_branch_context.get("branch_id")
+                    else None
+                ),
             )
 
     def _is_cancelled(self) -> bool:
@@ -755,3 +955,25 @@ class AgentLoop:
         """构造触达工具轮次上限时的响应。"""
 
         return self.guardrails.limit_response(AgentLoopStopReason.TOOL_ROUND_LIMIT, raw=response.raw)
+
+
+def _normalized_response(response: ChatResponse) -> dict[str, Any]:
+    """Return provider-neutral response evidence without persisting raw payloads."""
+
+    return {
+        "content": response.content,
+        "tool_calls": [asdict(tool_call) for tool_call in response.tool_calls],
+        "finish_reason": response.finish_reason,
+        "diagnostics": asdict(response.diagnostics),
+    }
+
+
+def _stream_summary(events: list[ChatStreamEvent], *, first_output_ms: int | None = None) -> dict[str, int]:
+    """Summarize stream deltas while deliberately dropping their text."""
+
+    counts: dict[str, int] = {}
+    for event in events:
+        counts[event.kind] = counts.get(event.kind, 0) + 1
+    if first_output_ms is not None:
+        counts["first_output_ms"] = first_output_ms
+    return counts

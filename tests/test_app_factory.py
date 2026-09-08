@@ -20,6 +20,7 @@ from lanscoder.providers.types import ChatRequest, ChatResponse, ProviderCapabil
 from lanscoder.tools.write import create_write_tool
 from lanscoder.tools.types import make_text_result
 from lanscoder.mcp.models import McpServerStatus, McpToolDescription
+from lanscoder.storage import LansCoderPaths
 
 
 @dataclass
@@ -77,6 +78,7 @@ def test_factory_connects_mcp_once_and_merges_discovered_tools(tmp_path: Path) -
     )
     app = create_lanscoder_app(
         project_root=tmp_path,
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([]),
         session_id="sess_test",
         mcp_manager_factory=lambda configs: manager,
@@ -97,6 +99,7 @@ def test_factory_keeps_builtin_tools_when_mcp_connection_fails(tmp_path: Path) -
     manager = FakeMcpManager(statuses=(McpServerStatus("demo", "failed", error="safe failure"),))
     app = create_lanscoder_app(
         project_root=tmp_path,
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([]),
         session_id="sess_test",
         mcp_manager_factory=lambda configs: manager,
@@ -113,6 +116,7 @@ def test_factory_custom_tools_mode_does_not_append_mcp_tools(tmp_path: Path) -> 
     )
     app = create_lanscoder_app(
         project_root=tmp_path,
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([]),
         session_id="sess_test",
         tools=[],
@@ -127,6 +131,7 @@ def test_app_unmount_closes_mcp_manager_once(tmp_path: Path) -> None:
     manager = FakeMcpManager()
     app = create_lanscoder_app(
         project_root=tmp_path,
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([]),
         session_id="sess_test",
         tools=[],
@@ -139,13 +144,46 @@ def test_app_unmount_closes_mcp_manager_once(tmp_path: Path) -> None:
     assert manager.close_calls == 1
 
 
+def test_app_unmount_closes_the_embedded_observatory_server(monkeypatch, tmp_path: Path) -> None:
+    managers = []
+
+    class FakeObservatoryManager:
+        def __init__(self, paths) -> None:
+            self.paths = paths
+            self.shutdown_calls = 0
+            managers.append(self)
+
+        def start(self):
+            return type("Server", (), {"url": "http://127.0.0.1:43123/"})()
+
+        def shutdown(self) -> None:
+            self.shutdown_calls += 1
+
+    monkeypatch.setattr("lanscoder.app.factory.ObservatoryServerManager", FakeObservatoryManager)
+    app = create_lanscoder_app(
+        project_root=tmp_path,
+        storage_root=tmp_path / "storage",
+        provider=FakeProvider([]),
+        session_id="sess_test",
+        tools=[],
+    )
+
+    assert app.command_handler.handle("/observe").action == {
+        "type": "open_observatory",
+        "url": "http://127.0.0.1:43123/traces?session_id=sess_test",
+    }
+    app.on_unmount()
+
+    assert managers[0].shutdown_calls == 1
+
+
 def test_create_lanscoder_app_wires_session_commands_context_and_chat(tmp_path: Path) -> None:
     (tmp_path / "AGENTS.md").write_text("项目规则", encoding="utf-8")
     provider = FakeProvider([ChatResponse(provider="fake", model="fake-model", content="收到")])
 
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         provider=provider,
         session_id="sess_test",
         tools=[],
@@ -153,7 +191,7 @@ def test_create_lanscoder_app_wires_session_commands_context_and_chat(tmp_path: 
 
     assert isinstance(app.command_handler, CompositeCommandHandler)
     assert isinstance(app.chat_runner, AgentChatRunner)
-    assert (tmp_path / ".lanscoder" / "sessions" / "sess_test.jsonl").exists()
+    assert (tmp_path / "storage" / "sessions" / "sess_test.jsonl").exists()
     assert "Session: sess_test" in app.command_handler.handle("/context").output
     assert "Sessions:" in app.command_handler.handle("/sessions").output
     assert "/resume" in app.command_handler.handle("/help").output
@@ -170,7 +208,7 @@ def test_create_lanscoder_app_wires_new_fork_and_skill_commands(tmp_path: Path) 
     (brief_dir / "SKILL.md").write_text("# Brief\n", encoding="utf-8")
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")]),
         session_id="sess_test",
         tools=[],
@@ -199,7 +237,7 @@ def test_create_lanscoder_app_enables_streaming_for_capable_provider(tmp_path: P
 
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         provider=provider,
         session_id="sess_test",
         tools=[],
@@ -214,7 +252,7 @@ def test_create_lanscoder_app_requires_catalog_without_injected_provider(tmp_pat
     with pytest.raises(ValueError, match="模型目录为空"):
         create_lanscoder_app(
             project_root=tmp_path,
-            data_root=tmp_path / ".lanscoder",
+            storage_root=tmp_path / "storage",
             app_config=config,
             session_id="sess_test",
             tools=[],
@@ -233,7 +271,7 @@ def test_create_lanscoder_app_honors_streaming_disabled_config(tmp_path: Path) -
 
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         provider=provider,
         session_id="sess_test",
         tools=[],
@@ -273,7 +311,7 @@ def _catalog_config(*, default_model: str | None = "yuren/main") -> AppConfig:
 def test_factory_catalog_startup_honors_model_spec_over_default(tmp_path: Path) -> None:
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         app_config=_catalog_config(),
         model_spec="mimo/pro",
         session_id="sess_test",
@@ -286,11 +324,12 @@ def test_factory_catalog_startup_honors_model_spec_over_default(tmp_path: Path) 
 
 
 def test_factory_catalog_startup_honors_default_over_saved_state(tmp_path: Path) -> None:
-    data_root = tmp_path / ".lanscoder"
-    ModelStateStore(data_root / "model_state.json").record_selection("mimo/pro")
+    storage_root = tmp_path / "storage"
+    paths = LansCoderPaths(storage_root=storage_root, project_root=tmp_path)
+    ModelStateStore(paths.model_state).record_selection("mimo/pro")
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=data_root,
+        storage_root=storage_root,
         app_config=_catalog_config(default_model="yuren/main"),
         session_id="sess_test",
         tools=[],
@@ -302,12 +341,13 @@ def test_factory_catalog_startup_honors_default_over_saved_state(tmp_path: Path)
 
 
 def test_factory_catalog_startup_falls_back_from_stale_saved_state(tmp_path: Path) -> None:
-    data_root = tmp_path / ".lanscoder"
-    ModelStateStore(data_root / "model_state.json").record_selection("gone/model")
+    storage_root = tmp_path / "storage"
+    paths = LansCoderPaths(storage_root=storage_root, project_root=tmp_path)
+    ModelStateStore(paths.model_state).record_selection("gone/model")
     config = _catalog_config(default_model=None)
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=data_root,
+        storage_root=storage_root,
         app_config=config,
         session_id="sess_test",
         tools=[],
@@ -320,7 +360,7 @@ def test_factory_catalog_startup_falls_back_from_stale_saved_state(tmp_path: Pat
 def test_catalog_model_switch_records_selection_and_request_options(tmp_path: Path) -> None:
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         app_config=_catalog_config(),
         session_id="sess_test",
         tools=[],
@@ -331,13 +371,14 @@ def test_catalog_model_switch_records_selection_and_request_options(tmp_path: Pa
     assert result.output == "Model switched: mimo/pro"
     assert app.chat_runner.request_options.temperature is None
     assert app.chat_runner.context_window == 200_000
-    assert ModelStateStore(tmp_path / ".lanscoder" / "model_state.json").load().last_selected == "mimo/pro"
+    paths = LansCoderPaths(storage_root=tmp_path / "storage", project_root=tmp_path)
+    assert ModelStateStore(paths.project_state / "model_state.json").load().last_selected == "mimo/pro"
 
 
 def test_catalog_model_switch_rejects_unconfigured_short_name(tmp_path: Path) -> None:
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         app_config=_catalog_config(),
         session_id="sess_test",
         tools=[],
@@ -368,7 +409,7 @@ def test_catalog_picker_can_switch_mixed_case_provider_ref(tmp_path: Path) -> No
     )
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         app_config=config,
         session_id="sess_test",
         tools=[],
@@ -381,7 +422,8 @@ def test_catalog_picker_can_switch_mixed_case_provider_ref(tmp_path: Path) -> No
     assert selected == {"provider": "Yuren", "model": "pro"}
     assert result.output == "Model switched: Yuren/pro"
     assert app.chat_runner.provider.name == "Yuren"
-    assert ModelStateStore(tmp_path / ".lanscoder" / "model_state.json").load().last_selected == "Yuren/pro"
+    paths = LansCoderPaths(storage_root=tmp_path / "storage", project_root=tmp_path)
+    assert ModelStateStore(paths.project_state / "model_state.json").load().last_selected == "Yuren/pro"
 
 
 def test_catalog_anthropic_alias_is_current_model_and_picker_selection(tmp_path: Path) -> None:
@@ -403,7 +445,7 @@ def test_catalog_anthropic_alias_is_current_model_and_picker_selection(tmp_path:
     )
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         app_config=config,
         session_id="sess_test",
         tools=[],
@@ -421,7 +463,12 @@ def test_catalog_anthropic_alias_is_current_model_and_picker_selection(tmp_path:
 
 
 def test_app_factory_configures_default_loop_limits(tmp_path: Path) -> None:
-    app = create_lanscoder_app(project_root=tmp_path, provider=FakeProvider([]), tools=[])
+    app = create_lanscoder_app(
+        project_root=tmp_path,
+        storage_root=tmp_path / "storage",
+        provider=FakeProvider([]),
+        tools=[],
+    )
 
     assert app.chat_runner.limits == AgentLoopLimits.default()
 
@@ -429,7 +476,7 @@ def test_app_factory_configures_default_loop_limits(tmp_path: Path) -> None:
 def test_create_lanscoder_app_keeps_streaming_disabled_without_capability(tmp_path: Path) -> None:
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")]),
         session_id="sess_test",
         tools=[],
@@ -438,10 +485,10 @@ def test_create_lanscoder_app_keeps_streaming_disabled_without_capability(tmp_pa
     assert app.chat_runner.use_streaming is False
 
 
-def test_create_lanscoder_app_uses_consistent_data_root_for_share(tmp_path: Path) -> None:
+def test_create_lanscoder_app_uses_consistent_storage_root_for_share(tmp_path: Path) -> None:
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")]),
         session_id="sess_test",
         tools=[],
@@ -450,14 +497,14 @@ def test_create_lanscoder_app_uses_consistent_data_root_for_share(tmp_path: Path
     result = app.command_handler.handle("/share sess_test")
 
     assert "Share exported:" in result.output
-    assert (tmp_path / ".lanscoder" / "shares" / "sess_test.md").exists()
-    assert JsonlSessionStore(tmp_path / ".lanscoder").rebuild_session_view("sess_test").session_id == "sess_test"
+    assert (tmp_path / "storage" / "shares" / "sess_test.md").exists()
+    assert JsonlSessionStore(tmp_path / "storage").rebuild_session_view("sess_test").session_id == "sess_test"
 
 
 def test_create_lanscoder_app_can_use_default_builtin_tools(tmp_path: Path) -> None:
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")]),
         session_id="sess_test",
     )
@@ -475,13 +522,13 @@ def test_create_lanscoder_app_can_use_default_builtin_tools(tmp_path: Path) -> N
 def test_factory_background_controls_remain_session_scoped(tmp_path: Path) -> None:
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([]),
         session_id="sess_factory_a",
     )
     manager = app.chat_runner.background_manager
     assert manager is not None
-    store = JsonlSessionStore(tmp_path / ".lanscoder")
+    store = JsonlSessionStore(tmp_path / "storage")
     session_a = app.current_session.session
     session_b = AgentSession.create(
         store=store,
@@ -518,7 +565,7 @@ def test_factory_background_controls_remain_session_scoped(tmp_path: Path) -> No
 def test_create_lanscoder_app_wires_l3_service_for_default_context_manager(tmp_path: Path) -> None:
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")]),
         session_id="sess_test",
         tools=[],
@@ -548,7 +595,7 @@ def test_create_lanscoder_app_persists_permission_grants(tmp_path: Path) -> None
     )
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         provider=provider,
         session_id="sess_test",
         tools=[create_write_tool(tmp_path)],
@@ -559,11 +606,13 @@ def test_create_lanscoder_app_persists_permission_grants(tmp_path: Path) -> None
     assert app.chat_runner.last_pending_input is not None
     app.chat_runner.resume_with_user_input(app.chat_runner.last_pending_input.id, "allow_always_same_scope")
 
-    assert (tmp_path / ".lanscoder" / "permissions.json").exists()
+    paths = LansCoderPaths(storage_root=tmp_path / "storage", project_root=tmp_path)
+    assert paths.project_state.exists()
+    assert paths.permissions.exists()
 
     second = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([ChatResponse(provider="fake", model="fake-model", content="ok")]),
         session_id="sess_second",
         tools=[create_write_tool(tmp_path)],
@@ -641,6 +690,7 @@ def test_app_on_unmount_flushes_pending_background_notifications_before_close(tm
     manager = FakeMcpManager()
     app = create_lanscoder_app(
         project_root=tmp_path,
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([]),
         session_id="sess_flush",
         tools=[],
@@ -667,6 +717,7 @@ def test_app_on_unmount_flush_failure_still_closes_mcp(tmp_path, monkeypatch) ->
     manager = FakeMcpManager()
     app = create_lanscoder_app(
         project_root=tmp_path,
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([]),
         session_id="sess_flush_fail",
         tools=[],
@@ -688,6 +739,7 @@ def test_factory_threads_context_window_and_compaction_strategy(tmp_path: Path) 
 
     app = create_lanscoder_app(
         project_root=tmp_path,
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([]),
         session_id="sess_ctx",
         context_window=200_000,
@@ -703,6 +755,7 @@ def test_factory_defaults_preserve_profile_window_and_full_strategy(tmp_path: Pa
 
     app = create_lanscoder_app(
         project_root=tmp_path,
+        storage_root=tmp_path / "storage",
         provider=FakeProvider([]),
         session_id="sess_default",
     )

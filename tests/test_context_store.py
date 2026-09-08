@@ -10,6 +10,7 @@ from lanscoder.context.store import JsonlSessionStore, SessionStoreCorruptError
 from lanscoder.context.token_budget import estimate_text_tokens
 from lanscoder.context.versions import CONTEXT_EVENT_SCHEMA_VERSION
 from lanscoder.context.writer import SessionEventWriter
+from lanscoder.storage import LansCoderPaths
 
 
 def _request(
@@ -119,6 +120,7 @@ def test_jsonl_store_lists_events_in_append_order(tmp_path: Path) -> None:
 def test_programmatic_compaction_rebuilds_replaced_parts(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     session_id = "sess_test"
+    SessionEventWriter(store=store, session_id=session_id).append_session_created()
     message = AgentMessage(
         id="msg_tool",
         session_id=session_id,
@@ -142,7 +144,8 @@ def test_programmatic_compaction_rebuilds_replaced_parts(tmp_path: Path) -> None
         )
     )
     view = SessionView(session_id=session_id, messages=[message])
-    result = CompactionPipeline(root=tmp_path).compact(_request(view=view, target_tokens=1, current_turn=10, enabled_levels=("l1",)))
+    paths = LansCoderPaths(storage_root=tmp_path)
+    result = CompactionPipeline(paths=paths).compact(_request(view=view, target_tokens=1, current_turn=10, enabled_levels=("l1",)))
     SessionEventWriter(store=store, session_id=session_id).append_compaction_completed(
         trigger="manual",
         target_tokens=1,
@@ -158,6 +161,7 @@ def test_programmatic_compaction_rebuilds_replaced_parts(tmp_path: Path) -> None
 def test_l1_route_result_with_raw_backing_survives_rebuild_without_l4(tmp_path: Path) -> None:
     store = JsonlSessionStore(tmp_path)
     session_id = "sess_test"
+    SessionEventWriter(store=store, session_id=session_id).append_session_created()
     message = AgentMessage(
         id="msg_tool",
         session_id=session_id,
@@ -181,7 +185,8 @@ def test_l1_route_result_with_raw_backing_survives_rebuild_without_l4(tmp_path: 
         )
     )
     view = SessionView(session_id=session_id, messages=[message])
-    result = CompactionPipeline(root=tmp_path, large_tool_result_tokens=20).compact(
+    paths = LansCoderPaths(storage_root=tmp_path)
+    result = CompactionPipeline(paths=paths, large_tool_result_tokens=20).compact(
         _request(
             view=view,
             target_tokens=1,
@@ -202,7 +207,7 @@ def test_l1_route_result_with_raw_backing_survives_rebuild_without_l4(tmp_path: 
     assert part.metadata["archive_id"]
     assert part.metadata["compacted_by"] == "l1_search_results"
     assert part.content == result.view.messages[0].parts[0].content
-    assert ToolResultArchive(tmp_path).read(session_id, part.metadata["archive_id"])[1] == message.parts[0].content
+    assert ToolResultArchive(paths).read(session_id, part.metadata["archive_id"])[1] == message.parts[0].content
 
 
 def test_store_and_compaction_pipeline_share_data_root(tmp_path: Path) -> None:
@@ -230,7 +235,8 @@ def test_store_and_compaction_pipeline_share_data_root(tmp_path: Path) -> None:
             payload={"message_id": message.id, "parts": [message.parts[0].to_dict()]},
         )
     )
-    result = CompactionPipeline(root=store.root, large_tool_result_tokens=20).compact(
+    paths = LansCoderPaths(storage_root=store.root)
+    result = CompactionPipeline(paths=paths, large_tool_result_tokens=20).compact(
         _request(
             view=SessionView(session_id=session_id, messages=[message]),
             target_tokens=1,
@@ -243,7 +249,7 @@ def test_store_and_compaction_pipeline_share_data_root(tmp_path: Path) -> None:
 
     assert (tmp_path / "sessions" / "sess_test.jsonl").exists()
     assert (tmp_path / "archives" / "sess_test" / f"{archive_id}.txt").exists()
-    assert ToolResultArchive(store.root).read(session_id, archive_id)[1] == message.parts[0].content
+    assert ToolResultArchive(paths).read(session_id, archive_id)[1] == message.parts[0].content
     assert not (tmp_path / ".lanscoder").exists()
 
 

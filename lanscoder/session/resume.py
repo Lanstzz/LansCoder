@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +7,7 @@ from pathlib import Path
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.versions import CONTEXT_EVENT_SCHEMA_VERSION
 from lanscoder.session.bootstrap import SessionBootstrap
+from lanscoder.session.access import SessionAccessPolicy
 from lanscoder.session.catalog import SessionCatalog, require_usable_record
 from lanscoder.session.catalog import is_safe_session_id
 from lanscoder.session.errors import (
@@ -18,6 +18,8 @@ from lanscoder.session.errors import (
     SessionUnsupportedSchemaError,
 )
 from lanscoder.session.models import ResumeResult
+from lanscoder.journal import JournalCorruptError
+from lanscoder.storage import LansCoderPaths
 from lanscoder.tools.types import Tool
 from lanscoder.utils.sandbox_access import SandboxAccess
 
@@ -27,7 +29,7 @@ class ResumeService:
 
     store: JsonlSessionStore
     project_root: str | Path
-    data_root: str | Path | None = None
+    paths: LansCoderPaths | None = None
     tools: list[Tool] | None = None
     tools_provider: Callable[[], list[Tool]] | None = None
     sandbox_access: SandboxAccess | None = None
@@ -36,16 +38,18 @@ class ResumeService:
     def resume(self, session_id: str) -> ResumeResult:
         validate_session_schema(self.store, session_id)
         catalog = self.catalog or SessionCatalog(self.store.root)
-        record = require_usable_record(catalog.get_session(session_id))
-
+        policy = SessionAccessPolicy(self.project_root, journal=catalog)
+        policy.open_primary(session_id)
         bootstrap = SessionBootstrap(
             store=self.store,
             project_root=self.project_root,
-            data_root=self.data_root,
+            paths=self.paths,
             tools=self.tools,
             tools_provider=self.tools_provider,
             sandbox_access=self.sandbox_access,
         )
+        record = require_usable_record(catalog.get_session(session_id))
+
         session = bootstrap.resume(session_id)
         session.restore_pending_permission_execution()
         return ResumeResult(session=session, record=record)
@@ -59,33 +63,20 @@ def validate_session_schema(store: JsonlSessionStore, session_id: str) -> None:
     if not path.exists():
         raise SessionNotFoundError(f"session not found: {session_id}")
 
-    saw_session_created = False
-    saw_content = False
     try:
-        with path.open("r", encoding="utf-8") as file:
-            for line in file:
-                if not line.strip():
-                    continue
-                saw_content = True
-                try:
-                    envelope = json.loads(line)
-                except json.JSONDecodeError as error:
-                    raise SessionCorruptError(f"session {session_id} contains invalid JSON: {error}") from error
-                if saw_session_created or not isinstance(envelope, dict) or envelope.get("type") != "session_created":
-                    continue
-                saw_session_created = True
-                payload = envelope.get("payload")
-                actual = payload.get("context_event_schema_version") if isinstance(payload, dict) else None
-                actual_version = str(actual) if actual is not None else "missing"
-                if actual_version != CONTEXT_EVENT_SCHEMA_VERSION:
-                    raise SessionUnsupportedSchemaError(
-                        session_id=session_id,
-                        actual_version=actual_version,
-                        expected_version=CONTEXT_EVENT_SCHEMA_VERSION,
-                    )
-    except UnicodeError as error:
-        raise SessionCorruptError(f"session {session_id} has no valid session_created event: {error}") from error
-    if not saw_content:
+        events = store.journal.read_events(session_id)
+    except JournalCorruptError as error:
+        raise SessionCorruptError(str(error)) from error
+    if not events:
         raise SessionEmptyError(f"session {session_id} is empty")
-    if not saw_session_created:
+    session_created = next((event for event in events if event.kind == "session.created"), None)
+    if session_created is None:
         raise SessionCorruptError(f"session {session_id} has no valid session_created event")
+    actual = session_created.data.get("context_event_schema_version")
+    actual_version = str(actual) if actual is not None else "missing"
+    if actual_version != CONTEXT_EVENT_SCHEMA_VERSION:
+        raise SessionUnsupportedSchemaError(
+            session_id=session_id,
+            actual_version=actual_version,
+            expected_version=CONTEXT_EVENT_SCHEMA_VERSION,
+        )

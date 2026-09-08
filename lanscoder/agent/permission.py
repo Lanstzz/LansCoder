@@ -188,10 +188,12 @@ class PermissionCoordinator:
                 return PreparedPermission(
                     result=pending,
                     permission_request=preflight.request,
+                    prewrite_review=self._last_review_payload,
                 )
             return PreparedPermission(
                 pending_input=pending,
                 permission_request=preflight.request,
+                prewrite_review=self._last_review_payload,
             )
         result = self.bypass_mutation(tool_call, preflight=preflight)
         return PreparedPermission(
@@ -214,12 +216,14 @@ class PermissionCoordinator:
 
         confirmation = self._permission_manager.build_prewrite_review_confirmation(request) if review_only else self._permission_manager.build_confirmation(request)
         prewrite_review = None
+        self._last_review_payload = None
         if supports_prewrite_review(tool_call.name):
             prewrite_review = build_prewrite_review(
                 self._permission_manager.policy.project_root,
                 tool_call,
                 access=self._sandbox_access,
             )
+            self._last_review_payload = prewrite_review.to_payload()
             if not prewrite_review.ok:
                 return make_prewrite_review_failed_result(
                     tool_name=tool_call.name,

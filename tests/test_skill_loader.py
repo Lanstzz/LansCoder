@@ -104,11 +104,12 @@ def test_append_skill_loaded_writes_auditable_session_event(tmp_path: Path) -> N
     )
     loaded = SkillLoader().load_from_content(skill, "# Fetch Tweet\n")
 
+    writer.append_session_created()
     append_skill_loaded(writer, loaded)
 
     events = store.list_events("sess_skill")
-    assert len(events) == 1
-    event = events[0]
+    assert [event.type for event in events] == ["session_created", "skill_loaded"]
+    event = events[-1]
     assert event.type == "skill_loaded"
     assert event.payload["skill_name"] == "fetch-tweet"
     assert event.payload["skill_scope"] == "global"
@@ -133,6 +134,7 @@ def test_load_skill_tool_returns_full_content_and_writes_audit_events(tmp_path: 
     writer = SessionEventWriter(store=store, session_id="sess_skill")
     tool = create_load_skill_tool(lambda: SkillCatalog(skills=[skill]), writer)
 
+    writer.append_session_created()
     result = tool.executor(name="review", args="check app.py")
 
     assert result.ok is True
@@ -140,9 +142,10 @@ def test_load_skill_tool_returns_full_content_and_writes_audit_events(tmp_path: 
     assert "Arguments: check app.py" in result.content
     assert "# Review\n\nCheck correctness." in result.content
     events = store.list_events("sess_skill")
-    assert [event.type for event in events] == ["skill_selected", "skill_loaded"]
-    assert events[0].payload["reason"] == "model_tool_call"
-    assert events[1].payload["content_hash"]
+    assert events[0].type == "session_created"
+    assert [event.type for event in events[1:]] == ["skill_selected", "skill_loaded"]
+    assert events[1].payload["reason"] == "model_tool_call"
+    assert events[2].payload["content_hash"]
 
 
 def test_load_skill_tool_rejects_unknown_or_missing_skill_without_audit_events(tmp_path: Path) -> None:
@@ -210,6 +213,7 @@ def test_load_skill_tool_picks_up_catalog_changes_via_callable(tmp_path: Path) -
     writer = SessionEventWriter(store=store, session_id="sess_skill")
     tool = create_load_skill_tool(lambda: catalog_holder[0], writer)
 
+    writer.append_session_created()
     new_skill_path = tmp_path / "deploy" / "SKILL.md"
     new_skill_path.parent.mkdir()
     new_skill_path.write_text("# Deploy\n\nDeploy steps.\n", encoding="utf-8")

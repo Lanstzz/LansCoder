@@ -32,6 +32,7 @@ from lanscoder.tools.git_log import create_git_log_tool
 from lanscoder.tools.git_diff import create_git_diff_tool
 from lanscoder.tools.git_status import create_git_status_tool
 from lanscoder.tools.web_search import create_web_search_tool
+from lanscoder.storage import LansCoderPaths
 
 
 def test_builtin_tool_descriptions_are_agent_facing_english(tmp_path):
@@ -201,7 +202,7 @@ def test_session_registry_adds_four_authoritative_task_plan_tools(tmp_path):
     writer = SessionEventWriter(store=store, session_id="sess_plan")
     registry = create_session_tool_registry(
         session_id="sess_plan",
-        archive_root=tmp_path,
+        paths=LansCoderPaths(storage_root=tmp_path),
         store=store,
         writer=writer,
     )
@@ -234,5 +235,5 @@ def test_session_registry_rejects_supplied_task_plan_tool_override(
         create_session_tool_registry(
             session_id="sess_plan",
             tools=[supplied],
-            archive_root=tmp_path,
+            paths=LansCoderPaths(storage_root=tmp_path),
         )

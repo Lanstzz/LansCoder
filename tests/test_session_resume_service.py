@@ -15,7 +15,10 @@ from lanscoder.session.errors import (
     SessionNotFoundError,
     SessionUnsupportedSchemaError,
 )
+from lanscoder.session.access import project_id_for_path
+from lanscoder.session.bootstrap import SessionBootstrap
 from lanscoder.session.resume import ResumeService, validate_session_schema
+from lanscoder.storage import LansCoderPaths
 from lanscoder.tools.write import create_write_tool
 from lanscoder.permissions.types import PermissionDecisionKind, PermissionMode
 
@@ -38,11 +41,42 @@ class FakeProvider(ChatProvider):
         return self.responses.pop(0)
 
 
+def _mark_primary(session: AgentSession, project_root: Path) -> None:
+    session.writer.append_session_metadata_updated(
+        project_id=project_id_for_path(project_root),
+        project_root=str(project_root),
+        kind="primary",
+    )
+
+
+def _paths(tmp_path: Path) -> LansCoderPaths:
+    return LansCoderPaths(storage_root=tmp_path / "storage", project_root=tmp_path)
+
+
+def _store(tmp_path: Path) -> JsonlSessionStore:
+    return JsonlSessionStore(_paths(tmp_path).storage_root)
+
+
+def _create_primary_session(tmp_path: Path, session_id: str, tools=None) -> AgentSession:
+    paths = _paths(tmp_path)
+    return SessionBootstrap(
+        store=_store(tmp_path),
+        project_root=tmp_path,
+        paths=paths,
+        tools=tools,
+    ).create(session_id=session_id)
+
+
 def test_resume_service_resumes_existing_session_and_reads_agents_md(tmp_path: Path) -> None:
     (tmp_path / "AGENTS.md").write_text("项目规则", encoding="utf-8")
-    store = JsonlSessionStore(tmp_path)
+    store = _store(tmp_path)
     writer = SessionEventWriter(store=store, session_id="sess_test")
-    writer.append_session_created(title="demo")
+    writer.append_session_created(
+        title="demo",
+        project_id=project_id_for_path(tmp_path),
+        project_root=str(tmp_path),
+        kind="primary",
+    )
     writer.append_user_message("历史消息")
 
     result = ResumeService(store=store, project_root=tmp_path).resume("sess_test")
@@ -56,9 +90,14 @@ def test_resume_service_resumes_existing_session_and_reads_agents_md(tmp_path: P
 
 
 def test_resume_service_restores_session_task_plan(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _store(tmp_path)
     writer = SessionEventWriter(store=store, session_id="sess_task_plan")
-    writer.append_session_created(title="task plan demo")
+    writer.append_session_created(
+        title="task plan demo",
+        project_id=project_id_for_path(tmp_path),
+        project_root=str(tmp_path),
+        kind="primary",
+    )
     plan = TaskPlan(
         mode="linear",
         revision=1,
@@ -90,7 +129,7 @@ def test_resume_rejects_unsupported_schema_before_bootstrap_side_effects(
     schema_payload: dict[str, str] | None,
     actual_version: str,
 ) -> None:
-    store = JsonlSessionStore(tmp_path / ".lanscoder")
+    store = _store(tmp_path)
     store.append_event(
         SessionEvent(
             id="evt_created",
@@ -137,18 +176,16 @@ def test_resume_rejects_unsupported_schema_before_bootstrap_side_effects(
     assert calls == []
 
 
-def test_resume_rejects_future_schema_before_parsing_later_events(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path / ".lanscoder")
+def test_resume_rejects_legacy_disk_records(tmp_path: Path) -> None:
+    store = _store(tmp_path)
     path = store.sessions_dir / "sess_future.jsonl"
     path.write_text(
         '{"id":"evt_created","session_id":"sess_future","type":"session_created",' '"payload":{"context_event_schema_version":"v3"}}\n' '{"future_event_shape":true}\n',
         encoding="utf-8",
     )
 
-    with pytest.raises(SessionUnsupportedSchemaError) as caught:
+    with pytest.raises(SessionCorruptError, match="invalid schema"):
         ResumeService(store=store, project_root=tmp_path).resume("sess_future")
-
-    assert caught.value.actual_version == "v3"
 
 
 @pytest.mark.parametrize(
@@ -162,7 +199,7 @@ def test_resume_rejects_corrupt_log_without_valid_session_created(
     tmp_path: Path,
     contents: str,
 ) -> None:
-    store = JsonlSessionStore(tmp_path / ".lanscoder")
+    store = _store(tmp_path)
     path = store.sessions_dir / "sess_corrupt.jsonl"
     path.write_text(contents, encoding="utf-8")
 
@@ -170,17 +207,17 @@ def test_resume_rejects_corrupt_log_without_valid_session_created(
         ResumeService(store=store, project_root=tmp_path).resume("sess_corrupt")
 
 
-def test_schema_validation_rejects_corrupt_json_after_valid_session_created(
+def test_schema_validation_rejects_legacy_record_before_corrupt_tail(
     tmp_path: Path,
 ) -> None:
-    store = JsonlSessionStore(tmp_path / ".lanscoder")
+    store = _store(tmp_path)
     path = store.sessions_dir / "sess_corrupt_tail.jsonl"
     path.write_text(
         '{"id":"evt_created","session_id":"sess_corrupt_tail","type":"session_created",' '"payload":{"context_event_schema_version":"v2"}}\n' "not-json\n",
         encoding="utf-8",
     )
 
-    with pytest.raises(SessionCorruptError, match="invalid JSON"):
+    with pytest.raises(SessionCorruptError, match="invalid schema"):
         validate_session_schema(store, "sess_corrupt_tail")
 
 
@@ -192,9 +229,14 @@ def test_resume_service_rediscovers_current_project_skill_catalog(tmp_path: Path
     brief_dir = skills_dir / "brief"
     brief_dir.mkdir()
     (brief_dir / "SKILL.md").write_text("# Brief\n\n写简报。", encoding="utf-8")
-    store = JsonlSessionStore(tmp_path / ".lanscoder")
+    store = _store(tmp_path)
     writer = SessionEventWriter(store=store, session_id="sess_skills")
-    writer.append_session_created(title="demo")
+    writer.append_session_created(
+        title="demo",
+        project_id=project_id_for_path(tmp_path),
+        project_root=str(tmp_path),
+        kind="primary",
+    )
 
     result = ResumeService(store=store, project_root=tmp_path).resume("sess_skills")
 
@@ -202,13 +244,8 @@ def test_resume_service_rediscovers_current_project_skill_catalog(tmp_path: Path
 
 
 def test_resume_service_keeps_coordinator_gate_for_project_tools(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path / ".lanscoder")
-    original = AgentSession.from_project(
-        store=store,
-        session_id="sess_permissions",
-        project_root=tmp_path,
-        tools=[create_write_tool(tmp_path)],
-    )
+    store = _store(tmp_path)
+    original = _create_primary_session(tmp_path, "sess_permissions", [create_write_tool(tmp_path)])
     original.append_user_message("历史消息")
 
     result = ResumeService(
@@ -244,13 +281,8 @@ def test_resume_service_keeps_coordinator_gate_for_project_tools(tmp_path: Path)
 
 
 def test_resume_service_restores_pending_permission_confirmation(tmp_path: Path, make_loop) -> None:
-    store = JsonlSessionStore(tmp_path / ".lanscoder")
-    original = AgentSession.from_project(
-        store=store,
-        session_id="sess_pending_permission",
-        project_root=tmp_path,
-        tools=[create_write_tool(tmp_path)],
-    )
+    store = _store(tmp_path)
+    original = _create_primary_session(tmp_path, "sess_pending_permission", [create_write_tool(tmp_path)])
     provider = FakeProvider(
         [
             ChatResponse(
@@ -274,7 +306,7 @@ def test_resume_service_restores_pending_permission_confirmation(tmp_path: Path,
     result = ResumeService(
         store=store,
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        paths=_paths(tmp_path),
         tools=[create_write_tool(tmp_path)],
     ).resume("sess_pending_permission")
 
@@ -291,13 +323,8 @@ def test_resume_service_restores_pending_permission_confirmation(tmp_path: Path,
 
 
 def test_resume_service_restores_pending_permission_even_after_grant_exists(tmp_path: Path, make_loop) -> None:
-    store = JsonlSessionStore(tmp_path / ".lanscoder")
-    original = AgentSession.from_project(
-        store=store,
-        session_id="sess_pending_with_grant",
-        project_root=tmp_path,
-        tools=[create_write_tool(tmp_path)],
-    )
+    store = _store(tmp_path)
+    original = _create_primary_session(tmp_path, "sess_pending_with_grant", [create_write_tool(tmp_path)])
     provider = FakeProvider(
         [
             ChatResponse(
@@ -326,7 +353,7 @@ def test_resume_service_restores_pending_permission_even_after_grant_exists(tmp_
     result = ResumeService(
         store=store,
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        paths=_paths(tmp_path),
         tools=[create_write_tool(tmp_path)],
     ).resume("sess_pending_with_grant")
 
@@ -335,13 +362,8 @@ def test_resume_service_restores_pending_permission_even_after_grant_exists(tmp_
 
 
 def test_resume_service_has_no_pending_review_after_bypass_write(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path / ".lanscoder")
-    original = AgentSession.from_project(
-        store=store,
-        session_id="sess_bypass_write",
-        project_root=tmp_path,
-        tools=[create_write_tool(tmp_path)],
-    )
+    store = _store(tmp_path)
+    original = _create_primary_session(tmp_path, "sess_bypass_write", [create_write_tool(tmp_path)])
     original.permission_coordinator.set_mode(PermissionMode.BYPASS)
     tool_call = ToolCall(
         id="call_write",
@@ -358,7 +380,7 @@ def test_resume_service_has_no_pending_review_after_bypass_write(tmp_path: Path)
     result = ResumeService(
         store=store,
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        paths=_paths(tmp_path),
         tools=[create_write_tool(tmp_path)],
     ).resume("sess_bypass_write")
 
@@ -366,15 +388,15 @@ def test_resume_service_has_no_pending_review_after_bypass_write(tmp_path: Path)
 
 
 def test_resume_service_rejects_missing_session(tmp_path: Path) -> None:
-    service = ResumeService(store=JsonlSessionStore(tmp_path), project_root=tmp_path)
+    service = ResumeService(store=_store(tmp_path), project_root=tmp_path)
 
     with pytest.raises(SessionNotFoundError):
         service.resume("sess_missing")
 
 
 def test_resume_service_rejects_corrupt_session(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    (tmp_path / "sessions" / "sess_corrupt.jsonl").write_text("{not json}\n", encoding="utf-8")
+    store = _store(tmp_path)
+    (store.sessions_dir / "sess_corrupt.jsonl").write_text("{not json}\n", encoding="utf-8")
 
     service = ResumeService(store=store, project_root=tmp_path)
 
@@ -383,16 +405,16 @@ def test_resume_service_rejects_corrupt_session(tmp_path: Path) -> None:
 
 
 def test_resume_service_reports_invalid_utf8_session_as_corrupt(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    (tmp_path / "sessions" / "sess_invalid_utf8.jsonl").write_bytes(b"\xff\xfe\n")
+    store = _store(tmp_path)
+    (store.sessions_dir / "sess_invalid_utf8.jsonl").write_bytes(b"\xff\xfe\n")
 
     with pytest.raises(SessionCorruptError):
         ResumeService(store=store, project_root=tmp_path).resume("sess_invalid_utf8")
 
 
 def test_resume_service_rejects_empty_session(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
-    (tmp_path / "sessions" / "sess_empty.jsonl").write_text("", encoding="utf-8")
+    store = _store(tmp_path)
+    (store.sessions_dir / "sess_empty.jsonl").write_text("", encoding="utf-8")
 
     service = ResumeService(store=store, project_root=tmp_path)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Literal, Protocol
@@ -26,6 +27,10 @@ from lanscoder.context.token_budget import ContextBudget
 from lanscoder.context.tool_sequence import InvalidToolCallSequenceError
 from lanscoder.context.triggers import ContextCompactionConfig, evaluate_context_triggers
 from lanscoder.context.writer import SessionEventWriter
+from lanscoder.observability.models import TraceScope
+from lanscoder.observability.protocol import TraceRecorder
+from lanscoder.session.branch import SessionBranchContext, build_branch_topology
+from lanscoder.storage import LansCoderPaths
 
 
 class ContextWindowTrigger(StrEnum):
@@ -72,6 +77,7 @@ class L3Compactor(Protocol):
         candidate: LlmCompactCandidate,
         *,
         runtime_state: SessionRuntimeState,
+        branch_context: SessionBranchContext | None = None,
     ) -> Checkpoint: ...
 
 
@@ -87,6 +93,9 @@ class ContextCompactRequest:
     mode: ContextCompactMode | str = ContextCompactMode.AUTO
     current_turn: int = 0
     target_tokens: int | None = None
+    trace_scope: TraceScope | None = None
+    trace_id: str | None = None
+    branch_context: SessionBranchContext | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +141,10 @@ class ContextWindowManager:
     config: ContextCompactionConfig | None = None
     fallback_policy: CompactFallbackPolicy = CompactFallbackPolicy()
     strategy: CompactionStrategy | str = CompactionStrategy.L1_L2_L3
+    trace_recorder: TraceRecorder | None = None
+    active_trace_id: str | None = None
+    active_trace_scope: TraceScope | None = None
+    active_branch_context: SessionBranchContext | None = None
 
     def __post_init__(self) -> None:
         """缺省时补全压缩配置与规则式压缩管线,并把策略归一化为枚举。"""
@@ -141,13 +154,45 @@ class ContextWindowManager:
             self.config = ContextCompactionConfig()
         if self.pipeline is None:
             self.pipeline = CompactionPipeline(
-                root=self.store.root,
+                paths=LansCoderPaths(storage_root=self.store.root),
                 large_tool_result_tokens=self.config.large_tool_result_tokens,
                 cold_preview_chars=self.config.cold_preview_chars,
             )
 
     def compact_if_needed(self, request: ContextCompactRequest) -> ContextCompactResult:
-        """入口:评估触发条件,按需压缩(programmatic → L3 → 回退)并返回结果。"""
+        """评估触发条件并在必要时运行压缩生命周期。"""
+        captured_branch_context = request.branch_context
+        if captured_branch_context is None:
+            captured_branch_context = SessionEventWriter(
+                store=self.store,
+                session_id=request.view.session_id,
+            ).branch_context
+        request.branch_context = captured_branch_context
+        had_trace = request.trace_id is not None
+        self.active_trace_id = request.trace_id
+        self.active_trace_scope = request.trace_scope
+        self.active_branch_context = captured_branch_context
+        self._ensure_trace(request)
+        independent_trace_id = request.trace_id if not had_trace else None
+        independent_trace_scope = request.trace_scope if independent_trace_id is not None else None
+        try:
+            result = self._compact_if_needed(request)
+        except BaseException as error:
+            self._finish_independent_trace(
+                independent_trace_id,
+                independent_trace_scope,
+                error=error,
+            )
+            raise
+        self._finish_independent_trace(
+            independent_trace_id,
+            independent_trace_scope,
+            result=result,
+        )
+        return result
+
+    def _compact_if_needed(self, request: ContextCompactRequest) -> ContextCompactResult:
+        """入口实现:按需压缩(programmatic → L3 → 回退)并返回结果。"""
         trigger = ContextWindowTrigger(request.trigger)
         mode = ContextCompactMode(request.mode)
         before_tokens = request.budget.input_tokens
@@ -197,7 +242,12 @@ class ContextWindowManager:
 
         if trigger == ContextWindowTrigger.AUTO and programmatic.event.noop and after_tokens < target_tokens:
             request.runtime_state.last_no_effect_compaction_fingerprint = input_fingerprint
-            SessionEventWriter(store=self.store, session_id=request.view.session_id).append_compaction_skipped(
+            SessionEventWriter(
+                store=self.store,
+                session_id=request.view.session_id,
+                branch_context=self._persisted_branch_context(request.view.session_id),
+                allow_inactive_branch=True,
+            ).append_compaction_skipped(
                 trigger=trigger.value,
                 input_fingerprint=input_fingerprint,
                 reason="skipped_no_effect",
@@ -258,6 +308,7 @@ class ContextWindowManager:
                 reason="l3_service_missing",
             )
 
+        trace_id, trace_scope = request.trace_id, request.trace_scope
         outcome = self._generate_validate_commit(
             request=request,
             l3_request=LlmCompactRequest(
@@ -267,6 +318,9 @@ class ContextWindowManager:
                 mode=mode.value,
                 current_turn=request.current_turn,
                 recent_turn_window=self.config.recent_turn_window,
+                trace_scope=trace_scope,
+                trace_id=trace_id,
+                branch_context=request.branch_context,
             ),
             target_tokens=target_tokens,
         )
@@ -297,6 +351,76 @@ class ContextWindowManager:
             programmatic_event=programmatic.event,
             l3_event=outcome.event,
         )
+
+    def _ensure_trace(self, request: ContextCompactRequest) -> tuple[str | None, TraceScope | None]:
+        if request.trace_id is not None:
+            return request.trace_id, request.trace_scope
+        if request.trace_scope is None:
+            branch = request.branch_context or SessionEventWriter(store=self.store, session_id=request.view.session_id).branch_context
+            if branch is not None:
+                request.trace_scope = TraceScope(session_id=branch.session_id, branch_id=branch.branch_id)
+        if self.trace_recorder is None or request.trace_scope is None:
+            return request.trace_id, request.trace_scope
+        try:
+            trace_id = self.trace_recorder.start_trace(request.trace_scope, data={"operation": "compaction", "trigger": str(request.trigger)})
+            request.trace_id = trace_id
+            self.active_trace_id = trace_id
+            self.active_trace_scope = request.trace_scope
+            return trace_id, request.trace_scope
+        except Exception:
+            return None, request.trace_scope
+
+    def _finish_independent_trace(
+        self,
+        trace_id: str | None,
+        scope: TraceScope | None,
+        *,
+        result: ContextCompactResult | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        """Close a compaction trace created outside an active agent turn."""
+        if trace_id is None or self.trace_recorder is None:
+            return
+        try:
+            context = scope.activate(trace_id=trace_id) if scope is not None else nullcontext()
+            with context:
+                if error is not None:
+                    self.trace_recorder.end_trace(
+                        trace_id,
+                        status="failed",
+                        error=error,
+                        reason={"code": "compaction_failed", "message": str(error)},
+                    )
+                else:
+                    assert result is not None
+                    status = "failed" if result.status == "failed" else "completed"
+                    outcome = "failed" if result.status == "failed" else ("skipped" if result.status == "skipped" else "succeeded")
+                    reason = None
+                    if result.status == "failed":
+                        failure_reason = result.final_failure_reason or result.reason
+                        reason = {
+                            "code": failure_reason,
+                            "message": f"context compaction failed: {failure_reason}",
+                        }
+                    self.trace_recorder.end_trace(
+                        trace_id,
+                        status=status,
+                        outcome=outcome,
+                        final_output={
+                            "operation": "compaction",
+                            "status": result.status,
+                            "reason": result.reason,
+                            "before_tokens": result.before_tokens,
+                            "after_tokens": result.after_tokens,
+                        },
+                        reason=reason,
+                    )
+        except Exception:
+            return
+        finally:
+            if self.active_trace_id == trace_id:
+                self.active_trace_id = None
+                self.active_trace_scope = None
 
     def _l1_l2_finish(
         self,
@@ -390,7 +514,14 @@ class ContextWindowManager:
                 input_tokens=candidate_budget.input_tokens,
             )
 
-        self.l3_service.commit_candidate(candidate, runtime_state=request.runtime_state)
+        if l3_request.branch_context is not None:
+            self.l3_service.commit_candidate(
+                candidate,
+                runtime_state=request.runtime_state,
+                branch_context=l3_request.branch_context,
+            )
+        else:
+            self.l3_service.commit_candidate(candidate, runtime_state=request.runtime_state)
         rebuilt_view = self.store.rebuild_session_view(request.view.session_id)
         rebuilt_budget = request.estimate_budget(rebuilt_view)
         return _CandidateOutcome(
@@ -451,7 +582,14 @@ class ContextWindowManager:
             return _HardTruncateOutcome(status="nothing_to_drop")
         if after_tokens >= target_tokens:
             return _HardTruncateOutcome(status="over_budget")
-        self.l3_service.commit_candidate(candidate, runtime_state=request.runtime_state)
+        if request.branch_context is not None:
+            self.l3_service.commit_candidate(
+                candidate,
+                runtime_state=request.runtime_state,
+                branch_context=request.branch_context,
+            )
+        else:
+            self.l3_service.commit_candidate(candidate, runtime_state=request.runtime_state)
         rebuilt_view = self.store.rebuild_session_view(request.view.session_id)
         after_tokens = request.estimate_budget(rebuilt_view).input_tokens
         hard_truncate_event = replace(
@@ -573,6 +711,9 @@ class ContextWindowManager:
                     summary_mode="stronger",
                     current_turn=request.current_turn,
                     recent_turn_window=self.config.recent_turn_window,
+                    trace_scope=request.trace_scope,
+                    trace_id=request.trace_id,
+                    branch_context=request.branch_context,
                 ),
                 target_tokens=target_tokens,
             )
@@ -780,7 +921,15 @@ class ContextWindowManager:
         event: CompactionEvent,
     ) -> None:
         """把规则式压缩事件写入会话。"""
-        SessionEventWriter(store=self.store, session_id=session_id).append_compaction_completed(
+        SessionEventWriter(
+            store=self.store,
+            session_id=session_id,
+            branch_context=self._persisted_branch_context(session_id),
+            allow_inactive_branch=True,
+            trace_recorder=self.trace_recorder,
+            trace_id=self.active_trace_id,
+            trace_scope=self.active_trace_scope,
+        ).append_compaction_completed(
             trigger=trigger.value,
             target_tokens=target_tokens,
             event=event,
@@ -795,11 +944,32 @@ class ContextWindowManager:
         event: LlmCompactEvent,
     ) -> None:
         """把 LLM 压缩事件写入会话。"""
-        SessionEventWriter(store=self.store, session_id=session_id).append_llm_compaction_completed(
+        SessionEventWriter(
+            store=self.store,
+            session_id=session_id,
+            branch_context=self._persisted_branch_context(session_id),
+            allow_inactive_branch=True,
+            trace_recorder=self.trace_recorder,
+            trace_id=self.active_trace_id,
+            trace_scope=self.active_trace_scope,
+        ).append_llm_compaction_completed(
             trigger=trigger.value,
             target_tokens=target_tokens,
             event=event,
         )
+
+    def _persisted_branch_context(self, session_id: str) -> SessionBranchContext | None:
+        """Return the captured branch only when its journal topology proves it exists."""
+        branch_context = self.active_branch_context
+        if branch_context is None:
+            return None
+        try:
+            topology = build_branch_topology(self.store.list_events(session_id))
+        except (TypeError, ValueError):
+            return None
+        if branch_context.root_branch_id != topology.root_branch_id or branch_context.branch_id not in topology.branches:
+            return None
+        return branch_context
 
 
 def _target_tokens(request: ContextCompactRequest, trigger: ContextWindowTrigger) -> int:

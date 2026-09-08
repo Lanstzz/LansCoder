@@ -10,6 +10,7 @@ from typing import Literal
 from uuid import uuid4
 
 from lanscoder.input.clipboard import read_clipboard_image_bytes
+from lanscoder.storage import LansCoderPaths, PayloadStore
 
 AttachmentKind = Literal["image", "file"]
 
@@ -198,6 +199,7 @@ def resolve_paste_attachments(
     paste_text: str | None,
     *,
     include_clipboard_image: bool = True,
+    paths: LansCoderPaths | None = None,
 ) -> list[UserAttachment]:
     attachments: list[UserAttachment] = []
     seen_paths: set[Path] = set()
@@ -224,7 +226,7 @@ def resolve_paste_attachments(
                 "image/gif": ".gif",
                 "image/webp": ".webp",
             }.get(media_type, ".png")
-            temp_dir = Path.home() / ".lanscoder" / "tmp" / "clipboard"
+            temp_dir = (paths or LansCoderPaths()).clipboard_tmp
             temp_dir.mkdir(parents=True, exist_ok=True)
             temp_path = temp_dir / f"clipboard-{uuid4().hex}{suffix}"
             temp_path.write_bytes(image_bytes)
@@ -243,16 +245,25 @@ def resolve_paste_attachments(
 def prepare_attachments_for_session(
     attachments: list[UserAttachment],
     *,
-    store_root: Path,
+    store_root: Path | None = None,
     session_id: str,
+    paths: LansCoderPaths | None = None,
 ) -> list[PreparedAttachment]:
     if not attachments:
         return []
     if len(attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
         raise ValueError(f"Too many attachments (max {MAX_ATTACHMENTS_PER_MESSAGE})")
 
+    if paths is not None:
+        if store_root is not None and Path(store_root) != paths.storage_root:
+            raise ValueError("store_root and paths.storage_root must match")
+        store_root = paths.storage_root
+    if store_root is None:
+        raise ValueError("store_root or paths is required")
+    payload_store = PayloadStore(paths) if paths is not None else None
     target_dir = store_root / "attachments" / session_id
-    target_dir.mkdir(parents=True, exist_ok=True)
+    if payload_store is None:
+        target_dir.mkdir(parents=True, exist_ok=True)
     prepared: list[PreparedAttachment] = []
 
     for item in attachments:
@@ -260,11 +271,15 @@ def prepare_attachments_for_session(
         digest = sha256(raw).hexdigest()
         suffix = item.path.suffix or _suffix_for_media_type(item.media_type)
         safe_name = _safe_filename(item.filename or f"attachment{suffix}")
-        dest_name = f"{digest[:16]}-{safe_name}"
-        dest_path = target_dir / dest_name
-        if not dest_path.exists():
-            dest_path.write_bytes(raw)
-        relative = dest_path.relative_to(store_root).as_posix()
+        if payload_store is not None:
+            payload_ref = payload_store.put(raw, media_type=item.media_type)
+            relative = Path("payloads", payload_ref.sha256).as_posix()
+        else:
+            dest_name = f"{digest[:16]}-{safe_name}"
+            dest_path = target_dir / dest_name
+            if not dest_path.exists():
+                dest_path.write_bytes(raw)
+            relative = dest_path.relative_to(store_root).as_posix()
         inline_text = _inline_attachment_text(item, raw)
         prepared.append(
             PreparedAttachment(

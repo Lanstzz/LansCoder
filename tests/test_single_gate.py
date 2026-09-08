@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 from lanscoder.agent.session import AgentSession
 from lanscoder.agent.tool_execution import ToolExecutionEvent, ToolExecutor
 from lanscoder.context.store import JsonlSessionStore
@@ -29,9 +31,15 @@ class _CountingPermissionManager(PermissionManager):
 class _CollectingEventSink:
     def __init__(self) -> None:
         self.events: list[ToolExecutionEvent] = []
+        self.observation_context_calls: list[str] = []
 
     def on_tool_event(self, event: ToolExecutionEvent) -> None:
         self.events.append(event)
+
+    @contextmanager
+    def tool_observation_context(self, tool_call_id: str):
+        self.observation_context_calls.append(tool_call_id)
+        yield
 
 
 def _readonly_tool(name: str, execution_log: list[str]) -> Tool:
@@ -126,12 +134,28 @@ def test_single_call_is_evaluated_exactly_once(tmp_path) -> None:
         tools=tools,
     )
 
-    state = executor.execute_interactive(
-        [ToolCall(id="call_single", name="view", arguments={"path": str(tmp_path / "a.txt")})]
-    )
+    state = executor.execute_interactive([ToolCall(id="call_single", name="view", arguments={"path": str(tmp_path / "a.txt")})])
 
     assert state.pending_input is None
     assert execution_log == ["view"]
     assert [event.kind for event in sink.events] == ["started", "finished"]
     assert len(manager.preflight_calls) == 1
     assert manager.preflight_calls[0].metadata["tool_name"] == "view"
+
+
+def test_permission_resume_execution_enters_tool_observation_context(tmp_path) -> None:
+    manager = _CountingPermissionManager(policy=DefaultPermissionPolicy(tmp_path))
+    execution_log: list[str] = []
+    tools = [_readonly_tool("view", execution_log)]
+    _session, executor, sink = _session_and_executor(
+        tmp_path,
+        session_id="sess_resume_observation_context",
+        manager=manager,
+        tools=tools,
+    )
+
+    tool_call = ToolCall(id="call_resume", name="view", arguments={"path": str(tmp_path)})
+    result = executor.execute_after_permission_with_cancellation_context(tool_call)
+
+    assert result.ok is True
+    assert sink.observation_context_calls == ["call_resume"]

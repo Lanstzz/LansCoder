@@ -9,6 +9,7 @@ from lanscoder.context.store import JsonlSessionStore
 from lanscoder.session.catalog import SessionCatalog
 from lanscoder.session.errors import SessionCorruptError, SessionEmptyError
 from lanscoder.session.models import RedactionOptions, ShareOptions, Transcript, TranscriptEntry
+from lanscoder.session.projection import active_projection
 from lanscoder.session.redaction import redact_text
 from lanscoder.utils.text import ellipsis_truncate, optional_str
 
@@ -31,7 +32,7 @@ class TranscriptBuilder:
             redact_secrets=resolved.redact_secrets,
         )
         entries: list[TranscriptEntry] = []
-        for event in self.store.list_events(session_id):
+        for event in active_projection(self.store.list_events(session_id)):
             entries.extend(_entries_from_event(event, options=resolved, redaction=redaction))
         return Transcript(session=record, entries=entries)
 

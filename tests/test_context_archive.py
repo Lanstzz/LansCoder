@@ -7,6 +7,7 @@ from lanscoder.context.archive import ArchiveIntegrityError, ToolResultArchive
 from lanscoder.context.context_builder import ContextBuilder
 from lanscoder.context.models import AgentMessage, MessagePart, SessionView
 from lanscoder.context.versions import ARCHIVE_SCHEMA_VERSION
+from lanscoder.storage import LansCoderPaths
 
 
 def _part(content: str = "line\n" * 200) -> MessagePart:
@@ -21,7 +22,7 @@ def _part(content: str = "line\n" * 200) -> MessagePart:
 
 def test_resume_projection_keeps_archive_placeholder(tmp_path) -> None:
     original = "very large output\n" * 200
-    archive = ToolResultArchive(tmp_path)
+    archive = ToolResultArchive(LansCoderPaths(storage_root=tmp_path))
     part = _part(original)
     archived = archive.make_placeholder(part, archive.store_original("sess_test", part))
     view = SessionView(
@@ -55,7 +56,7 @@ def test_resume_projection_keeps_archive_placeholder(tmp_path) -> None:
 
 
 def test_store_original_content_address_deduplicates(tmp_path) -> None:
-    archive = ToolResultArchive(tmp_path)
+    archive = ToolResultArchive(LansCoderPaths(storage_root=tmp_path))
     first = archive.store_original("sess_test", _part("same output"))
     second = archive.store_original("sess_test", _part("same output"))
 
@@ -66,7 +67,7 @@ def test_store_original_content_address_deduplicates(tmp_path) -> None:
 
 def test_store_original_uses_explicit_empty_content(tmp_path) -> None:
     part = _part("nonempty")
-    record = ToolResultArchive(tmp_path).store_original("sess_test", part, original_content="")
+    record = ToolResultArchive(LansCoderPaths(storage_root=tmp_path)).store_original("sess_test", part, original_content="")
 
     assert record.original_chars == 0
     assert (tmp_path / "archives" / "sess_test" / f"{record.archive_id}.txt").read_text() == ""
@@ -75,7 +76,7 @@ def test_store_original_uses_explicit_empty_content(tmp_path) -> None:
 @pytest.mark.parametrize("session_id,archive_id", [("../escape", "ar_safe"), ("sess", "../escape")])
 def test_archive_path_traversal_is_rejected(tmp_path, session_id, archive_id) -> None:
     with pytest.raises(ValueError):
-        archive = ToolResultArchive(tmp_path)
+        archive = ToolResultArchive(LansCoderPaths(storage_root=tmp_path))
         if session_id == "../escape":
             archive.store_original(session_id, _part())
         else:
@@ -90,11 +91,11 @@ def test_preexisting_content_addressed_text_with_other_content_is_integrity_erro
     path.write_text("wrong", encoding="utf-8")
 
     with pytest.raises(ArchiveIntegrityError):
-        ToolResultArchive(tmp_path).store_original("sess_test", _part(content))
+        ToolResultArchive(LansCoderPaths(storage_root=tmp_path)).store_original("sess_test", _part(content))
 
 
 def test_each_session_has_its_own_content_addressed_files(tmp_path) -> None:
-    archive = ToolResultArchive(tmp_path)
+    archive = ToolResultArchive(LansCoderPaths(storage_root=tmp_path))
     record_one = archive.store_original("first", _part("same output"))
     record_two = archive.store_original("second", _part("same output"))
 
@@ -105,7 +106,7 @@ def test_each_session_has_its_own_content_addressed_files(tmp_path) -> None:
 
 def test_v2_placeholder_has_no_raw_preview_and_is_bounded(tmp_path) -> None:
     raw = "SECRET_RESULT_SHOULD_NOT_APPEAR " * 100
-    archive = ToolResultArchive(tmp_path)
+    archive = ToolResultArchive(LansCoderPaths(storage_root=tmp_path))
     record = archive.store_original("sess_test", _part(raw))
     placeholder = archive.make_placeholder(_part(raw), record, summary="x" * 600, key_errors=("first", "second", "third", "fourth"))
 
@@ -121,7 +122,7 @@ def test_v2_placeholder_has_no_raw_preview_and_is_bounded(tmp_path) -> None:
 def test_v2_placeholder_retains_required_details_inside_limit(tmp_path) -> None:
     part = _part("source that must not be repeated")
     part.metadata.update({"ok": False, "tool_name": "run_command"})
-    archive = ToolResultArchive(tmp_path)
+    archive = ToolResultArchive(LansCoderPaths(storage_root=tmp_path))
     record = archive.store_original("sess_test", part)
 
     placeholder = archive.make_placeholder(
@@ -148,7 +149,7 @@ def test_v2_placeholder_retains_required_details_inside_limit(tmp_path) -> None:
 def test_v2_placeholder_normalizes_failure_signals(tmp_path, metadata) -> None:
     part = _part("result")
     part.metadata.update(metadata)
-    archive = ToolResultArchive(tmp_path)
+    archive = ToolResultArchive(LansCoderPaths(storage_root=tmp_path))
     record = archive.store_original("sess_test", part)
 
     placeholder = archive.make_placeholder(part, record)
@@ -159,7 +160,7 @@ def test_v2_placeholder_normalizes_failure_signals(tmp_path, metadata) -> None:
 def test_v2_placeholder_normalizes_unknown_status_to_success(tmp_path) -> None:
     part = _part("result")
     part.metadata["status"] = "completed"
-    archive = ToolResultArchive(tmp_path)
+    archive = ToolResultArchive(LansCoderPaths(storage_root=tmp_path))
     record = archive.store_original("sess_test", part)
 
     assert "status=success" in archive.make_placeholder(part, record).content
@@ -185,4 +186,4 @@ def test_v2_read_rejects_non_content_addressed_id(tmp_path) -> None:
     )
 
     with pytest.raises(ArchiveIntegrityError, match="archive id"):
-        ToolResultArchive(tmp_path).read("sess_test", "ar_notcontentaddressed")
+        ToolResultArchive(LansCoderPaths(storage_root=tmp_path)).read("sess_test", "ar_notcontentaddressed")

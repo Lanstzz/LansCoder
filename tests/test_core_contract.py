@@ -136,7 +136,7 @@ def test_create_agent_session_signature_pinned() -> None:
     assert _param_snapshot(create_agent_session) == (
         ("provider", "KEYWORD_ONLY", True, "<required>"),
         ("project_root", "KEYWORD_ONLY", True, "<required>"),
-        ("data_root", "KEYWORD_ONLY", False, None),
+        ("storage_root", "KEYWORD_ONLY", False, None),
         ("tools", "KEYWORD_ONLY", False, None),
         ("session_id", "KEYWORD_ONLY", False, None),
         ("resume", "KEYWORD_ONLY", False, False),
@@ -146,6 +146,7 @@ def test_create_agent_session_signature_pinned() -> None:
         ("background_manager", "KEYWORD_ONLY", False, None),
         ("user_memory_root", "KEYWORD_ONLY", False, None),
         ("compaction_strategy", "KEYWORD_ONLY", False, "l1_l2_l3"),
+        ("trace_recorder", "KEYWORD_ONLY", False, None),
     )
 
 

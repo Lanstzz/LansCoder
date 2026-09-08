@@ -21,6 +21,12 @@ from lanscoder.context.triggers import ContextCompactionConfig
 from lanscoder.context.writer import SessionEventWriter
 
 
+def _session_store(tmp_path: Path) -> JsonlSessionStore:
+    store = JsonlSessionStore(tmp_path)
+    SessionEventWriter(store=store, session_id="sess_test").append_session_created()
+    return store
+
+
 class FakePipeline:
     def __init__(self, result: CompactionResult | list[CompactionResult]) -> None:
         self.results = list(result) if isinstance(result, list) else [result]
@@ -45,7 +51,7 @@ class FakeL3:
             return self.results[0]
         return self.results.pop(0)
 
-    def commit_candidate(self, candidate, *, runtime_state):
+    def commit_candidate(self, candidate, *, runtime_state, branch_context=None):
         self.commit_calls.append(candidate)
         if candidate.checkpoint is not None:
             runtime_state.latest_checkpoint_id = candidate.checkpoint.id
@@ -85,7 +91,7 @@ class WritingFakeL3:
             ),
         )
 
-    def commit_candidate(self, candidate, *, runtime_state):
+    def commit_candidate(self, candidate, *, runtime_state, branch_context=None):
         self.commit_calls.append(candidate)
         checkpoint = candidate.checkpoint
         assert checkpoint is not None
@@ -116,7 +122,7 @@ class HardTruncateFakeL3:
             return self.results[0]
         return self.results.pop(0)
 
-    def commit_candidate(self, candidate, *, runtime_state):
+    def commit_candidate(self, candidate, *, runtime_state, branch_context=None):
         self.commit_calls.append(candidate)
         checkpoint = candidate.checkpoint
         assert checkpoint is not None
@@ -219,7 +225,7 @@ def test_manager_uses_high_watermark_for_auto_and_low_for_target(tmp_path) -> No
     view = _view(_message("msg_1", "content"))
     pipeline = FakePipeline(_programmatic_result(view, before_tokens=101, after_tokens=50))
     manager = ContextWindowManager(
-        store=JsonlSessionStore(tmp_path),
+        store=_session_store(tmp_path),
         pipeline=pipeline,
         l3_service=None,
     )
@@ -241,7 +247,7 @@ def test_manager_uses_high_watermark_for_auto_and_low_for_target(tmp_path) -> No
 
 def test_manager_fails_without_l3_when_fixed_context_exceeds_low_watermark(tmp_path) -> None:
     pipeline = FakePipeline([])
-    manager = ContextWindowManager(store=JsonlSessionStore(tmp_path), pipeline=pipeline)
+    manager = ContextWindowManager(store=_session_store(tmp_path), pipeline=pipeline)
 
     result = manager.compact_if_needed(
         _compact_request(
@@ -260,7 +266,7 @@ def test_manager_fails_without_l3_when_fixed_context_exceeds_low_watermark(tmp_p
 
 
 def test_manager_reports_unconsumed_result_when_input_exceeds_capacity(tmp_path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "content"))
     l3 = FakeL3(_l3_result(status="failed", failure_reason="unconsumed_boundary"))
     manager = ContextWindowManager(
@@ -334,7 +340,7 @@ def _l3_result(*, status: str = "success", failure_reason: str | None = None) ->
 
 
 def test_manager_skips_compact_when_under_threshold(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "short"))
     pipeline = FakePipeline(_programmatic_result(view))
     l3 = FakeL3(_l3_result())
@@ -357,11 +363,11 @@ def test_manager_skips_compact_when_under_threshold(tmp_path: Path) -> None:
     assert result.reason == "under_threshold"
     assert pipeline.calls == []
     assert l3.calls == []
-    assert store.list_events("sess_test") == []
+    assert [event.type for event in store.list_events("sess_test")] == ["session_created"]
 
 
 def test_manager_skips_repeated_auto_noop_without_persisting_a_second_completion(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "x" * 80))
     noop = _programmatic_result(view, before_tokens=20, after_tokens=20, stopped_at="not_reached")
     noop.event.changed_parts = 0
@@ -395,11 +401,11 @@ def test_manager_skips_repeated_auto_noop_without_persisting_a_second_completion
     assert second.status == "skipped"
     assert first.reason == second.reason == "skipped_no_effect"
     assert len(manager.pipeline.calls) == 1
-    assert [event.type for event in store.list_events("sess_test")] == ["compaction_skipped"]
+    assert [event.type for event in store.list_events("sess_test")] == ["session_created", "compaction_skipped"]
 
 
 def test_manager_reports_still_over_budget_after_successful_l3_checkpoint(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     writer = SessionEventWriter(store=store, session_id="sess_test")
     message_id = writer.append_user_message("x" * 80)
     view = store.rebuild_session_view("sess_test")
@@ -426,6 +432,7 @@ def test_manager_reports_still_over_budget_after_successful_l3_checkpoint(tmp_pa
     assert result.l3_event.status == "failed"
     assert manager.l3_service.commit_calls == []
     assert [event.type for event in store.list_events("sess_test")] == [
+        "session_created",
         "user_message",
         "compaction_completed",
         "llm_compaction_completed",
@@ -434,7 +441,7 @@ def test_manager_reports_still_over_budget_after_successful_l3_checkpoint(tmp_pa
 
 
 def test_manual_and_prompt_too_long_enable_forced_route_compaction(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
     manager = ContextWindowManager(
         store=store,
@@ -478,7 +485,7 @@ def test_manual_and_prompt_too_long_enable_forced_route_compaction(tmp_path: Pat
 
 
 def test_manager_runs_l3_only_after_l1_l2_fail_target(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
     pipeline = FakePipeline(
         _programmatic_result(
@@ -511,13 +518,14 @@ def test_manager_runs_l3_only_after_l1_l2_fail_target(tmp_path: Path) -> None:
     assert l3.calls[0].current_turn == 0
     assert l3.calls[0].recent_turn_window == 10
     assert [event.type for event in store.list_events("sess_test")] == [
+        "session_created",
         "compaction_completed",
         "llm_compaction_completed",
     ]
 
 
 def test_manager_threads_current_turn_and_recent_turn_window_to_l3(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
     pipeline = FakePipeline(_programmatic_result(view, after_tokens=900, stopped_at="not_reached"))
     l3 = FakeL3(_l3_result())
@@ -545,7 +553,7 @@ def test_manager_threads_current_turn_and_recent_turn_window_to_l3(tmp_path: Pat
 
 
 def test_manager_persists_l3_missing_failure_for_replay(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
     pipeline = FakePipeline(
         _programmatic_result(
@@ -573,13 +581,13 @@ def test_manager_persists_l3_missing_failure_for_replay(tmp_path: Path) -> None:
     events = store.list_events("sess_test")
     assert result.status == "failed"
     assert result.reason == "l3_service_missing"
-    assert [event.type for event in events] == ["compaction_completed", "llm_compaction_completed"]
+    assert [event.type for event in events] == ["session_created", "compaction_completed", "llm_compaction_completed"]
     assert events[-1].payload["status"] == "failed"
     assert events[-1].payload["reason"] == "l3_service_missing"
 
 
 def test_manager_uses_effective_tokens_after_programmatic_compaction(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = SessionView(
         session_id="sess_test",
         messages=[
@@ -633,11 +641,11 @@ def test_manager_uses_effective_tokens_after_programmatic_compaction(tmp_path: P
     assert result.l3_event is None
     assert l3.calls == []
     assert result.after_tokens <= 1_000
-    assert [event.type for event in store.list_events("sess_test")] == ["compaction_skipped"]
+    assert [event.type for event in store.list_events("sess_test")] == ["session_created", "compaction_skipped"]
 
 
 def test_manager_returns_rebuilt_view_after_l3_writes_checkpoint(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
     store.append_event(
         SessionEvent(
@@ -670,7 +678,7 @@ def test_manager_returns_rebuilt_view_after_l3_writes_checkpoint(tmp_path: Path)
 
 
 def test_manager_reports_effective_tokens_after_l3_rebuild(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(
         _message("msg_old", "old context " * 4_000),
         _message("msg_tail", "short tail"),
@@ -715,7 +723,7 @@ def test_manager_reports_effective_tokens_after_l3_rebuild(tmp_path: Path) -> No
 
 
 def test_manual_compact_ignores_auto_circuit_breaker(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
     l3 = FakeL3(_l3_result())
     manager = ContextWindowManager(
@@ -742,7 +750,7 @@ def test_manual_compact_ignores_auto_circuit_breaker(tmp_path: Path) -> None:
 
 
 def test_manual_compact_honors_explicit_lower_target(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 4_000))
     pipeline = FakePipeline(_programmatic_result(view, after_tokens=900, stopped_at="not_reached"))
     l3 = FakeL3(_l3_result())
@@ -768,7 +776,7 @@ def test_manual_compact_honors_explicit_lower_target(tmp_path: Path) -> None:
 
 
 def test_manager_handles_prompt_too_long_as_blocking_trigger(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 400))
     pipeline = FakePipeline(_programmatic_result(view, after_tokens=100))
     manager = ContextWindowManager(
@@ -791,7 +799,7 @@ def test_manager_handles_prompt_too_long_as_blocking_trigger(tmp_path: Path) -> 
 
 
 def test_manager_runs_stronger_programmatic_fallback_after_prompt_too_long_l3_failure(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     first_programmatic = _programmatic_result(view, before_tokens=1200, after_tokens=900, stopped_at="not_reached")
     stronger_view = _view(_message("msg_1", "short"))
@@ -826,7 +834,7 @@ def test_manager_runs_stronger_programmatic_fallback_after_prompt_too_long_l3_fa
 
 
 def test_programmatic_fallback_success_records_successful_l3_event_for_replay(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     first_programmatic = _programmatic_result(view, before_tokens=1200, after_tokens=900, stopped_at="not_reached")
     stronger_view = _view(_message("msg_1", "short"))
@@ -852,7 +860,7 @@ def test_programmatic_fallback_success_records_successful_l3_event_for_replay(tm
 
 
 def test_prompt_too_long_fallback_retries_l3_when_still_over_budget(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     first_programmatic = _programmatic_result(view, before_tokens=1200, after_tokens=900, stopped_at="not_reached")
     stronger_programmatic = _programmatic_result(view, before_tokens=900, after_tokens=800, stopped_at="not_reached")
@@ -888,7 +896,7 @@ def test_prompt_too_long_fallback_retries_l3_when_still_over_budget(tmp_path: Pa
 
 
 def test_prompt_too_long_retry_records_one_l3_event_with_fallback_steps(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     pipeline = FakePipeline(
         [
@@ -923,7 +931,7 @@ def test_prompt_too_long_retry_records_one_l3_event_with_fallback_steps(tmp_path
 
 
 def test_manager_retries_l3_once_after_no_summary_with_stronger_summary_mode(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=900, stopped_at="not_reached"))
     l3 = FakeL3(
@@ -954,7 +962,7 @@ def test_manager_retries_l3_once_after_no_summary_with_stronger_summary_mode(tmp
 
 
 def test_manager_records_fallback_steps_in_l3_event_payload(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=900, stopped_at="not_reached"))
     l3 = FakeL3(
@@ -985,7 +993,7 @@ def test_manager_records_fallback_steps_in_l3_event_payload(tmp_path: Path) -> N
 
 
 def test_manual_compact_reports_fallback_failure_reason(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=900, stopped_at="not_reached"))
     l3 = FakeL3(
@@ -1014,7 +1022,7 @@ def test_manual_compact_reports_fallback_failure_reason(tmp_path: Path) -> None:
 
 
 def test_auto_compact_failure_after_fallback_updates_circuit_breaker(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "long" * 800))
     state = SessionRuntimeState(session_id="sess_test", auto_compact_failure_count=2)
     pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=900, stopped_at="not_reached"))
@@ -1047,7 +1055,7 @@ def test_fallback_policy_returns_hard_truncate_for_unknown_reason() -> None:
 
 
 def test_manager_hard_truncates_when_l3_and_fallbacks_fail(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     messages = [
         _turn_message("msg_1", created_turn=1),
         _turn_message("msg_2", created_turn=2),
@@ -1109,7 +1117,7 @@ def test_manager_hard_truncates_when_l3_and_fallbacks_fail(tmp_path: Path) -> No
 
 
 def test_manager_hard_truncate_reports_over_budget_reason_when_recent_tail_exceeds_target(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     messages = [
         _turn_message("msg_1", created_turn=1),
         _turn_message("msg_2", created_turn=2),
@@ -1154,7 +1162,7 @@ def test_manager_hard_truncate_reports_over_budget_reason_when_recent_tail_excee
 
 
 def test_manager_hard_truncate_falls_through_when_all_recent(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     messages = [
         _turn_message("msg_1", created_turn=1),
         _turn_message("msg_2", created_turn=2),
@@ -1194,7 +1202,7 @@ def test_manager_hard_truncate_falls_through_when_all_recent(tmp_path: Path) -> 
 # -- CompactionStrategy 开关(基准 A/B) ------------------------------------
 
 def test_manager_no_compact_strategy_skips_without_events(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "content"))
     pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=50))
     l3 = FakeL3(_l3_result())
@@ -1226,7 +1234,7 @@ def test_manager_no_compact_strategy_skips_without_events(tmp_path: Path) -> Non
 
 
 def test_manager_l1_l2_strategy_stops_after_programmatic_success(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "content"))
     pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=50))
     l3 = FakeL3(_l3_result())
@@ -1259,7 +1267,7 @@ def test_manager_l1_l2_strategy_stops_after_programmatic_success(tmp_path: Path)
 
 
 def test_manager_l1_l2_strategy_hard_truncates_without_l3_when_above_target(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     messages = [
         _turn_message("msg_1", created_turn=1),
         _turn_message("msg_2", created_turn=2),
@@ -1306,7 +1314,7 @@ def test_manager_l1_l2_strategy_hard_truncates_without_l3_when_above_target(tmp_
 
 
 def test_manager_l1_l2_strategy_fails_without_l3_when_nothing_to_drop(tmp_path: Path) -> None:
-    store = JsonlSessionStore(tmp_path)
+    store = _session_store(tmp_path)
     view = _view(_message("msg_1", "content"))
     pipeline = FakePipeline(_programmatic_result(view, before_tokens=1000, after_tokens=900, stopped_at="not_reached"))
     l3 = FakeL3(_l3_result())

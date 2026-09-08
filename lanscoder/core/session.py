@@ -20,9 +20,12 @@ from lanscoder.context.store import JsonlSessionStore
 from lanscoder.providers.base import ChatProvider
 from lanscoder.providers.types import MainRequestOptions
 from lanscoder.session.bootstrap import SessionBootstrap
+from lanscoder.storage import LansCoderPaths
 from lanscoder.tools.builtin import create_builtin_registry
 from lanscoder.tools.types import Tool
 from lanscoder.utils.sandbox_access import SandboxAccess
+from lanscoder.observability.context import JournalTraceResumeLookup
+from lanscoder.observability.protocol import TraceRecorder
 
 from lanscoder.core.runtime import AgentChatRunner, CurrentSessionState
 
@@ -39,7 +42,7 @@ def create_agent_session(
     *,
     provider: ChatProvider,
     project_root: str | Path,
-    data_root: str | Path | None = None,
+    storage_root: str | Path | None = None,
     tools: list[Tool] | None = None,
     session_id: str | None = None,
     resume: bool = False,
@@ -49,6 +52,7 @@ def create_agent_session(
     background_manager: BackgroundJobManager | None = None,
     user_memory_root: str | Path | None = None,
     compaction_strategy: str = "l1_l2_l3",
+    trace_recorder: TraceRecorder | None = None,
 ) -> AgentSessionHandle:
     """headless 唯一装配源;持久化、内置工具、权限、上下文压缩都在这里落地。
 
@@ -57,10 +61,8 @@ def create_agent_session(
     """
 
     project_path = Path(project_root)
-    resolved_data_root = (
-        Path(data_root) if data_root is not None else project_path / ".lanscoder"
-    )
-    store = JsonlSessionStore(resolved_data_root)
+    paths = LansCoderPaths(storage_root=storage_root, project_root=project_path)
+    store = JsonlSessionStore(paths.storage_root)
     sandbox_access = SandboxAccess()
     resolved_tools = (
         tools
@@ -76,22 +78,26 @@ def create_agent_session(
     bootstrap = SessionBootstrap(
         store=store,
         project_root=project_path,
-        data_root=resolved_data_root,
+        paths=paths,
         tools=resolved_tools,
         sandbox_access=sandbox_access,
         user_memory_root=user_memory_root,
     )
     if resume and session_id is not None:
         session = bootstrap.resume(session_id)
+        session.restore_pending_permission_execution()
     else:
         session = bootstrap.create(session_id=session_id)
 
+    if trace_recorder is None:
+        trace_recorder = bootstrap.create_trace_recorder()
     context_manager = ContextWindowManager(
         store=store,
         strategy=CompactionStrategy(compaction_strategy),
+        trace_recorder=trace_recorder,
         l3_service=LlmCompactService(
             store=store,
-            summarizer=ProviderLlmCompactSummarizer(provider),
+            summarizer=ProviderLlmCompactSummarizer(provider, trace_recorder=trace_recorder),
         ),
     )
     current = CurrentSessionState(session)
@@ -105,5 +111,7 @@ def create_agent_session(
         request_options=request_options or MainRequestOptions(),
         context_window=context_window,
         background_manager=background_manager,
+        trace_recorder=trace_recorder,
+        trace_resume_lookup=JournalTraceResumeLookup(store.journal),
     )
     return AgentSessionHandle(session=session, runner=runner)

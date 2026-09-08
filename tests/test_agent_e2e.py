@@ -162,7 +162,7 @@ def test_app_user_flow_e2e_reads_file_renames_shares_resumes_and_continues(tmp_p
     )
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         provider=provider,
         session_id="sess_app_flow",
         tools=[create_view_tool(tmp_path)],
@@ -181,14 +181,14 @@ def test_app_user_flow_e2e_reads_file_renames_shares_resumes_and_continues(tmp_p
     assert "Resumed session: sess_app_flow README 阅读" in resume_result.output
     assert app.current_session.session_id == "sess_app_flow"
 
-    share_path = tmp_path / ".lanscoder" / "shares" / "sess_app_flow.md"
+    share_path = tmp_path / "storage" / "shares" / "sess_app_flow.md"
     share_text = share_path.read_text(encoding="utf-8")
     assert "# README 阅读" in share_text
     assert "读 README" in share_text
     assert "README 已读取" in share_text
     assert "view" in share_text
 
-    view = JsonlSessionStore(tmp_path / ".lanscoder").rebuild_session_view("sess_app_flow")
+    view = JsonlSessionStore(tmp_path / "storage").rebuild_session_view("sess_app_flow")
     assert [message.role for message in view.messages] == [
         "user",
         "assistant",
@@ -415,7 +415,7 @@ def test_manual_compact_command_e2e_writes_l3_handoff_when_only_current_plain_di
     )
     app = create_lanscoder_app(
         project_root=tmp_path,
-        data_root=tmp_path / ".lanscoder",
+        storage_root=tmp_path / "storage",
         provider=provider,
         session_id="sess_manual_compact",
         tools=[],
@@ -429,7 +429,7 @@ def test_manual_compact_command_e2e_writes_l3_handoff_when_only_current_plain_di
     assert first.content == "旧回复"
     assert second.content == "第二轮回复"
     assert "Context compacted" in result.output
-    store = JsonlSessionStore(tmp_path / ".lanscoder")
+    store = JsonlSessionStore(tmp_path / "storage")
     compact = _compact_events(store, "sess_manual_compact")[0]
     assert compact.payload["trigger"] == "manual"
     event = compact.payload["event"]

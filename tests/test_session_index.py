@@ -32,7 +32,7 @@ def test_store_append_event_updates_session_index(tmp_path: Path) -> None:
         )
     )
 
-    index_path = tmp_path / "session_index.json"
+    index_path = tmp_path / "indexes" / "sessions.json"
     assert index_path.exists()
     data = json.loads(index_path.read_text(encoding="utf-8"))
     record = data["sessions"]["sess_test"]
@@ -72,12 +72,12 @@ def test_session_index_rebuilds_missing_index_from_existing_jsonl(tmp_path: Path
             created_at="2026-06-01T00:00:00Z",
         )
     )
-    (tmp_path / "session_index.json").unlink()
+    (tmp_path / "indexes" / "sessions.json").unlink()
 
     records = SessionIndex(tmp_path).list_records()
 
     assert [record.session_id for record in records] == ["sess_old"]
-    assert (tmp_path / "session_index.json").exists()
+    assert (tmp_path / "indexes" / "sessions.json").exists()
 
 
 def test_prune_empty_removes_zero_turn_sessions(tmp_path: Path) -> None:
