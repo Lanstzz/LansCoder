@@ -72,6 +72,8 @@ class SubagentRequest:
     path_hints: list[str] = field(default_factory=list)
     run_in_background: bool = False
     isolate_worktree: bool = False
+    parent_trace_id: str | None = None
+    triggering_observation_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -119,7 +121,6 @@ def role_requires_worktree(role: str) -> bool:
 
 @runtime_checkable
 class SubagentRunner(Protocol):
-
     foreground_progress: dict[str, Any] | None
 
     def profile(self, role: str) -> SubagentProfile | None: ...

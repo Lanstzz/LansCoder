@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import inspect
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -15,15 +14,17 @@ from lanscoder.planning.service import TaskPlanMutation, TaskPlanService
 import lanscoder.planning.service as service_module
 
 
-def test_planning_service_uses_cross_platform_file_lock() -> None:
-    tree = ast.parse(inspect.getsource(service_module))
-    imported_modules = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
+def test_planning_service_does_not_define_an_independent_write_lock() -> None:
+    source = inspect.getsource(service_module)
 
-    assert "portalocker" in imported_modules
-    assert "fcntl" not in imported_modules
+    assert "portalocker" not in source
+    assert "_mutation_lock" not in source
+    assert "fcntl" not in source
 
 
-def _service(tmp_path, *, session_id: str = "sess_plan") -> tuple[
+def _service(
+    tmp_path, *, session_id: str = "sess_plan"
+) -> tuple[
     JsonlSessionStore,
     SessionEventWriter,
     TaskPlanService,

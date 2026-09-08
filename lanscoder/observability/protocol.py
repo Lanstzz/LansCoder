@@ -36,7 +36,7 @@ class TraceRecorder(Protocol):
         error: Any = None,
         reason: Any = None,
         no_generation: bool = False,
-    ) -> None: ...
+    ) -> bool | None: ...
 
     def start_observation(
         self,
@@ -81,7 +81,7 @@ class NoOpTraceRecorder:
         error: Any = None,
         reason: Any = None,
         no_generation: bool = False,
-    ) -> None:
+    ) -> bool | None:
         return None
 
     def start_observation(

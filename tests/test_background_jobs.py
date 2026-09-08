@@ -662,7 +662,7 @@ def test_failed_background_task_does_not_claim_task_completed(tmp_path) -> None:
         manager.shutdown()
 
 
-def test_pending_background_task_completes_only_when_collected(tmp_path) -> None:
+def test_pending_background_task_completes_before_collection(tmp_path) -> None:
     store = JsonlSessionStore(tmp_path)
     manager = BackgroundJobManager()
     try:
@@ -682,9 +682,9 @@ def test_pending_background_task_completes_only_when_collected(tmp_path) -> None
 
         before_collection = session.rebuild_view().task_plan
         assert before_collection is not None
-        assert before_collection.revision == 1
-        assert before_collection.tasks[0].status == "pending"
-        assert [event.type for event in store.list_events(session.session_id)].count("task_plan_updated") == 1
+        assert before_collection.revision == 3
+        assert before_collection.tasks[0].status == "completed"
+        assert [event.type for event in store.list_events(session.session_id)].count("task_plan_updated") == 3
 
         loop._append_background_notifications()
 
@@ -712,13 +712,13 @@ def test_task_plan_completion_callback_failure_is_not_reported_as_completed(tmp_
         session.append_user_message("go")
         call = _tool_call("call_bg", "shell", text="x", run_in_background=True, task_id="inspect")
         session.append_assistant_response(_assistant_with_tool_call(call))
-        loop.tool_executor.execute_interactive([call])
-        assert manager.wait(timeout=5) is True
 
-        def fail_completion(task_id: str, *, observed_revision: int | None) -> str:
+        def fail_completion(task_id: str, *, observed_revision: int | None, branch_context=None) -> str:
             raise RuntimeError("disk offline")
 
         monkeypatch.setattr(loop.tool_executor, "_mark_background_task_completed", fail_completion)
+        loop.tool_executor.execute_interactive([call])
+        assert manager.wait(timeout=5) is True
         loop._append_background_notifications()
 
         job = manager.get("bg_0001")
@@ -784,8 +784,8 @@ def test_shared_background_manager_isolates_jobs_by_session(tmp_path) -> None:
 
         before_a_collection = session_a.rebuild_view().task_plan
         assert before_a_collection is not None
-        assert before_a_collection.revision == 1
-        assert before_a_collection.tasks[0].status == "in_progress"
+        assert before_a_collection.revision == 2
+        assert before_a_collection.tasks[0].status == "completed"
 
         loop_a._append_background_notifications()
         view_a = session_a.rebuild_view()

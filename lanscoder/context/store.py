@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import threading
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 from lanscoder.context.checkpoint import Checkpoint
 from lanscoder.context.events import SessionEvent
@@ -17,6 +17,9 @@ from lanscoder.planning.models import TaskPlan, TaskPlanError
 from lanscoder.planning.validation import validate_plan
 from lanscoder.journal.models import JournalEnvelope, new_branch_id
 from lanscoder.journal.store import JournalStore
+
+if TYPE_CHECKING:
+    from lanscoder.session.branch import SessionBranchContext
 
 EVENT_ROLE_MAP = {
     "message.appended": "user",
@@ -111,12 +114,39 @@ class JsonlSessionStore:
             return topology.active_branch_id or topology.root_branch_id
         return "root"
 
-    def rebuild_session_view(self, session_id: str) -> SessionView:
+    def rebuild_session_view(
+        self,
+        session_id: str,
+        *,
+        branch_context: SessionBranchContext | None = None,
+    ) -> SessionView:
         """按事件序列重建会话视图。"""
-        from lanscoder.session.projection import active_projection
+        from lanscoder.session.branch import build_branch_topology
+        from lanscoder.session.projection import active_projection, project_branch
 
         view = SessionView(session_id=session_id)
-        for event in active_projection(self.list_events(session_id)):
+        events = self.list_events(session_id)
+        if branch_context is None:
+            projected = active_projection(events)
+        else:
+            if branch_context.session_id != session_id:
+                raise ValueError("branch context session_id does not match session")
+            if not any(
+                event.kind == "session.created"
+                and isinstance(event.data.get("root_branch_id"), str)
+                and event.data["root_branch_id"]
+                and isinstance(event.branch_id, str)
+                and event.branch_id == event.data["root_branch_id"]
+                for event in events
+            ):
+                raise ValueError("branch context requires a persisted session.created")
+            topology = build_branch_topology(events)
+            if branch_context.root_branch_id != topology.root_branch_id:
+                raise ValueError("branch context root does not match the persisted topology")
+            if branch_context.branch_id not in topology.branches:
+                raise ValueError("branch context branch does not match the persisted topology")
+            projected = project_branch(events, topology, branch_context.branch_id)
+        for event in projected:
             self._apply_event(view, event, sequence=event.sequence)
         return view
 
@@ -157,7 +187,7 @@ class JsonlSessionStore:
             if target_line is None:
                 for index, event in enumerate(events):
                     if str(event.payload.get("message_id") or "") == message_id:
-                        raise ValueError(f"message_id {message_id} is not a user_message event (type={event.type}); " f"can only recall to user message boundaries")
+                        raise ValueError(f"message_id {message_id} is not a user_message event (type={event.type}); can only recall to user message boundaries")
                 raise ValueError(f"message_id not found: {message_id} in session {session_id}")
 
             lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -418,7 +448,7 @@ def _apply_task_plan_payload_from_data(view: SessionView, data: dict, *, event_i
         raise SessionStoreCorruptError(f"task_plan_updated revision chain is invalid in event {event_id}")
     expected_previous = view.task_plan.revision if view.task_plan is not None else 0
     if previous_revision != expected_previous or revision != previous_revision + 1:
-        raise SessionStoreCorruptError(f"task_plan_updated revision chain is invalid in event {event_id}: " f"expected previous {expected_previous}, got {previous_revision} -> {revision}")
+        raise SessionStoreCorruptError(f"task_plan_updated revision chain is invalid in event {event_id}: expected previous {expected_previous}, got {previous_revision} -> {revision}")
     if revision != plan.revision:
         raise SessionStoreCorruptError(f"task_plan_updated revision mismatch in event {event_id}")
     view.task_plan = plan
@@ -446,7 +476,16 @@ class InMemorySessionStore(JsonlSessionStore):
         with self._lock:
             return list(self._events.get(session_id, ()))
 
-    def rebuild_session_view(self, session_id: str) -> SessionView:
+    def rebuild_session_view(
+        self,
+        session_id: str,
+        *,
+        branch_context: SessionBranchContext | None = None,
+    ) -> SessionView:
+        if branch_context is not None:
+            if branch_context.session_id != session_id:
+                raise ValueError("branch context session_id does not match session")
+            raise ValueError("branch projection requires a journal-backed session")
         view = SessionView(session_id=session_id)
         for sequence, event in enumerate(self.list_events(session_id), start=1):
             self._apply_event(view, event, sequence=sequence)
@@ -460,11 +499,7 @@ class InMemorySessionStore(JsonlSessionStore):
             message_id = str(event.payload.get("message_id") or "")
             if not message_id:
                 continue
-            texts[message_id] = "\n".join(
-                str(part.get("content") or "")
-                for part in event.payload.get("parts") or []
-                if isinstance(part, dict) and part.get("kind") == "text" and part.get("content")
-            )
+            texts[message_id] = "\n".join(str(part.get("content") or "") for part in event.payload.get("parts") or [] if isinstance(part, dict) and part.get("kind") == "text" and part.get("content"))
         return texts
 
     def truncate_before_message(self, session_id: str, message_id: str) -> int:
@@ -482,10 +517,7 @@ class InMemorySessionStore(JsonlSessionStore):
             if target_index is None:
                 for index, event in enumerate(events):
                     if str(event.payload.get("message_id") or "") == message_id:
-                        raise ValueError(
-                            f"message_id {message_id} is not a user_message event (type={events[index].type}); "
-                            "can only recall to user message boundaries"
-                        )
+                        raise ValueError(f"message_id {message_id} is not a user_message event (type={events[index].type}); can only recall to user message boundaries")
                 raise ValueError(f"message_id not found: {message_id} in session {session_id}")
 
             if target_index == 0:

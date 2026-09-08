@@ -213,6 +213,9 @@ class ChildSessionFactory:
         parent_trace_id: str,
         project_id: str,
         worktree_metadata: Mapping[str, Any],
+        delegate_role: str | None = None,
+        delegate_task: str | None = None,
+        triggering_observation_id: str | None = None,
         session_id: str | None = None,
     ) -> SessionAccessDescriptor:
         if project_id != self.policy.project_id:
@@ -233,6 +236,17 @@ class ChildSessionFactory:
             "parent_trace_id": parent_trace_id,
             "worktree_metadata": dict(worktree_metadata),
         }
+        if delegate_role is not None:
+            metadata["delegate_role"] = delegate_role
+        if delegate_task is not None:
+            metadata["delegate_task"] = delegate_task
+        if triggering_observation_id is not None:
+            metadata["parent_observation_id"] = triggering_observation_id
+            metadata["triggering_observation_id"] = triggering_observation_id
+        if worktree_metadata.get("path") is not None:
+            metadata["worktree_path"] = str(worktree_metadata["path"])
+        if worktree_metadata.get("branch") is not None:
+            metadata["worktree_branch"] = str(worktree_metadata["branch"])
         return SessionAccessDescriptor(
             session_id=child_id,
             project_id=parent.project_id,

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LansCoder Observatory</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <header class="topbar"><strong>Observatory</strong><nav><a href="/">Trace Explorer</a><a href="#replay">Session Replay</a></nav></header>
+    <main class="layout">
+      <section class="panel explorer"><div class="panel-head"><h1>Trace Explorer</h1><label>status <select id="status"><option value="">all</option><option>running</option><option>waiting_for_input</option><option>completed</option><option>failed</option><option>cancelled</option></select></label></div><div id="traces" class="trace-list"></div></section>
+      <section class="panel detail"><div class="panel-head"><h2 id="detail-title">Select a trace</h2></div><div id="detail-content" class="evidence">Choose a trace to inspect its timeline and evidence.</div></section>
+      <section id="replay" class="panel replay"><div class="panel-head"><h2>Session Replay</h2></div><div class="replay-grid"><div id="sessions" class="session-list"></div><div id="replay-content" class="replay-content">Select a primary session to inspect its branches.</div></div></section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

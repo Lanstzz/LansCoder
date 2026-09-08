@@ -1,0 +1,21 @@
+:root { color-scheme: dark; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; background: #101317; color: #d8dee9; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.topbar { display: flex; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid #2b3340; background: #171c24; }
+nav { display: flex; gap: 18px; } a { color: #8ec7ff; text-decoration: none; }
+.layout { display: grid; grid-template-columns: minmax(250px, 28%) 1fr; gap: 10px; padding: 10px; }
+.panel { min-height: 220px; border: 1px solid #2b3340; background: #171c24; padding: 12px; }
+.replay { grid-column: 1 / -1; min-height: 120px; }
+.replay-grid { display: grid; grid-template-columns: 240px 1fr; gap: 12px; }
+.session { width: 100%; display: grid; gap: 4px; padding: 8px; border: 0; border-bottom: 1px solid #252d38; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.session:hover { background: #202936; }
+.replay-content { min-height: 90px; }
+.replay-facts, .linked-traces { display: flex; flex-wrap: wrap; gap: 14px; padding: 8px; background: #11161d; }
+.branches { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.branch { min-width: 190px; padding: 9px; border: 1px solid #354052; background: #11161d; }
+.branch.active { border-color: #83d6a3; } .branch.historical { opacity: .8; }
+.panel-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; border-bottom: 1px solid #2b3340; margin-bottom: 10px; }
+h1, h2, h3 { margin: 0 0 10px; font-size: 14px; } select { background: #101317; color: inherit; border: 1px solid #3b4656; }
+.trace { width: 100%; display: grid; grid-template-columns: 90px 1fr; gap: 5px; padding: 9px; border: 0; border-bottom: 1px solid #252d38; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.trace:hover { background: #202936; } .trace span { color: #83d6a3; } .trace small, small { color: #8995a7; }
+.facts { display: flex; flex-wrap: wrap; gap: 14px; padding: 9px; background: #11161d; } li { padding: 4px; } pre { overflow: auto; padding: 10px; background: #11161d; color: #b9d2e9; }

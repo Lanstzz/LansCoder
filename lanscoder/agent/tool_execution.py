@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass
@@ -34,6 +36,9 @@ from lanscoder.tools.hidden import HIDDEN_TOOL_STATUS_NAMES
 from lanscoder.tools.types import ToolResult, make_error_result
 from lanscoder.subagent.types import role_allows_background, role_requires_worktree
 from lanscoder.agent.worktree import WorktreeManager
+from lanscoder.observability.context import get_observation_id, get_trace_id, get_trace_scope
+from lanscoder.session.branch import SessionBranchContext, build_branch_topology
+from lanscoder.session.projection import project_branch
 
 PARALLEL_READONLY_TOOL_NAMES = frozenset(
     {
@@ -261,11 +266,7 @@ class ToolExecutor:
 
         cleaned: list[ToolCall] = []
         requested: dict[str, tuple[str | None, str | None]] = {}
-        self._original_arguments = {
-            tool_call.id: deepcopy(tool_call.arguments)
-            for tool_call in tool_calls
-            if isinstance(tool_call.arguments, (dict, str))
-        }
+        self._original_arguments = {tool_call.id: deepcopy(tool_call.arguments) for tool_call in tool_calls if isinstance(tool_call.arguments, (dict, str))}
         for tool_call in tool_calls:
             if not has_background_control_fields(tool_call.arguments):
                 cleaned.append(tool_call)
@@ -292,7 +293,19 @@ class ToolExecutor:
                 background_rejected="disabled",
                 tool_call=tool_call,
             )
-        observed_revision = self._validate_background_task_id(tool_call.name, task_id)
+        branch_context = self.session.writer.branch_context
+        if branch_context is None:
+            return self._reject_background(
+                tool_call.name,
+                "后台执行需要已建立的会话 branch。",
+                background_rejected="branch_missing",
+                tool_call=tool_call,
+            )
+        observed_revision = self._validate_background_task_id(
+            tool_call.name,
+            task_id,
+            branch_context=branch_context,
+        )
         if isinstance(observed_revision, ToolResult):
             self._emit_event("denied", tool_call, result=observed_revision)
             return observed_revision
@@ -332,20 +345,58 @@ class ToolExecutor:
                 return self._mark_background_task_completed(
                     job.task_id,
                     observed_revision=job.observed_revision,
+                    branch_context=job.branch_context,
                 )
             return None
 
-        try:
-            job = self._background_manager.start(
-                run,
-                session_id=self.session.session_id,
-                tool_name=tool_call.name,
-                label=label,
-                task_id=task_id,
-                observed_revision=observed_revision,
-                dispatch_turn=self.session.current_turn,
-                on_completed=complete_task_plan if task_id is not None else None,
+        parent_scope = get_trace_scope() or getattr(self._event_sink, "_trace_scope", None)
+        parent_trace_id = get_trace_id() or getattr(self._event_sink, "_trace_id", None)
+        parent_observation_id = None
+        trace_recorder = getattr(self._event_sink, "_trace_recorder", None)
+        dispatch_context = self._background_dispatch_context(
+            branch_context=branch_context,
+            observed_revision=observed_revision,
+        )
+
+        def persist_scheduled(job: BackgroundJob) -> None:
+            self.session.writer.append_event(
+                "background_scheduled",
+                {
+                    "job_id": job.id,
+                    "tool_name": tool_call.name,
+                    "task_id": task_id,
+                    "parent_trace_id": parent_trace_id,
+                    "parent_observation_id": parent_observation_id,
+                    "dispatch_branch_context": dict(dispatch_context),
+                },
+                branch_context=branch_context,
+                allow_inactive_branch=True,
             )
+
+        try:
+            self._emit_event("started", tool_call)
+            with self._tool_observation_context(tool_call.id):
+                execution_context = contextvars.copy_context()
+                parent_observation_id = get_observation_id()
+                job = self._background_manager.start(
+                    run,
+                    session_id=self.session.session_id,
+                    tool_name=tool_call.name,
+                    label=label,
+                    task_id=task_id,
+                    observed_revision=observed_revision,
+                    dispatch_turn=self.session.current_turn,
+                    on_completed=complete_task_plan if task_id is not None else None,
+                    branch_context=branch_context,
+                    dispatch_branch_context=dispatch_context,
+                    execution_context=execution_context,
+                    trace_recorder=trace_recorder,
+                    trace_scope=parent_scope,
+                    parent_trace_id=parent_trace_id,
+                    parent_observation_id=parent_observation_id,
+                    session_writer=self.session.writer,
+                    before_submit=persist_scheduled,
+                )
         except BackgroundCapacityError as exc:
             return self._reject_background(
                 tool_call.name,
@@ -366,34 +417,66 @@ class ToolExecutor:
     def _task_plan_service(self) -> TaskPlanService:
         return TaskPlanService(store=self.session.store, writer=self.session.writer)
 
-    def _validate_background_task_id(self, tool_name: str, task_id: str | None) -> int | ToolResult | None:
+    def _validate_background_task_id(
+        self,
+        tool_name: str,
+        task_id: str | None,
+        *,
+        branch_context: SessionBranchContext | None = None,
+    ) -> int | ToolResult | None:
         """校验后台任务引用的 task_id 是否有效,返回计划修订号或错误。"""
         if task_id is None:
             return None
-        plan = self._task_plan_service().current()
+        plan = self._task_plan_service().current(branch_context=branch_context)
         if plan is None:
             return make_error_result(
                 tool_name,
-                f"Cannot start background work for task_id {task_id!r}: no current task plan. " "Call task_create first, or remove task_id.",
+                f"Cannot start background work for task_id {task_id!r}: no current task plan. Call task_create first, or remove task_id.",
                 background_rejected="task_plan_missing",
                 task_id=task_id,
             )
         if not any(task.id == task_id for task in plan.tasks):
             return make_error_result(
                 tool_name,
-                f"Cannot start background work: task_id {task_id!r} is not in the current task plan. " "Call task_list, then retry with an existing task ID.",
+                f"Cannot start background work: task_id {task_id!r} is not in the current task plan. Call task_list, then retry with an existing task ID.",
                 background_rejected="task_not_found",
                 task_id=task_id,
                 actual_revision=plan.revision,
             )
         return plan.revision
 
-    def _mark_background_task_completed(self, task_id: str, *, observed_revision: int | None) -> str:
+    def _background_dispatch_context(
+        self,
+        *,
+        branch_context: SessionBranchContext | None,
+        observed_revision: int | None,
+    ) -> dict[str, object]:
+        metadata = self.session.rebuild_view().metadata
+        events = self.session.store.list_events(self.session.session_id)
+        branch_head_sequence = 0
+        if branch_context is not None and events:
+            topology = build_branch_topology(events)
+            projected = project_branch(events, topology, branch_context.branch_id)
+            branch_head_sequence = max((event.sequence for event in projected), default=0)
+        return {
+            "branch_id": branch_context.branch_id if branch_context is not None else "",
+            "branch_head_sequence_at_dispatch": branch_head_sequence,
+            "project_id": metadata.get("project_id"),
+            "task_plan_revision": observed_revision,
+        }
+
+    def _mark_background_task_completed(
+        self,
+        task_id: str,
+        *,
+        observed_revision: int | None,
+        branch_context: SessionBranchContext | None = None,
+    ) -> str:
         """把后台任务完成状态回写到任务计划(带冲突重试)。"""
 
         service = self._task_plan_service()
         for _ in range(3):
-            plan = service.current()
+            plan = service.current(branch_context=branch_context)
             if plan is None:
                 return f"TaskPlan task {task_id!r} was not updated because no plan is current."
             task = next((candidate for candidate in plan.tasks if candidate.id == task_id), None)
@@ -404,16 +487,18 @@ class ToolExecutor:
             try:
                 if task.status == "pending":
                     if plan.revision != observed_revision:
-                        return f"TaskPlan task {task_id!r} was not updated because it returned to pending " "after this background job started."
+                        return f"TaskPlan task {task_id!r} was not updated because it returned to pending after this background job started."
                     if task_id not in ready_task_ids(plan):
                         return f"TaskPlan task {task_id!r} was not updated because it is pending and blocked."
                     plan = service.update(
                         expected_revision=plan.revision,
                         updates=[{"id": task_id, "status": "in_progress"}],
+                        branch_context=branch_context,
                     ).plan
                 service.update(
                     expected_revision=plan.revision,
                     updates=[{"id": task_id, "status": "completed"}],
+                    branch_context=branch_context,
                 )
             except TaskPlanRevisionConflict:
                 continue
@@ -539,8 +624,9 @@ class ToolExecutor:
         """单线程执行一个工具调用并派发 started/finished 事件。"""
         self._check_cancelled()
         self._emit_event("started", tool_call)
-        with cancellation_context(self.cancellation_token):
-            result = self.session.execute_tool_call(tool_call)
+        with self._tool_observation_context(tool_call.id):
+            with cancellation_context(self.cancellation_token):
+                result = self.session.execute_tool_call(tool_call)
         if user_input_request_from_tool_result(result, tool_call_id=tool_call.id, tool_name=tool_call.name) is None:
             self._emit_event("finished", tool_call, result=result)
         self._check_cancelled()
@@ -561,14 +647,26 @@ class ToolExecutor:
     def execute_with_cancellation_context(self, tool_call: ToolCall) -> ToolResult:
         """带取消上下文执行一次工具调用。"""
         self._check_cancelled()
-        with cancellation_context(self.cancellation_token):
-            return self.session.execute_tool_call(tool_call)
+        with self._tool_observation_context(tool_call.id):
+            with cancellation_context(self.cancellation_token):
+                return self.session.execute_tool_call(tool_call)
+
+    def _tool_observation_context(self, tool_call_id: str):
+        context_factory = getattr(self._event_sink, "tool_observation_context", None)
+        if callable(context_factory):
+            return context_factory(tool_call_id)
+        return nullcontext()
+
+    def _tool_observation_id(self, tool_call_id: str) -> str | None:
+        getter = getattr(self._event_sink, "tool_observation_id", None)
+        return getter(tool_call_id) if callable(getter) else None
 
     def execute_after_permission_with_cancellation_context(self, tool_call: ToolCall) -> ToolResult:
         """权限确认后带取消上下文执行工具调用。"""
         self._check_cancelled()
-        with cancellation_context(self.cancellation_token):
-            return self.session.execute_tool_call_after_permission_confirmation(tool_call)
+        with self._tool_observation_context(tool_call.id):
+            with cancellation_context(self.cancellation_token):
+                return self.session.execute_tool_call_after_permission_confirmation(tool_call)
 
     def permission_input_request_from_pending(self, pending: PendingPermissionExecution) -> UserInputRequest:
         """从挂起权限执行构造用户输入请求,缺失时抛错。"""

@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import re
+from contextlib import contextmanager
 from pathlib import Path
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from lanscoder.journal.models import JOURNAL_SCHEMA_VERSION, JournalEnvelope
@@ -86,6 +88,55 @@ class JournalStore:
 
     def append_event(self, envelope: JournalEnvelope) -> JournalEnvelope:
         return self.append_envelope(envelope)
+
+    @contextmanager
+    def write_transaction(
+        self,
+        session_id: str | None = None,
+    ) -> Iterator[tuple[list[JournalEnvelope], Callable[..., JournalEnvelope]]]:
+        """Hold one session write lock across a read/validate/append sequence.
+
+        Branch-aware mutations need to project their target branch from the same
+        journal snapshot that receives the resulting event.  The append helper
+        deliberately assumes this transaction owns the lock, so a caller cannot
+        accidentally release the lock between the compare and the write.
+        """
+
+        resolved_session_id = self._resolve_session_id(session_id)
+        with self._lock(resolved_session_id):
+            events = self._read_locked(resolved_session_id, recover_tail=True)
+            next_sequence = events[-1].sequence + 1 if events else 1
+
+            def append_locked(
+                kind: str,
+                data: dict[str, Any] | None = None,
+                *,
+                event_id: str | None = None,
+                occurred_at: str | None = None,
+                trace_id: str | None = None,
+                observation_id: str | None = None,
+                parent_observation_id: str | None = None,
+                branch_id: str | None = None,
+            ) -> JournalEnvelope:
+                nonlocal next_sequence
+                envelope = JournalEnvelope.create(
+                    sequence=next_sequence,
+                    kind=kind,
+                    session_id=resolved_session_id,
+                    data=data,
+                    event_id=event_id,
+                    occurred_at=occurred_at,
+                    trace_id=trace_id,
+                    observation_id=observation_id,
+                    parent_observation_id=parent_observation_id,
+                    branch_id=branch_id,
+                )
+                self._append_locked(envelope)
+                events.append(envelope)
+                next_sequence += 1
+                return envelope
+
+            yield events, append_locked
 
     def read_events(self, session_id: str | None = None) -> list[JournalEnvelope]:
         resolved_session_id = self._resolve_session_id(session_id)

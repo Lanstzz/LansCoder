@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from threading import RLock
@@ -39,6 +40,7 @@ from lanscoder.skills.catalog import render_skill_catalog
 from lanscoder.skills.models import SkillCatalog
 from lanscoder.storage import LansCoderPaths
 from lanscoder.observability.models import TraceScope
+from lanscoder.session.branch import SessionBranchContext
 from lanscoder.observability.protocol import TraceRecorder
 
 if TYPE_CHECKING:
@@ -117,6 +119,7 @@ class AgentSession:
         permission_manager: PermissionManager | None = None,
         sandbox_access: SandboxAccess | None = None,
         memory_manager: MemoryManager | None = None,
+        session_metadata: Mapping[str, object] | None = None,
     ) -> "AgentSession":
         """工厂:新建空会话,装配权限协调器与会话工具注册表。"""
 
@@ -156,7 +159,7 @@ class AgentSession:
             memory_manager=memory_manager,
         )
         session.tool_registry = registry
-        session.append_session_created()
+        session.append_session_created(**dict(session_metadata or {}))
         return session
 
     @classmethod
@@ -383,8 +386,8 @@ class AgentSession:
         }
         return confirmation
 
-    def append_session_created(self) -> None:
-        self.writer.append_session_created()
+    def append_session_created(self, **metadata: object) -> None:
+        self.writer.append_session_created(**metadata)
 
     def build_system_prefix(
         self,
@@ -560,6 +563,7 @@ class AgentSession:
         observed_revision: int | None = None,
         label: str | None = None,
         error: str | None = None,
+        branch_context: SessionBranchContext | None = None,
     ) -> str:
         """把后台任务完成通知写入会话。"""
 
@@ -572,6 +576,7 @@ class AgentSession:
             observed_revision=observed_revision,
             label=label,
             error=error,
+            branch_context=branch_context,
         )
         self.known_message_ids.add(message_id)
         return message_id

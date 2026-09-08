@@ -69,13 +69,10 @@
 
 用户偏好主 session 作为 orchestrator，子代理执行边界清晰的独立任务。
 
-### 工具使用
+### 模型使用
 
-- 创建、等待、补充指令和关闭子代理时，必须直接使用当前环境提供的协作工具。
-- 不得使用 `exec_command`、shell、脚本或其他命令模拟子代理管理。
-- 不得把协作工具调用嵌套在 `functions.exec` 或其他非协作工具中。
-- 如果当前环境没有可用的子代理工具，应明确说明工具不可用，不要尝试替代执行。
-- 创建子代理后保存返回的 agent id；等待和后续操作必须使用该 id。
+- 子代理应该用*最高*档位的 GPT-5.6-luna 模型
+- 绝对不允许使用 GPT-6-Astra
 
 ### 委托原则
 
@@ -88,12 +85,6 @@
 
 ### 协作工具调用硬性约束
 
-- 协作工具必须作为顶层工具直接调用：
-  - 创建：`collaboration.spawn_agent`
-  - 等待：`collaboration.wait_agent`
-  - 查看：`collaboration.list_agents`
-  - 中断：`collaboration.interrupt_agent`
-  - 通信：`collaboration.send_message` 或 `collaboration.followup_task`
 - 严禁通过 `functions.exec`、`tools.exec`、`exec_command`、shell、脚本或 JavaScript 包装、转发或模拟任何 `collaboration.*` 调用。
 - 等待子代理时不得执行 `true`、`sleep`、轮询 shell 命令或其他无意义命令；必须直接调用 `collaboration.wait_agent`。
 - 协作工具不可用时，必须明确报告不可用，不得用 shell 或其他工具替代。
@@ -101,10 +92,9 @@
 
 ### 前后台行为
 
-- 创建子代理后，主代理应继续处理不依赖其结果的工作。
 - 不要连续轮询一个子代理。
-- 子代理完成后，检查其报告和代码变更，再由主代理整合和测试。
 - 不再需要的子代理应及时清除。
+- 一个子代理可能执行较长时间，长任务下你可以等待最长两个小时。
 
 ## 用户优先
 

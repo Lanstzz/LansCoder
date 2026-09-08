@@ -636,6 +636,7 @@ def test_subagent_runner_protocol_contract(tmp_path) -> None:
         tools=[],
         permission_coordinator=host.permission_coordinator,
         child_runner_factory=lambda **kwargs: None,
+        allow_legacy_standalone_for_tests=True,
     )
 
     assert isinstance(engine, SubagentRunner)

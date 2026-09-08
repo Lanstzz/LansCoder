@@ -1,13 +1,7 @@
 from __future__ import annotations
 
-import hashlib
-import threading
-from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterator
-
-import portalocker
+from lanscoder.session.branch import SessionBranchContext
 
 from lanscoder.context.store import JsonlSessionStore
 from lanscoder.context.writer import SessionEventWriter
@@ -21,13 +15,9 @@ from lanscoder.planning.reducer import (
     update_tasks,
 )
 
-_THREAD_LOCKS_GUARD = threading.Lock()
-_THREAD_LOCKS: dict[str, threading.RLock] = {}
-
 
 @dataclass(frozen=True, slots=True)
 class TaskPlanMutation:
-
     plan: TaskPlan
     projection: dict[str, object]
     changed: bool
@@ -35,7 +25,6 @@ class TaskPlanMutation:
 
 
 class TaskPlanService:
-
     def __init__(
         self,
         *,
@@ -45,9 +34,11 @@ class TaskPlanService:
         self._store = store
         self._writer = writer
 
-    def current(self) -> TaskPlan | None:
-
-        return self._store.rebuild_session_view(self._writer.session_id).task_plan
+    def current(self, *, branch_context: SessionBranchContext | None = None) -> TaskPlan | None:
+        return self._store.rebuild_session_view(
+            self._writer.session_id,
+            branch_context=branch_context,
+        ).task_plan
 
     def create(
         self,
@@ -56,94 +47,68 @@ class TaskPlanService:
         expected_revision: int,
         tasks: object,
         start_new_plan: bool = False,
+        branch_context: SessionBranchContext | None = None,
     ) -> TaskPlanMutation:
-        with self._mutation_lock():
-            current_plan = self.current()
-            result = create_tasks(
+        result = self._writer.mutate_task_plan(
+            expected_revision=expected_revision,
+            operation="create",
+            branch_context=branch_context,
+            reducer=lambda current_plan: create_tasks(
                 current_plan=current_plan,
                 expected_revision=expected_revision,
                 mode=mode,
                 tasks=tasks,
                 start_new_plan=start_new_plan,
-            )
-            return self._finish(
-                operation="create",
-                previous_revision=current_plan.revision if current_plan is not None else 0,
-                result=result,
-            )
+            ),
+        )
+        return self._mutation(result)
 
     def update(
         self,
         *,
         expected_revision: int,
         updates: object,
+        branch_context: SessionBranchContext | None = None,
     ) -> TaskPlanMutation:
-        with self._mutation_lock():
-            current_plan = self._require_current_plan("update")
-            result = update_tasks(
-                plan=current_plan,
+        result = self._writer.mutate_task_plan(
+            expected_revision=expected_revision,
+            operation="update",
+            branch_context=branch_context,
+            reducer=lambda current_plan: update_tasks(
+                plan=self._require_plan(current_plan, "update"),
                 expected_revision=expected_revision,
                 updates=updates,
-            )
-            return self._finish(
-                operation="update",
-                previous_revision=current_plan.revision,
-                result=result,
-            )
+            ),
+        )
+        return self._mutation(result)
 
     def revise(
         self,
         *,
         expected_revision: int,
         revisions: object,
+        branch_context: SessionBranchContext | None = None,
     ) -> TaskPlanMutation:
-        with self._mutation_lock():
-            current_plan = self._require_current_plan("revise")
-            result = revise_tasks(
-                plan=current_plan,
+        result = self._writer.mutate_task_plan(
+            expected_revision=expected_revision,
+            operation="revise",
+            branch_context=branch_context,
+            reducer=lambda current_plan: revise_tasks(
+                plan=self._require_plan(current_plan, "revise"),
                 expected_revision=expected_revision,
                 revisions=revisions,
-            )
-            return self._finish(
-                operation="revise",
-                previous_revision=current_plan.revision,
-                result=result,
-            )
+            ),
+        )
+        return self._mutation(result)
 
-    @contextmanager
-    def _mutation_lock(self) -> Iterator[None]:
-        session_key = str((self._store.sessions_dir / f"{self._writer.session_id}.jsonl").resolve())
-        with _THREAD_LOCKS_GUARD:
-            thread_lock = _THREAD_LOCKS.setdefault(session_key, threading.RLock())
-
-        digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()
-        lock_dir = Path(self._store.root) / "locks"
-        lock_dir.mkdir(parents=True, exist_ok=True)
-        lock_path = lock_dir / f"task-plan-{digest}.lock"
-
-        with thread_lock, portalocker.Lock(lock_path, mode="a+b", flags=portalocker.LOCK_EX):
-            yield
-
-    def _require_current_plan(self, operation: str) -> TaskPlan:
-        plan = self.current()
+    @staticmethod
+    def _require_plan(plan: TaskPlan | None, operation: str) -> TaskPlan:
         if plan is None:
             raise TaskPlanCommandError(f"cannot {operation}: no current task plan; create one first")
         return plan
 
-    def _finish(
-        self,
-        *,
-        operation: str,
-        previous_revision: int,
-        result: ReductionResult,
-    ) -> TaskPlanMutation:
-        if result.changed:
-            self._writer.append_task_plan_updated(
-                previous_revision=previous_revision,
-                operation=operation,
-                changes=result.changes,
-                snapshot=result.plan,
-            )
+    @staticmethod
+    def _mutation(result: ReductionResult) -> TaskPlanMutation:
         return TaskPlanMutation(
             plan=result.plan,
             projection=project_plan(result.plan),

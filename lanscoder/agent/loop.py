@@ -36,6 +36,7 @@ from lanscoder.agent.user_input import (
     AgentTurnStatus,
 )
 from lanscoder.context.context_builder import ContextBuilder
+from lanscoder.session.branch import SessionBranchContext
 from lanscoder.context.manager import ContextCompactRequest, ContextWindowTrigger
 from lanscoder.input.attachments import UserAttachment
 from lanscoder.permissions.types import PermissionRequest
@@ -906,6 +907,15 @@ class AgentLoop:
                 observed_revision=notification.observed_revision,
                 label=notification.label,
                 error=notification.error,
+                branch_context=(
+                    SessionBranchContext(
+                        self.session.session_id,
+                        str(notification.dispatch_branch_context["branch_id"]),
+                        self.session.writer.branch_context.root_branch_id if self.session.writer.branch_context else None,
+                    )
+                    if notification.dispatch_branch_context.get("branch_id")
+                    else None
+                ),
             )
 
     def _is_cancelled(self) -> bool:

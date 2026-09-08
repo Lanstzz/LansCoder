@@ -93,7 +93,7 @@ class JournalTraceRecorder:
         error: Any = None,
         reason: Any = None,
         no_generation: bool = False,
-    ) -> None:
+    ) -> bool:
         scope = self._trace_scopes.get(trace_id) or get_trace_scope()
         try:
             resolved_outcome = outcome or ("no_generation" if no_generation else {"failed": "failed", "cancelled": "cancelled"}.get(status, "succeeded"))
@@ -121,8 +121,10 @@ class JournalTraceRecorder:
             if trace_id in self._started:
                 data["duration_ms"] = max(0, int((self._monotonic() - self._started[trace_id]) * 1000))
             self._write("trace.ended", data, scope=scope, trace_id=trace_id)
+            return True
         except Exception as failure:
             self._failure("trace.ended", failure, trace_id=trace_id, scope=scope)
+            return False
 
     def start_observation(
         self,
@@ -177,12 +179,15 @@ class JournalTraceRecorder:
             self._failure("observation.ended", failure, trace_id=trace_id, scope=scope)
 
     def link_trace(self, parent_trace_id: str, child_trace_id: str, *, relation: str = "child", data: Mapping[str, Any] | None = None, scope: TraceScope | None = None) -> None:
-        scope = self._trace_scopes.get(child_trace_id) or scope or self._trace_scopes.get(parent_trace_id) or get_trace_scope()
+        child_scope = self._trace_scopes.get(child_trace_id) or scope or self._trace_scopes.get(parent_trace_id) or get_trace_scope()
+        parent_scope = self._trace_scopes.get(parent_trace_id)
         try:
             event_data = {**json_safe(data or {}), "parent_trace_id": parent_trace_id, "child_trace_id": child_trace_id, "relation": relation}
-            self._write("trace.linked", event_data, scope=scope, trace_id=child_trace_id)
+            self._write("trace.linked", event_data, scope=child_scope, trace_id=child_trace_id)
+            if parent_scope is not None and child_scope is not None and (parent_scope.session_id, parent_scope.branch_id) != (child_scope.session_id, child_scope.branch_id):
+                self._write("trace.linked", event_data, scope=parent_scope, trace_id=parent_trace_id)
         except Exception as error:
-            self._failure("trace.linked", error, trace_id=child_trace_id, scope=scope)
+            self._failure("trace.linked", error, trace_id=child_trace_id, scope=child_scope)
 
     def record_payload(self, value: Any, *, media_type: str = "application/json", force_reference: bool = False, trace_id: str | None = None, scope: TraceScope | None = None) -> dict[str, Any] | None:
         scope = self._trace_scopes.get(trace_id) or scope or get_trace_scope()

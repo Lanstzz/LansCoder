@@ -18,6 +18,11 @@ def make_loop():
     """
 
     def _make_loop(*, session, provider, **overrides):
-        return create_agent_loop(session=session, provider=provider, **overrides)
+        overrides.setdefault("allow_legacy_standalone_for_tests", True)
+        return create_agent_loop(
+            session=session,
+            provider=provider,
+            **overrides,
+        )
 
     return _make_loop

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager, nullcontext
 from typing import TYPE_CHECKING, Any, Protocol
 
 from lanscoder.utils.cancellation import CancellationToken
@@ -13,12 +14,10 @@ if TYPE_CHECKING:
 
 
 class ToolEventSink(Protocol):
-
     def on_tool_event(self, event: ToolExecutionEvent) -> None: ...
 
 
 class TurnObserver:
-
     def __init__(
         self,
         *,
@@ -40,6 +39,7 @@ class TurnObserver:
         self._trace_id = trace_id
         self._trace_scope = trace_scope
         self._tool_observations: dict[str, list[str]] = {}
+        self._last_tool_observations: dict[str, str] = {}
         self._provider_calls = 0
         self._total_tokens = 0
 
@@ -108,6 +108,25 @@ class TurnObserver:
             "provider_calls": self._provider_calls,
             "total_tokens": self._total_tokens,
         }
+
+    def trace_context_snapshot(self) -> tuple[TraceRecorder | None, str | None, TraceScope | None]:
+        return self._trace_recorder, self._trace_id, self._trace_scope
+
+    def tool_observation_id(self, tool_call_id: str) -> str | None:
+        observation_ids = self._tool_observations.get(tool_call_id)
+        return (observation_ids or [self._last_tool_observations.get(tool_call_id)])[0]
+
+    @contextmanager
+    def tool_observation_context(self, tool_call_id: str):
+        """Expose the active tool observation while its executor is running."""
+
+        observation_id = self._parent_tool_observation(tool_call_id)
+        if observation_id is None or self._trace_scope is None:
+            with nullcontext():
+                yield
+            return
+        with self._trace_scope.activate(trace_id=self._trace_id, observation_id=observation_id):
+            yield
 
     def set_stream_event_handler(self, handler: Callable[[ChatStreamEvent], None] | None) -> None:
         self._stream_event_handler = handler
@@ -229,6 +248,7 @@ class TurnObserver:
         if not observation_ids:
             return
         observation_id = observation_ids.pop(0)
+        self._last_tool_observations[tool_call_id] = observation_id
         self._safe_end_observation(observation_id, outcome=outcome, event=event)
         if not observation_ids:
             self._tool_observations.pop(tool_call_id, None)

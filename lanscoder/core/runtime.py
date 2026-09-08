@@ -99,6 +99,7 @@ def create_agent_loop(
     trace_recorder: TraceRecorder | None = None,
     trace_id: str | None = None,
     trace_scope: TraceScope | None = None,
+    allow_legacy_standalone_for_tests: bool = False,
     **_,
 ) -> AgentLoop:
     """装配一次 AgentLoop:注册工具、构造子代理引擎、请求构建器、观察者、工具执行器与权限恢复器。"""
@@ -117,7 +118,16 @@ def create_agent_loop(
 
     child_limits = DEFAULT_CHILD_LIMITS
 
-    def _child_runner_factory(*, session, tools, observer, cancellation_token):
+    def _child_runner_factory(
+        *,
+        session,
+        tools,
+        observer,
+        cancellation_token,
+        trace_recorder=None,
+        trace_id=None,
+        trace_scope=None,
+    ):
         return create_agent_loop(
             session=session,
             provider=provider,
@@ -128,6 +138,9 @@ def create_agent_loop(
             enable_delegate_tool=False,
             limits=child_limits,
             request_options=request_options,
+            trace_recorder=trace_recorder,
+            trace_id=trace_id,
+            trace_scope=trace_scope,
         )
 
     coordinator = session.permission_coordinator
@@ -144,6 +157,10 @@ def create_agent_loop(
         limits=child_limits,
         background_manager=background_manager,
         child_runner_factory=_child_runner_factory,
+        trace_recorder=trace_recorder,
+        trace_id=trace_id,
+        trace_scope=trace_scope,
+        allow_legacy_standalone_for_tests=allow_legacy_standalone_for_tests,
     )
     if enable_delegate_tool:
         register_loop_tools(

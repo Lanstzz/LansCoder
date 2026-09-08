@@ -70,12 +70,18 @@ def test_child_factory_requires_parent_trace_and_inherits_project_identity(tmp_p
         parent_trace_id="trace_parent",
         project_id=project_id,
         worktree_metadata={"path": str(tmp_path / "worktree")},
+        delegate_role="coder",
+        delegate_task="edit the implementation",
+        triggering_observation_id="obs_delegate",
         session_id="sess_child",
     )
     assert child.kind == "subagent"
     assert child.project_id == project_id
     assert child.parent_session_id == "sess_parent"
     assert child.worktree_metadata["path"].endswith("worktree")
+    assert child.metadata["delegate_role"] == "coder"
+    assert child.metadata["delegate_task"] == "edit the implementation"
+    assert child.metadata["triggering_observation_id"] == "obs_delegate"
 
     with pytest.raises(SessionAccessError, match="project_id"):
         factory.create_child(

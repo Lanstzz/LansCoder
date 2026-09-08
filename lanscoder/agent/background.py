@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import threading
 import time
+import contextvars
+from contextlib import nullcontext
 from html import escape
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -17,6 +19,9 @@ from lanscoder.utils.cancellation import (
     cancellation_context,
 )
 from lanscoder.tools.types import ToolResult, make_text_result
+from lanscoder.observability.models import TraceScope
+from lanscoder.observability.protocol import TraceRecorder
+from lanscoder.session.branch import SessionBranchContext
 
 
 RUN_IN_BACKGROUND_ARG = "run_in_background"
@@ -53,7 +58,6 @@ _SUMMARY_PREVIEW_LIMIT = 2000
 
 
 def with_background_controls(definition: ToolDefinition) -> ToolDefinition:
-
     parameters: dict[str, Any] = deepcopy(definition.parameters) if definition.parameters else {}
     parameters.setdefault("type", "object")
     properties = parameters.setdefault("properties", {})
@@ -75,7 +79,7 @@ def with_background_controls(definition: ToolDefinition) -> ToolDefinition:
     properties[BACKGROUND_TASK_ID_ARG] = {
         "type": "string",
         "description": (
-            "Optional TaskPlan task ID to associate with this background job. The task must already " "exist in the current plan; successful completion advances that same task when it remains active."
+            "Optional TaskPlan task ID to associate with this background job. The task must already exist in the current plan; successful completion advances that same task when it remains active."
         ),
     }
     return ToolDefinition(
@@ -86,7 +90,6 @@ def with_background_controls(definition: ToolDefinition) -> ToolDefinition:
 
 
 def strip_background_controls(arguments: Any) -> tuple[dict[str, Any], bool, str | None, str | None]:
-
     if not isinstance(arguments, dict):
         return {} if arguments is None else arguments, False, None, None
     clean = {key: value for key, value in arguments.items() if key not in BACKGROUND_CONTROL_ARGS}
@@ -99,13 +102,11 @@ def strip_background_controls(arguments: Any) -> tuple[dict[str, Any], bool, str
 
 
 def has_background_control_fields(arguments: Any) -> bool:
-
     return isinstance(arguments, dict) and any(key in arguments for key in BACKGROUND_CONTROL_ARGS)
 
 
 @dataclass(slots=True)
 class BackgroundNotification:
-
     job_id: str
     tool_name: str
     status: str
@@ -121,11 +122,12 @@ class BackgroundNotification:
     provider_calls: int | None = None
     total_tokens: int | None = None
     kind: str = "tool"
+    dispatch_branch_context: dict[str, Any] = field(default_factory=dict)
+    detached_from_active_branch: bool = False
 
 
 @dataclass(slots=True)
 class BackgroundJob:
-
     id: str
     tool_name: str
     session_id: str | None = None
@@ -144,9 +146,22 @@ class BackgroundJob:
     task_plan_completion: str | None = None
     worktree_cleanup: Callable[[], None] | None = field(default=None, repr=False)
     progress: dict[str, Any] = field(default_factory=dict)
+    dispatch_branch_context: dict[str, Any] = field(default_factory=dict)
+    branch_context: SessionBranchContext | None = None
+    parent_trace_id: str | None = None
+    parent_observation_id: str | None = None
+    trace_recorder: TraceRecorder | None = field(default=None, repr=False)
+    trace_scope: TraceScope | None = field(default=None, repr=False)
+    trace_id: str | None = None
+    lifecycle_persisted: bool = False
+    lifecycle_event_persisted: bool = False
+    notification_delivery_persisted: bool = False
+    trace_completed: bool = False
+    completion_finalized: bool = False
+    execution_context: contextvars.Context | None = field(default=None, repr=False)
+    session_writer: Any | None = field(default=None, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
-
         summary = _summarize(self) if self.status != STATUS_RUNNING else None
         return {
             "job_id": self.id,
@@ -171,7 +186,6 @@ def current_job_id() -> str | None:
 
 
 class BackgroundJobManager:
-
     def __init__(self, *, max_jobs: int = 8, max_workers: int = 4, clock: Callable[[], float] | None = None) -> None:
         self.max_jobs = max_jobs
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="fc-bg")
@@ -182,9 +196,13 @@ class BackgroundJobManager:
         self._counter = 0
         self._clock = clock or time.monotonic
         self._on_job_completed: Callable[[BackgroundJob], None] | None = None
+        self._on_job_lifecycle: Callable[[BackgroundJob], None] | None = None
 
     def set_on_job_completed(self, cb: Callable[[BackgroundJob], None]) -> None:
         self._on_job_completed = cb
+
+    def set_on_job_lifecycle(self, cb: Callable[[BackgroundJob], None] | None) -> None:
+        self._on_job_lifecycle = cb
 
     def start(
         self,
@@ -197,8 +215,17 @@ class BackgroundJobManager:
         observed_revision: int | None = None,
         dispatch_turn: int | None = None,
         on_completed: Callable[[BackgroundJob], str | None] | None = None,
+        branch_context: SessionBranchContext | None = None,
+        dispatch_branch_context: dict[str, Any] | None = None,
+        trace_recorder: TraceRecorder | None = None,
+        trace_scope: TraceScope | None = None,
+        parent_trace_id: str | None = None,
+        parent_observation_id: str | None = None,
+        before_submit: Callable[[BackgroundJob], None] | None = None,
+        dispatch_context: dict[str, Any] | None = None,
+        execution_context: contextvars.Context | None = None,
+        session_writer: Any | None = None,
     ) -> BackgroundJob:
-
         with self._lock:
             active = sum(1 for job in self._jobs.values() if job.status == STATUS_RUNNING)
             if active >= self.max_jobs:
@@ -215,17 +242,45 @@ class BackgroundJobManager:
                 dispatch_turn=dispatch_turn,
                 created_at=self._clock(),
                 on_completed=on_completed,
+                branch_context=branch_context,
+                dispatch_branch_context=dict(dispatch_branch_context or dispatch_context or {}),
+                trace_recorder=trace_recorder,
+                trace_scope=trace_scope,
+                parent_trace_id=parent_trace_id,
+                parent_observation_id=parent_observation_id,
+                execution_context=execution_context or contextvars.copy_context(),
+                session_writer=session_writer,
             )
             self._jobs[job_id] = job
-            future = self._executor.submit(self._run, job, func)
+            try:
+                if before_submit is not None:
+                    before_submit(job)
+                elif session_writer is not None:
+                    session_writer.append_event(
+                        "background.scheduled",
+                        {
+                            "job_id": job.id,
+                            "tool_name": job.tool_name,
+                            "dispatch_branch_context": dict(job.dispatch_branch_context),
+                        },
+                        branch_context=job.branch_context,
+                        allow_inactive_branch=True,
+                    )
+                future = self._executor.submit(job.execution_context.run, self._run, job, func)
+            except Exception:
+                self._jobs.pop(job_id, None)
+                raise
             self._futures[job_id] = future
         return job
 
     def _run(self, job: BackgroundJob, func: Callable[[], ToolResult]) -> None:
         _current_job_id.value = job.id
+        self._start_trace(job)
         try:
-            with cancellation_context(job.token):
-                result = func()
+            trace_context = self._trace_context(job)
+            with trace_context:
+                with cancellation_context(job.token):
+                    result = func()
         except AgentCancelledError:
             self._finish(job, result=None, error=None)
             return
@@ -236,14 +291,13 @@ class BackgroundJobManager:
 
     def _finish(self, job: BackgroundJob, *, result: ToolResult | None, error: str | None) -> None:
         abandoned_cleanup: Callable[[], None] | None = None
+        abandoned = False
         with self._lock:
             if job.status == STATUS_CANCELLED:
                 job.result = result
-                self._futures.pop(job.id, None)
-                return
-            if job.abandoned:
-                self._futures.pop(job.id, None)
+            elif job.abandoned:
                 abandoned_cleanup = job.worktree_cleanup
+                abandoned = True
             else:
                 job.result = result
                 job.error = error
@@ -255,20 +309,158 @@ class BackgroundJobManager:
                     job.status = STATUS_FAILED
                 else:
                     job.status = STATUS_COMPLETED
-                self._futures.pop(job.id, None)
-                self._completed.append(job)
 
-        if abandoned_cleanup is not None:
-            self._invoke_worktree_cleanup(abandoned_cleanup)
+        if abandoned:
+            if abandoned_cleanup is not None:
+                self._invoke_worktree_cleanup(abandoned_cleanup)
+            with self._lock:
+                self._futures.pop(job.id, None)
             return
 
+        self._publish_completion(job)
+        with self._lock:
+            self._futures.pop(job.id, None)
+
+    def _publish_completion(self, job: BackgroundJob) -> None:
+        self._finalize_task_plan_completion(job)
+        self._persist_lifecycle(job)
+        self._persist_trace_completion(job)
+        lifecycle = self._on_job_lifecycle
+        if lifecycle is not None:
+            try:
+                lifecycle(job)
+            except Exception:
+                pass
         cb = self._on_job_completed
         if cb is not None:
-            cb(job)
+            try:
+                cb(job)
+            except Exception:
+                pass
+        with self._lock:
+            self._completed.append(job)
+
+    def _persist_lifecycle(self, job: BackgroundJob) -> None:
+        if job.lifecycle_persisted:
+            return
+        writer = job.session_writer
+        if writer is None:
+            job.lifecycle_persisted = True
+            return
+        try:
+            kind = {
+                STATUS_COMPLETED: "background.completed",
+                STATUS_FAILED: "background.failed",
+                STATUS_CANCELLED: "background.cancelled",
+            }.get(job.status, "background.completed")
+            data = {
+                "job_id": job.id,
+                "tool_name": job.tool_name,
+                "status": job.status,
+                "error": job.error,
+                "background_trace_id": job.trace_id,
+                "dispatch_branch_context": dict(job.dispatch_branch_context),
+                "detached_from_active_branch": self._is_detached(job),
+            }
+            if not job.lifecycle_event_persisted:
+                writer.append_event(
+                    kind,
+                    data,
+                    branch_context=job.branch_context,
+                    allow_inactive_branch=True,
+                )
+                job.lifecycle_event_persisted = True
+            if not job.notification_delivery_persisted:
+                writer.append_event(
+                    "background.notification.delivered",
+                    {
+                        "job_id": job.id,
+                        "status": job.status,
+                        "delivery": "recorded",
+                        "detached_from_active_branch": self._is_detached(job),
+                    },
+                    branch_context=job.branch_context,
+                    allow_inactive_branch=True,
+                )
+                job.notification_delivery_persisted = True
+        except Exception:
+            return
+        job.lifecycle_persisted = True
+
+    @staticmethod
+    def _trace_context(job: BackgroundJob):
+        if job.trace_id is None or job.branch_context is None:
+            return nullcontext()
+        scope = TraceScope(
+            job.session_id or job.branch_context.session_id,
+            job.branch_context.branch_id,
+            parent_trace_id=job.parent_trace_id,
+            parent_observation_id=job.parent_observation_id,
+        )
+        return scope.activate(trace_id=job.trace_id)
+
+    def _start_trace(self, job: BackgroundJob) -> None:
+        recorder = job.trace_recorder
+        if recorder is None or job.branch_context is None:
+            return
+        scope = TraceScope(
+            job.session_id or job.branch_context.session_id,
+            job.branch_context.branch_id,
+            parent_trace_id=job.parent_trace_id,
+            parent_observation_id=job.parent_observation_id,
+        )
+        try:
+            job.trace_id = recorder.start_trace(
+                scope,
+                data={
+                    "operation": "background",
+                    "job_id": job.id,
+                    "tool_name": job.tool_name,
+                    "dispatch_branch_context": dict(job.dispatch_branch_context),
+                },
+            )
+            if job.parent_trace_id and job.trace_id:
+                recorder.link_trace(
+                    job.parent_trace_id,
+                    job.trace_id,
+                    relation="background",
+                    data={"job_id": job.id},
+                    scope=scope,
+                )
+        except Exception:
+            job.trace_id = None
+
+    def _persist_trace_completion(self, job: BackgroundJob) -> None:
+        if job.trace_completed:
+            return
+        recorder = job.trace_recorder
+        if recorder is None or job.trace_id is None:
+            job.trace_completed = True
+            return
+        try:
+            outcome = {
+                STATUS_COMPLETED: "succeeded",
+                STATUS_FAILED: "failed",
+                STATUS_CANCELLED: "cancelled",
+            }.get(job.status, "failed")
+            error = job.error
+            if error is None and job.status == STATUS_FAILED and job.result is not None:
+                error = {"code": "tool_failed", "message": job.result.error or job.result.content}
+            persisted = recorder.end_trace(
+                job.trace_id,
+                status=job.status,
+                outcome=outcome,
+                final_output=_summarize(job) if job.status == STATUS_COMPLETED else None,
+                error=error or ({"code": "cancelled", "message": "background job cancelled"} if job.status == STATUS_CANCELLED else None),
+            )
+            if persisted is False:
+                return
+            job.trace_completed = True
+        except Exception:
+            return
 
     @staticmethod
     def _invoke_worktree_cleanup(cleanup: Callable[[], None]) -> None:
-
         try:
             cleanup()
         except Exception:  # noqa: BLE001 - orphan cleanup is opportunistic.
@@ -296,10 +488,25 @@ class BackgroundJobManager:
             elapsed_seconds=(self._clock() - job.created_at) if has_usage else None,
             provider_calls=provider_calls if has_usage else None,
             total_tokens=total_tokens if has_usage else None,
+            dispatch_branch_context=dict(job.dispatch_branch_context),
+            detached_from_active_branch=self._is_detached(job),
         )
 
-    def collect_completed(self, *, session_id: str | None = None) -> list[BackgroundNotification]:
+    @staticmethod
+    def _is_detached(job: BackgroundJob) -> bool:
+        writer = job.session_writer
+        branch = job.branch_context
+        if writer is None or branch is None:
+            return False
+        try:
+            from lanscoder.session.branch import build_branch_topology
 
+            topology = build_branch_topology(writer.store.list_events(writer.session_id))
+            return topology.active_branch_id != branch.branch_id
+        except Exception:
+            return False
+
+    def collect_completed(self, *, session_id: str | None = None) -> list[BackgroundNotification]:
         with self._lock:
             jobs: list[BackgroundJob] = []
             remaining: deque[BackgroundJob] = deque()
@@ -316,8 +523,9 @@ class BackgroundJobManager:
         return notifications
 
     def _finalize_task_plan_completion(self, job: BackgroundJob) -> None:
-        if job.status != STATUS_COMPLETED or job.on_completed is None:
+        if job.completion_finalized or job.status != STATUS_COMPLETED or job.on_completed is None:
             return
+        job.completion_finalized = True
         try:
             job.task_plan_completion = job.on_completed(job)
         except Exception as exc:  # noqa: BLE001 - report persistence failures truthfully
@@ -341,12 +549,11 @@ class BackgroundJobManager:
             return [job for job in self._jobs.values() if job.status == STATUS_RUNNING]
 
     def pending_completions(self, *, session_id: str | None = None) -> list[BackgroundJob]:
-
         with self._lock:
             return [job for job in self._completed if session_id is None or job.session_id == session_id]
 
     def cancel(self, job_id: str, *, session_id: str | None = None) -> BackgroundJob | None:
-
+        cancelled_before_start = False
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None or (session_id is not None and job.session_id != session_id):
@@ -357,14 +564,15 @@ class BackgroundJobManager:
             if future is not None and future.cancel():
                 job.status = STATUS_CANCELLED
                 self._futures.pop(job_id, None)
-                self._completed.append(job)
+                cancelled_before_start = True
             else:
                 job.cancel_requested = True
                 job.token.cancel()
-            return job
+        if cancelled_before_start:
+            self._publish_completion(job)
+        return job
 
     def abandon_since(self, session_id: str, *, min_dispatch_turn: int) -> int:
-
         cleanups: list[Callable[[], None]] = []
         with self._lock:
             remaining: deque[BackgroundJob] = deque()
@@ -388,8 +596,9 @@ class BackgroundJobManager:
                 job.token.cancel()
                 future = self._futures.get(job.id)
                 if future is not None and future.cancel():
-                    job.status = STATUS_CANCELLED
                     self._futures.pop(job.id, None)
+                    if job.worktree_cleanup is not None:
+                        cleanups.append(job.worktree_cleanup)
                 abandoned += 1
 
         for cleanup in cleanups:
@@ -397,7 +606,6 @@ class BackgroundJobManager:
         return abandoned
 
     def wait(self, timeout: float | None = None) -> bool:
-
         with self._lock:
             futures = list(self._futures.values())
         if not futures:
@@ -410,14 +618,12 @@ class BackgroundJobManager:
 
 
 class BackgroundCapacityError(RuntimeError):
-
     def __init__(self, max_jobs: int) -> None:
         super().__init__(f"后台任务已达上限（{max_jobs}）。请等待现有任务完成或取消后再试。")
         self.max_jobs = max_jobs
 
 
 def make_background_placeholder_result(job: BackgroundJob) -> ToolResult:
-
     label_hint = f"（{job.label}）" if job.label else ""
     content = (
         f"Background job {job.id} started for {job.tool_name}{label_hint}.\n"
@@ -439,7 +645,6 @@ def make_background_placeholder_result(job: BackgroundJob) -> ToolResult:
 
 
 def render_task_notification(notification: BackgroundNotification) -> str:
-
     label = escape(notification.label, quote=False) if notification.label else None
     lines = [
         "<task_notification>",
@@ -454,7 +659,7 @@ def render_task_notification(notification: BackgroundNotification) -> str:
     if notification.observed_revision is not None:
         lines.append(f"  <observed_revision>{notification.observed_revision}</observed_revision>")
     if notification.task_plan_completion:
-        lines.append("  <task_plan_completion>" f"{escape(notification.task_plan_completion, quote=False)}" "</task_plan_completion>")
+        lines.append(f"  <task_plan_completion>{escape(notification.task_plan_completion, quote=False)}</task_plan_completion>")
     if notification.elapsed_seconds is not None:
         lines.append(f"  <elapsed_seconds>{notification.elapsed_seconds:.1f}</elapsed_seconds>")
     if notification.provider_calls is not None:
