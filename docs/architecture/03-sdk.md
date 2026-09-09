@@ -82,13 +82,16 @@ agent.abort()                            # 中断当前回合
 ### 3.3 L3 `create_agent_session`(headless 完整装配)
 
 ```python
+from pathlib import Path
+
+
 handle = create_agent_session(
     provider=provider,          # ChatProvider(LlmTransport 结构满足)
     project_root=root,          # 必需
-    data_root=root / ".lanscoder",  # 持久化位置(默认 project_root/.lanscoder)
+    storage_root=Path.home() / ".lanscoder",  # 持久化位置(默认 ~/.lanscoder)
     tools=[custom_tool],        # 自定义工具;None = 内置工具集
     session_id="s1",
-    resume=True,                # 恢复既有会话(与 data_root + session_id 配套)
+    resume=True,                # 恢复既有会话(与 storage_root + session_id 配套)
 )
 handle.session                       # AgentSession
 handle.runner                        # AgentChatRunner
@@ -100,7 +103,7 @@ handle.runner.tool_event_handler = audit                       # 工具执行审
 - `AgentSessionHandle` 只有 `session + runner`(D2);L2 `Agent` 独立可用,不经 L3 handle。
 - 权限模式:`PermissionMode`(`standard` / `aggressive` / `bypass`)或等价字符串。
 - `tool_event_handler` 接收 `lanscoder.agent.loop.ToolExecutionEvent`(`kind ∈ started/finished/...`)。
-- 恢复:同一 `data_root` + 同一 `session_id` + `resume=True` 重开一个 handle,历史消息在。
+- 恢复:同一 `storage_root` + 同一 `session_id` + `resume=True` 重开一个 handle,历史消息在。
 
 ## 5. 传输协议 `LlmTransport`(D3)
 
