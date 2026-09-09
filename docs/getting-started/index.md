@@ -7,7 +7,9 @@
 - [初始化配置](#初始化配置)
 - [配置模型提供方](#配置模型提供方)
 - [启动](#启动)
+- [本地运行时存储](#本地运行时存储)
 - [非交互用法](#非交互用法)
+- [本地 observatory](#本地-observatory)
 - [验证配置](#验证配置)
 - [常用斜杠命令](#常用斜杠命令)
 - [下一步](#下一步)
@@ -174,7 +176,8 @@ lanscoder
 - 顶部显示当前 provider / model 与权限模式。
 - `Ctrl+C` 复制当前输出或退出；`Esc` 中断正在进行的回合。
 
-启动后，LansCoder 会在项目目录创建 `.lanscoder/` 目录，用于存放会话数据（JSONL 转录、权限授权记录、模型选择状态等）。
+启动后，LansCoder 默认把运行时数据写入 `~/.lanscoder`。该集中存储根目录可通过
+`--storage-root <dir>` 覆盖。
 
 ### 第一个回合
 
@@ -185,6 +188,22 @@ lanscoder
 ```
 
 LansCoder 会展示推理过程、工具调用与结果；当它需要写文件或执行命令时，会弹出权限确认，按提示选择即可。
+
+## 本地运行时存储
+
+默认运行时存储根目录为 `~/.lanscoder`。`~/.lanscoder/sessions/*.jsonl` 是会话的 journal
+事实来源；`~/.lanscoder/indexes/sessions.json` 和
+`~/.lanscoder/indexes/traces.json` 是可丢弃、可从 journal 重建的视图。
+
+payload 与原始证据也保存在本机。它们是明文、按内容寻址的数据，可能包含 provider 请求和响应、工具输出、
+归档和附件。请把该目录视为可能含敏感内容的本地数据。
+
+项目根目录中的 `.lanscoder/` 不是会话或可观测性存储；它仅可选地提供项目技能目录
+`.lanscoder/skills/`。项目配置仍是 `<项目根>/lanscoder.toml`。集中存储根目录会按项目隔离权限、
+模型状态和项目记忆，不会在项目之间共享这些状态。
+
+本版本没有自动清理或保留策略。你可以在确认不再需要时手动删除会话数据，但删除 journal、payload 或原始
+证据会使相应的恢复和可观测性证据不可恢复。
 
 ## 非交互用法
 
@@ -215,13 +234,28 @@ echo "总结一下这个项目" | lanscoder
 | 参数 | 说明 |
 |------|------|
 | `--project <dir>` | 项目根目录（默认当前目录），决定工具与 AGENTS.md 的生效范围 |
-| `--data-root <dir>` | 会话数据目录（默认 `<project>/.lanscoder`） |
+| `--storage-root <dir>` | 运行时数据目录（默认 `~/.lanscoder`） |
 | `--model <provider/model>` | 指定本次使用的模型 |
 | `--session-id <id>` | 创建或复用指定会话 |
 | `--resume-session` | 恢复指定会话而不是新建 |
 | `--auto-approve` | 权限确认自动回答 allow_once |
 | `--max-tool-rounds <n>` | 覆盖单回合工具调用轮次上限 |
 | `--reasoning-effort <level>` | 传给模型请求的推理强度（按 provider 支持情况） |
+
+## 本地 Observatory
+
+在 Textual TUI 中输入 `/observe`，可打开本地只读 Observatory；当前会话有可用 trace 时会直接打开相应的
+深链接。也可以单独运行：
+
+```sh
+lanscoder observe [--storage-root PATH]
+```
+
+该命令启动独立的 loopback Explorer，并持续运行到按下 `Ctrl-C`。Observatory 只绑定本机回环地址，
+只读；不提供导出、远程收集或修改 API。
+
+正常的会话列出、恢复和 fork 只显示及访问当前项目的 primary session。子代理和后台任务的证据通过
+Observatory 链接查看。首个版本不会估算成本，也不提供分数、评估或分析功能。
 
 ## 验证配置
 
@@ -253,6 +287,7 @@ config_files:
 | `/mode <standard\|aggressive\|bypass>` | 切换权限模式 |
 | `/new`、`/resume`、`/sessions` | 新建、恢复、列出会话 |
 | `/fork` | 复制当前会话为新分支 |
+| `/observe`（仅 Textual TUI） | 打开当前会话的本地只读 Observatory |
 | `/recall` | 回退对话到之前的某一轮 |
 | `/context`、`/compact` | 查看上下文状态、手动压缩 |
 | `/memory` | 查看持久记忆 |

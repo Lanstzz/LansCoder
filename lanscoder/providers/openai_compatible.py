@@ -146,6 +146,7 @@ class OpenAICompatibleProvider(ChatProvider):
 
         params = self._build_completion_params(request)
         params["stream"] = True
+        params["stream_options"] = {"include_usage": True}
         diagnostics = ProviderDiagnostics()
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -157,8 +158,17 @@ class OpenAICompatibleProvider(ChatProvider):
         try:
             stream = await asyncio.to_thread(self._client.chat.completions.create, **params)
         except Exception as exc:
-            message = str(exc)
-            raise ProviderError(classify_provider_exception(exc), message) from exc
+            if _is_stream_options_unsupported(exc):
+                fallback_params = dict(params)
+                fallback_params.pop("stream_options")
+                try:
+                    stream = await asyncio.to_thread(self._client.chat.completions.create, **fallback_params)
+                except Exception as fallback_exc:
+                    message = str(fallback_exc)
+                    raise ProviderError(classify_provider_exception(fallback_exc), message) from fallback_exc
+            else:
+                message = str(exc)
+                raise ProviderError(classify_provider_exception(exc), message) from exc
 
         yield ChatStreamEvent(kind="message_started")
 
@@ -380,6 +390,22 @@ def _parse_stream_error(chunk: Any) -> ProviderError | None:
     message = _read_field(error, "message") or str(error)
     status_code = _read_field(error, "status_code")
     return ProviderError(classify_provider_error(message, status_code=status_code), message)
+
+
+def _is_stream_options_unsupported(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    if "stream_options" not in message:
+        return False
+    return any(
+        marker in message
+        for marker in (
+            "unsupported",
+            "not support",
+            "unknown parameter",
+            "unrecognized parameter",
+            "unexpected",
+        )
+    )
 
 
 def _accumulate_stream_tool_call_deltas(

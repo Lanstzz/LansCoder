@@ -210,6 +210,34 @@ class _FakeOpenAITextStreamClient:
         self.chat = _Object(completions=self.completions)
 
 
+class _StreamOptionsRejectingCompletions:
+    def __init__(self):
+        self.params_history = []
+
+    def create(self, **params):
+        self.params_history.append(params)
+        if "stream_options" in params:
+            raise _StatusError("Unsupported parameter: stream_options", 400)
+        return iter(
+            [
+                _Object(
+                    model=params["model"],
+                    choices=[_Object(delta=_Object(content="done"), finish_reason=None)],
+                ),
+                _Object(
+                    model=params["model"],
+                    choices=[_Object(delta=_Object(), finish_reason="stop")],
+                ),
+            ]
+        )
+
+
+class _StreamOptionsRejectingClient:
+    def __init__(self):
+        self.completions = _StreamOptionsRejectingCompletions()
+        self.chat = _Object(completions=self.completions)
+
+
 class _FakeOpenAIReasoningStreamCompletions:
     def create(self, **params):
         return iter(
@@ -1020,6 +1048,7 @@ def test_openai_compatible_provider_streams_text_deltas_and_final_response():
     client, events = asyncio.run(collect_events())
 
     assert client.completions.last_params["stream"] is True
+    assert client.completions.last_params["stream_options"] == {"include_usage": True}
     assert [event.kind for event in events] == [
         "message_started",
         "text_delta",
@@ -1030,6 +1059,28 @@ def test_openai_compatible_provider_streams_text_deltas_and_final_response():
     assert events[-1].response is not None
     assert events[-1].response.content == "你好"
     assert events[-1].response.finish_reason == "stop"
+
+
+def test_openai_compatible_provider_retries_without_stream_options_when_rejected():
+    async def collect_events():
+        client = _StreamOptionsRejectingClient()
+        provider = OpenAICompatibleProvider(
+            name="test-openai",
+            model="test-model",
+            api_key="test-key",
+            client=client,
+        )
+
+        events = [event async for event in provider.astream(ChatRequest(messages=[ChatMessage(role="user", content="hi")]))]
+        return client, events
+
+    client, events = asyncio.run(collect_events())
+
+    assert len(client.completions.params_history) == 2
+    assert client.completions.params_history[0]["stream_options"] == {"include_usage": True}
+    assert "stream_options" not in client.completions.params_history[1]
+    assert events[-1].response is not None
+    assert events[-1].response.content == "done"
 
 
 def test_openai_compatible_provider_streams_reasoning_deltas_into_diagnostics():
