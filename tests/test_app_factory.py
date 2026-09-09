@@ -168,6 +168,7 @@ def test_app_unmount_closes_the_embedded_observatory_server(monkeypatch, tmp_pat
         tools=[],
     )
 
+    app.current_session.session.activate()
     assert app.command_handler.handle("/observe").action == {
         "type": "open_observatory",
         "url": "http://127.0.0.1:43123/traces?session_id=sess_test",
@@ -191,6 +192,7 @@ def test_create_lanscoder_app_wires_session_commands_context_and_chat(tmp_path: 
 
     assert isinstance(app.command_handler, CompositeCommandHandler)
     assert isinstance(app.chat_runner, AgentChatRunner)
+    app.current_session.session.activate()
     assert (tmp_path / "storage" / "sessions" / "sess_test.jsonl").exists()
     assert "Session: sess_test" in app.command_handler.handle("/context").output
     assert "Sessions:" in app.command_handler.handle("/sessions").output
@@ -219,6 +221,7 @@ def test_create_lanscoder_app_wires_new_fork_and_skill_commands(tmp_path: Path) 
     new_session_id = app.current_session.session.session_id
     assert new_session_id != "sess_test"
 
+    app.current_session.session.activate()
     fork_result = app.command_handler.handle("/fork 分支")
     assert fork_result.output.startswith(f"Forked session: {new_session_id} -> sess_")
     assert app.current_session.session.session_id != new_session_id
@@ -494,6 +497,7 @@ def test_create_lanscoder_app_uses_consistent_storage_root_for_share(tmp_path: P
         tools=[],
     )
 
+    app.current_session.session.activate()
     result = app.command_handler.handle("/share sess_test")
 
     assert "Share exported:" in result.output
@@ -530,6 +534,7 @@ def test_factory_background_controls_remain_session_scoped(tmp_path: Path) -> No
     assert manager is not None
     store = JsonlSessionStore(tmp_path / "storage")
     session_a = app.current_session.session
+    session_a.activate()
     session_b = AgentSession.create(
         store=store,
         session_id="sess_factory_b",
@@ -697,6 +702,7 @@ def test_app_on_unmount_flushes_pending_background_notifications_before_close(tm
         mcp_manager_factory=lambda configs: manager,
     )
     session = app.current_session.session
+    session.activate()
     runner = app.chat_runner
     assert runner.background_manager is not None
     runner._create_loop(CancellationToken())

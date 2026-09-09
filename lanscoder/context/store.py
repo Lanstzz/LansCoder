@@ -114,6 +114,27 @@ class JsonlSessionStore:
             SessionIndex(self.root).update_event(envelope)
             return envelope
 
+    def ensure_session_created(self, *, session_id: str, data: dict) -> tuple[JournalEnvelope, bool]:
+        """Atomically append or retrieve a session root for one session ID."""
+        with self._lock:
+            with self.journal.write_transaction(session_id) as (events, append_locked):
+                root = next((event for event in events if event.kind == "session.created"), None)
+                if root is not None:
+                    created = False
+                else:
+                    root_branch_id = str(data.get("root_branch_id") or new_branch_id())
+                    root = append_locked(
+                        "session.created",
+                        {**data, "root_branch_id": root_branch_id},
+                        branch_id=root_branch_id,
+                    )
+                    created = True
+            if created:
+                from lanscoder.session.index import SessionIndex
+
+                SessionIndex(self.root).update_event(root)
+            return root, created
+
     def list_events(self, session_id: str) -> list[JournalEnvelope]:
         """Read schema-v1 journal envelopes for a session."""
         with self._lock:

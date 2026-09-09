@@ -68,11 +68,17 @@ class ObserveCommandHandler:
         )
 
     def _deep_link(self, server_url: str) -> str:
+        if not self._has_persisted_root():
+            return f"{server_url}traces"
         trace_id = self.active_trace_id() or self._latest_session_trace_id()
         if trace_id:
             return f"{server_url}traces/{quote(trace_id, safe='')}"
         session_id = self.current_session.session_id
         return f"{server_url}traces?{urlencode({'session_id': session_id})}"
+
+    def _has_persisted_root(self) -> bool:
+        session = self.current_session.session
+        return getattr(getattr(session, "writer", None), "branch_context", None) is not None
 
     def _latest_session_trace_id(self) -> str | None:
         session = self.current_session.session

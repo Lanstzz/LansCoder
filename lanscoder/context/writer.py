@@ -139,10 +139,21 @@ class SessionEventWriter:
             return
 
     def append_session_created(self, **metadata: Any) -> None:
-        payload = {"session_id": self.session_id}
-        payload.update(metadata_without_reserved_keys(metadata))
-        payload["context_event_schema_version"] = CONTEXT_EVENT_SCHEMA_VERSION
+        payload = self._session_created_payload(metadata)
         self.append_event("session_created", payload)
+
+    def ensure_session_created(self, **metadata: Any) -> bool:
+        """Atomically create a root or adopt the root persisted by another runtime."""
+        if not hasattr(self.store, "journal"):
+            self.append_session_created(**metadata)
+            return True
+        payload = self._session_created_payload(metadata)
+        root, created = self.store.ensure_session_created(session_id=self.session_id, data=payload)
+        root_branch_id = str(root.data["root_branch_id"])
+        self.branch_context = SessionBranchContext(self.session_id, root_branch_id, root_branch_id)
+        if created:
+            self._record_event_observation("session_created", root.data)
+        return created
 
     def append_session_metadata_updated(self, **metadata: Any) -> None:
         self.append_event("session_metadata_updated", metadata_without_reserved_keys(metadata))
@@ -586,6 +597,12 @@ class SessionEventWriter:
         merged.setdefault("created_turn", self.current_turn)
         merged.setdefault("turn_id", self.current_turn)
         return merged
+
+    def _session_created_payload(self, metadata: Mapping[str, Any]) -> dict[str, Any]:
+        payload = {"session_id": self.session_id}
+        payload.update(metadata_without_reserved_keys(metadata))
+        payload["context_event_schema_version"] = CONTEXT_EVENT_SCHEMA_VERSION
+        return payload
 
     def _attach_turn_metadata(self, parts: list[MessagePart]) -> None:
         for part in parts:

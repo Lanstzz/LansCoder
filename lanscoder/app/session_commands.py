@@ -100,7 +100,7 @@ class SessionCommandHandler:
         if self.new_service is None:
             return "New session unavailable: new session service is not configured"
         title = " ".join(args).strip()
-        result = self.new_service.create(title=title or None)
+        result = self.new_service.create(title=title or None, provisional=True)
         self.current_session = result.session
         if self.on_resume is not None:
             self.on_resume(result.session)
@@ -201,6 +201,11 @@ class SessionCommandHandler:
             return "Rename unavailable: no current session"
         if self.store is None:
             return "Rename unavailable: session store is not configured"
+
+        session = getattr(self.current_session, "session", self.current_session)
+        if getattr(session, "is_provisional", False):
+            session.activation_metadata["title"] = title
+            return f"Renamed session: {session_id} {title}"
 
         SessionEventWriter(store=self.store, session_id=session_id).append_session_metadata_updated(title=title)
         return f"Renamed session: {session_id} {title}"
