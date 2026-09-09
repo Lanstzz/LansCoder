@@ -95,6 +95,22 @@ class SessionBootstrap:
         )
         return session
 
+    def create_provisional_primary(self, *, session_id: str | None = None) -> AgentSession:
+        """Assemble the CLI/TUI primary runtime without writing its root event."""
+
+        descriptor = self.access_policy().create_primary(session_id)
+        return AgentSession.create_provisional_primary(
+            store=self.store,
+            session_id=descriptor.session_id,
+            agents_md=read_agents_md(self.paths.project_root),
+            skill_catalog=discover_all_skills(self.paths.project_root),
+            tools=self.resolve_tools(),
+            permission_manager=self.permission_manager(),
+            sandbox_access=self.sandbox_access,
+            memory_manager=self.memory_manager(),
+            session_metadata=descriptor.metadata,
+        )
+
     def resume(self, session_id: str) -> AgentSession:
         self.access_policy().open_primary(session_id)
         return AgentSession.resume(

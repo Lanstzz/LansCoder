@@ -119,6 +119,8 @@ class AgentSession:
     benchmark_task: str = ""
     require_prewrite_review: bool = True
     pending_permission_execution: PendingPermissionExecution | None = None
+    activation_metadata: dict[str, object] = field(default_factory=dict)
+    is_provisional: bool = False
     _tool_result_lock: RLock = field(default_factory=RLock, repr=False)
     _tool_result_message_ids: dict[str, str] = field(default_factory=dict, repr=False)
 
@@ -147,6 +149,66 @@ class AgentSession:
     ) -> "AgentSession":
         """工厂:新建空会话,装配权限协调器与会话工具注册表。"""
 
+        session = cls._create_new(
+            store=store,
+            session_id=session_id,
+            agents_md=agents_md,
+            skill_catalog=skill_catalog,
+            tools=tools,
+            permission_manager=permission_manager,
+            sandbox_access=sandbox_access,
+            memory_manager=memory_manager,
+            session_metadata=session_metadata,
+        )
+        session.activate()
+        return session
+
+    @classmethod
+    def create_provisional_primary(
+        cls,
+        *,
+        store: JsonlSessionStore,
+        session_id: str,
+        agents_md: str = "",
+        skill_catalog: SkillCatalog | None = None,
+        tools: list[Tool] | None = None,
+        permission_manager: PermissionManager | None = None,
+        sandbox_access: SandboxAccess | None = None,
+        memory_manager: MemoryManager | None = None,
+        session_metadata: Mapping[str, object] | None = None,
+    ) -> "AgentSession":
+        """Construct a primary runtime whose root is written by ``activate``."""
+
+        return cls._create_new(
+            store=store,
+            session_id=session_id,
+            agents_md=agents_md,
+            skill_catalog=skill_catalog,
+            tools=tools,
+            permission_manager=permission_manager,
+            sandbox_access=sandbox_access,
+            memory_manager=memory_manager,
+            session_metadata=session_metadata,
+            is_provisional=True,
+        )
+
+    @classmethod
+    def _create_new(
+        cls,
+        *,
+        store: JsonlSessionStore,
+        session_id: str,
+        agents_md: str,
+        skill_catalog: SkillCatalog | None,
+        tools: list[Tool] | None,
+        permission_manager: PermissionManager | None,
+        sandbox_access: SandboxAccess | None,
+        memory_manager: MemoryManager | None,
+        session_metadata: Mapping[str, object] | None,
+        is_provisional: bool = False,
+    ) -> "AgentSession":
+        """Assemble a new runtime without deciding when its root is persisted."""
+
         runtime_state = SessionRuntimeState(session_id=session_id)
         known_message_ids: set[str] = set()
         writer = SessionEventWriter(store=store, session_id=session_id)
@@ -162,6 +224,8 @@ class AgentSession:
             known_message_ids=known_message_ids,
             turn_counter=0,
             memory_manager=memory_manager,
+            activation_metadata=dict(session_metadata or {}),
+            is_provisional=is_provisional,
         )
         from lanscoder.agent.permission import PermissionCoordinator
 
@@ -183,8 +247,26 @@ class AgentSession:
             memory_manager=memory_manager,
         )
         session.tool_registry = registry
-        session.append_session_created(**dict(session_metadata or {}))
         return session
+
+    def activate(self) -> None:
+        """Persist the root exactly once before a provisional runtime writes context."""
+
+        with self._tool_result_lock:
+            if self.writer.branch_context is not None:
+                self.is_provisional = False
+                return
+
+            try:
+                self.writer.ensure_session_created(**self.activation_metadata)
+            except BaseException:
+                self.writer.branch_context = None
+                try:
+                    self.store.sessions_dir.joinpath(f"{self.session_id}.jsonl").unlink()
+                except FileNotFoundError:
+                    pass
+                raise
+            self.is_provisional = False
 
     @classmethod
     def from_project(

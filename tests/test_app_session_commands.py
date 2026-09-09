@@ -225,6 +225,8 @@ def test_new_command_creates_session_and_updates_current_session(tmp_path: Path)
     assert "新会话" in result.output
     assert result.action == {"type": "new_session"}
     assert state.session.session_id != "sess_one"
+    assert not _catalog(tmp_path).exists(state.session.session_id)
+    state.session.activate()
     assert _catalog(tmp_path).get_session(state.session.session_id).title == "新会话"
 
 

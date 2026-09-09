@@ -7,14 +7,14 @@ from lanscoder.app.commands import CommandResult
 from lanscoder.context.writer import SessionEventWriter
 from lanscoder.memory.index import MemoryIndex
 from lanscoder.memory.manager import MemoryManager
-from lanscoder.memory.models import MemoryRecord, MemoryScope
+from lanscoder.memory.models import MemoryRecord, MemoryScope, validate_record
 
 
 @dataclass(slots=True)
 class MemoryCommandHandler:
-
     memory_provider: Callable[[], MemoryManager | None]
     writer_provider: Callable[[], SessionEventWriter | None] | None = None
+    activation_provider: Callable[[], None] | None = None
 
     def commands(self) -> list[tuple[str, str]]:
         return [
@@ -34,9 +34,15 @@ class MemoryCommandHandler:
         if normalized == "/memory":
             return CommandResult(handled=True, output=_render_all(manager))
         if normalized.startswith("/memory remember "):
-            return CommandResult(handled=True, output=_remember(manager, self.writer_provider, normalized))
+            return CommandResult(
+                handled=True,
+                output=_remember(manager, self.writer_provider, self.activation_provider, normalized),
+            )
         if normalized.startswith("/memory forget "):
-            return CommandResult(handled=True, output=_forget(manager, self.writer_provider, normalized))
+            return CommandResult(
+                handled=True,
+                output=_forget(manager, self.writer_provider, self.activation_provider, normalized),
+            )
         return CommandResult(
             handled=True,
             output="Usage: /memory | /memory remember <name>: <body> | /memory forget [user:]<name>",
@@ -54,30 +60,33 @@ def _render_all(manager: MemoryManager) -> str:
     return "\n".join(lines)
 
 
-def _remember(manager: MemoryManager, writer_provider, normalized: str) -> str:
+def _remember(manager: MemoryManager, writer_provider, activation_provider, normalized: str) -> str:
     rest = normalized[len("/memory remember ") :]
     name, sep, body = rest.partition(":")
     name = name.strip()
     body = body.strip()
     if not sep or not name or not body:
         return "Usage: /memory remember <name>: <body>"
+    record = MemoryRecord(name=name, description=_first_line(body), type="project", body=body)
     try:
-        manager.write(
-            MemoryScope.PROJECT,
-            MemoryRecord(name=name, description=_first_line(body), type="project", body=body),
-        )
+        validate_record(record)
+        _activate(activation_provider)
+        manager.write(MemoryScope.PROJECT, record)
     except ValueError as exc:
         return f"Unable to remember: {exc}"
     _append_event(writer_provider, "project", name, "upsert")
     return f"Saved project memory '{name}'."
 
 
-def _forget(manager: MemoryManager, writer_provider, normalized: str) -> str:
+def _forget(manager: MemoryManager, writer_provider, activation_provider, normalized: str) -> str:
     arg = normalized[len("/memory forget ") :].strip()
     scope = MemoryScope.USER if arg.startswith("user:") else MemoryScope.PROJECT
     name = arg[len("user:") :].strip() if scope is MemoryScope.USER else arg
     if not name:
         return "Usage: /memory forget [user:]<name>"
+    if manager.get(scope, name) is None:
+        return f"No {scope.value} memory named '{name}' found."
+    _activate(activation_provider)
     if not manager.delete(scope, name):
         return f"No {scope.value} memory named '{name}' found."
     _append_event(writer_provider, scope.value, name, "delete")
@@ -97,3 +106,8 @@ def _append_event(writer_provider, scope: str, name: str, action: str) -> None:
     writer = writer_provider()
     if writer is not None:
         writer.append_event("memory_updated", {"scope": scope, "name": name, "action": action})
+
+
+def _activate(activation_provider: Callable[[], None] | None) -> None:
+    if activation_provider is not None:
+        activation_provider()

@@ -509,6 +509,7 @@ class AgentChatRunner:
     ) -> ChatResponse:
         """异步执行一次用户回合,在线程中运行 loop 并返回响应。"""
 
+        self.current_session.session.activate()
         before_count, cancellation_token, loop = self._start_turn(content=content, streaming=self.use_streaming)
         try:
             result = await anyio.to_thread.run_sync(

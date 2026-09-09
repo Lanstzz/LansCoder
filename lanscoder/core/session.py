@@ -60,6 +60,77 @@ def create_agent_session(
     (默认 ``l1_l2_l3`` 保持现有全量压缩行为),供基准评估 A/B 使用。
     """
 
+    return _create_agent_session(
+        provider=provider,
+        project_root=project_root,
+        storage_root=storage_root,
+        tools=tools,
+        session_id=session_id,
+        resume=resume,
+        limits=limits,
+        request_options=request_options,
+        context_window=context_window,
+        background_manager=background_manager,
+        user_memory_root=user_memory_root,
+        compaction_strategy=compaction_strategy,
+        trace_recorder=trace_recorder,
+    )
+
+
+def create_provisional_primary_session(
+    *,
+    provider: ChatProvider,
+    project_root: str | Path,
+    storage_root: str | Path | None = None,
+    tools: list[Tool] | None = None,
+    session_id: str | None = None,
+    limits: AgentLoopLimits | None = None,
+    request_options: MainRequestOptions | None = None,
+    context_window: int | None = None,
+    background_manager: BackgroundJobManager | None = None,
+    user_memory_root: str | Path | None = None,
+    compaction_strategy: str = "l1_l2_l3",
+    trace_recorder: TraceRecorder | None = None,
+) -> AgentSessionHandle:
+    """Assemble the CLI/TUI primary runtime without persisting an empty root."""
+
+    return _create_agent_session(
+        provider=provider,
+        project_root=project_root,
+        storage_root=storage_root,
+        tools=tools,
+        session_id=session_id,
+        resume=False,
+        limits=limits,
+        request_options=request_options,
+        context_window=context_window,
+        background_manager=background_manager,
+        user_memory_root=user_memory_root,
+        compaction_strategy=compaction_strategy,
+        trace_recorder=trace_recorder,
+        provisional_primary=True,
+    )
+
+
+def _create_agent_session(
+    *,
+    provider: ChatProvider,
+    project_root: str | Path,
+    storage_root: str | Path | None,
+    tools: list[Tool] | None,
+    session_id: str | None,
+    resume: bool,
+    limits: AgentLoopLimits | None,
+    request_options: MainRequestOptions | None,
+    context_window: int | None,
+    background_manager: BackgroundJobManager | None,
+    user_memory_root: str | Path | None,
+    compaction_strategy: str,
+    trace_recorder: TraceRecorder | None,
+    provisional_primary: bool = False,
+) -> AgentSessionHandle:
+    """Shared assembly for durable SDK and provisional CLI/TUI primary runtimes."""
+
     project_path = Path(project_root)
     paths = LansCoderPaths(storage_root=storage_root, project_root=project_path)
     store = JsonlSessionStore(paths.storage_root)
@@ -86,6 +157,8 @@ def create_agent_session(
     if resume and session_id is not None:
         session = bootstrap.resume(session_id)
         session.restore_pending_permission_execution()
+    elif provisional_primary:
+        session = bootstrap.create_provisional_primary(session_id=session_id)
     else:
         session = bootstrap.create(session_id=session_id)
 

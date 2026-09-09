@@ -25,7 +25,7 @@ from lanscoder.config.settings import AppConfig, load_config
 from lanscoder.context.provider_summarizer import ProviderLlmCompactSummarizer
 from lanscoder.context.triggers import ContextCompactionConfig
 from lanscoder.core.runtime import AgentChatRunner
-from lanscoder.core.session import create_agent_session
+from lanscoder.core.session import create_agent_session, create_provisional_primary_session
 from lanscoder.mcp.adapter import adapt_mcp_tool
 from lanscoder.mcp.config import load_mcp_configs
 from lanscoder.mcp.manager import McpManager
@@ -163,13 +163,14 @@ def create_lanscoder_app(
     tool_provider = McpToolProvider(resolved_tools, mcp_manager, include_mcp=tools is None)
     current_tools = tool_provider()
     resolved_provider = provider
-    handle = create_agent_session(
+    create_session = create_agent_session if resume_session and session_id is not None else create_provisional_primary_session
+    handle = create_session(
         provider=resolved_provider,
         project_root=project_path,
         storage_root=paths.storage_root,
         tools=current_tools,
         session_id=session_id,
-        resume=resume_session,
+        **({"resume": True} if create_session is create_agent_session else {}),
         limits=AgentLoopLimits.default(),
         request_options=_main_request_options(selected_profile),
         context_window=(context_window if context_window is not None else (selected_profile.context_window if selected_profile is not None else None)),
@@ -245,6 +246,7 @@ def create_lanscoder_app(
     memory_handler = MemoryCommandHandler(
         memory_provider=lambda: current.session.memory_manager,
         writer_provider=lambda: current.session.writer,
+        activation_provider=lambda: current.session.activate(),
     )
     context_handler = ContextCommandHandler(
         session=current,

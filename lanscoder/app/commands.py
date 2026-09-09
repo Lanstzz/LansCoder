@@ -91,6 +91,10 @@ class ContextCommandHandler:
         if self.context_manager is None:
             return "Manual compact unavailable: context manager is not configured"
 
+        runtime = getattr(self.session, "session", self.session)
+        activate = getattr(runtime, "activate", None)
+        if activate is not None:
+            activate()
         view = self.session.rebuild_view()
         budget = self.budget_provider(view)
         result = self.context_manager.compact_if_needed(
@@ -152,7 +156,7 @@ def _render_compact_status(report: ContextInspectionReport) -> str:
         lines.append("- none")
     else:
         for event in report.recent_compaction_events:
-            lines.append("- " f"{event.get('event_type')} " f"{event.get('trigger')} " f"{event.get('status')} " f"{display_value(event.get('reason'))}")
+            lines.append(f"- {event.get('event_type')} {event.get('trigger')} {event.get('status')} {display_value(event.get('reason'))}")
     return "\n".join(lines)
 
 
